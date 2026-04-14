@@ -1,0 +1,19 @@
+# Build output
+driver
+*.exe
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Test / debug
+*.test
+*.out
+coverage.html
