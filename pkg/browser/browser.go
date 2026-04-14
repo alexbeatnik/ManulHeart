@@ -1,0 +1,75 @@
+// Package browser defines the abstract interfaces between the engine core and
+// browser backends. CDP is the first implementation, but the interface is
+// designed to accommodate future backends (Firefox, WebKit, native desktop).
+//
+// IMPORTANT: the Page interface deliberately does not include element-resolution
+// or targeting logic. The browser backend is responsible only for:
+//   - raw page access and navigation
+//   - JS evaluation and DOM probing
+//   - input dispatch (click, type, scroll)
+//   - session lifecycle
+//
+// All DOM intelligence (candidate extraction, heuristics, scoring, target
+// resolution) lives in pkg/core, pkg/heuristics, and pkg/scorer.
+package browser
+
+import (
+	"context"
+	"time"
+)
+
+// Page is the abstract interface for a single browser tab/page.
+// Implementations must be safe for concurrent use from a single goroutine.
+type Page interface {
+	// Navigate loads the given URL and waits for the initial load event.
+	Navigate(ctx context.Context, url string) error
+
+	// EvalJS evaluates a JavaScript expression in the page context and returns
+	// the JSON-encoded result value.
+	EvalJS(ctx context.Context, expr string) ([]byte, error)
+
+	// CallProbe calls a serialized JS arrow-function expression with a JSON argument.
+	// This is the primary mechanism for running in-page heuristic probes.
+	// fn is the complete JS function expression (not a function name).
+	// arg is the argument, marshaled to JSON before invocation.
+	CallProbe(ctx context.Context, fn string, arg any) ([]byte, error)
+
+	// Click performs a left-click at the given viewport coordinates.
+	Click(ctx context.Context, x, y float64) error
+
+	// FocusByXPath focuses the element at the given XPath.
+	FocusByXPath(ctx context.Context, xpath string) error
+
+	// SetInputValue sets the value of an input element at the given XPath,
+	// dispatching the appropriate input/change events.
+	SetInputValue(ctx context.Context, xpath, value string) error
+
+	// ScrollIntoView scrolls the element at the given XPath into the viewport.
+	ScrollIntoView(ctx context.Context, xpath string) error
+
+	// CurrentURL returns the current page URL.
+	CurrentURL(ctx context.Context) (string, error)
+
+	// WaitForLoad waits for the page's load event to fire. Used after a click
+	// that triggers navigation, to ensure the new page is ready for interaction.
+	WaitForLoad(ctx context.Context) error
+
+	// Wait pauses execution on the page side (not just sleep) — e.g. waits for
+	// navigation or network idle. Use context deadline for hard timeout.
+	Wait(ctx context.Context, duration time.Duration) error
+
+	// Close closes the page/tab (does not close the browser).
+	Close() error
+}
+
+// Browser is the abstract interface for a browser connection.
+type Browser interface {
+	// FirstPage returns the first available page target.
+	FirstPage(ctx context.Context) (Page, error)
+
+	// NewPage opens a new browser tab/page.
+	NewPage(ctx context.Context) (Page, error)
+
+	// Close terminates the browser connection (does not kill the browser process).
+	Close() error
+}

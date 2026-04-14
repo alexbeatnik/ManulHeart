@@ -1,0 +1,21 @@
+@context: Demonstrates multiple command types in ManulHeart
+@title: DSL Sampler
+
+STEP 1: Navigation and verification
+    NAVIGATE to 'https://example.com'
+    VERIFY that 'Example Domain' is present
+    WAIT 1
+
+STEP 2: Form interaction
+    NAVIGATE to 'https://the-internet.herokuapp.com/login'
+    Fill 'Username' field with 'tomsmith'
+    Type 'SuperSecretPassword!' into the 'Password' field
+    Click the 'Login' button
+    VERIFY that 'secure area' is present
+
+STEP 3: Checkbox interaction
+    NAVIGATE to 'https://the-internet.herokuapp.com/checkboxes'
+    VERIFY that 'Checkboxes' is present
+    Check the checkbox for 'checkbox 1'
+
+DONE.
