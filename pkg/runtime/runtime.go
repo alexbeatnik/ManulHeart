@@ -24,11 +24,17 @@ type Runtime struct {
 	cfg    config.Config
 	page   browser.Page
 	logger *utils.Logger
+	vars   *ScopedVariables
 }
 
 // New creates a new Runtime bound to the given Config, Page, and Logger.
 func New(cfg config.Config, page browser.Page, logger *utils.Logger) *Runtime {
-	return &Runtime{cfg: cfg, page: page, logger: logger}
+	return &Runtime{
+		cfg:    cfg,
+		page:   page,
+		logger: logger,
+		vars:   NewScopedVariables(),
+	}
 }
 
 // RunHunt executes all commands in hunt against the bound page.
@@ -38,30 +44,45 @@ func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRe
 		return nil, fmt.Errorf("runtime: nil hunt")
 	}
 
+	// Initialize runtime variables from hunt @vars (Global level)
+	for k, v := range hunt.Vars {
+		rt.vars.Set(k, v, LevelGlobal)
+	}
+
 	result := &explain.HuntResult{
 		HuntFile: hunt.SourcePath,
 		Title:    hunt.Title,
 		Context:  hunt.Context,
 	}
 
-	for _, cmd := range hunt.Commands {
+	passed, failed, err := rt.runCommands(ctx, hunt.Commands, result)
+	result.TotalSteps = passed + failed
+	result.Passed = passed
+	result.Failed = failed
+	result.Success = failed == 0
+	return result, err
+}
+
+func (rt *Runtime) runCommands(ctx context.Context, commands []dsl.Command, huntRes *explain.HuntResult) (int, int, error) {
+	passed, failed := 0, 0
+	for _, cmd := range commands {
 		if err := ctx.Err(); err != nil {
-			return result, fmt.Errorf("runtime: context cancelled: %w", err)
+			return passed, failed, fmt.Errorf("runtime: context cancelled: %w", err)
 		}
 
 		stepResult, err := rt.executeCommand(ctx, cmd)
-		result.TotalSteps++
-		result.Results = append(result.Results, stepResult)
+		if huntRes != nil {
+			huntRes.Results = append(huntRes.Results, stepResult)
+		}
 		if err != nil {
-			result.Failed++
-			rt.logger.Error("step %d failed: %v", result.TotalSteps, err)
+			failed++
+			rt.logger.Error("step failed: %v", err)
+			return passed, failed, err
 		} else {
-			result.Passed++
+			passed++
 		}
 	}
-
-	result.Success = result.Failed == 0
-	return result, nil
+	return passed, failed, nil
 }
 
 // StepResult is the result of a single DSL step run via RunStep.
@@ -105,12 +126,25 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 
 	switch cmd.Type {
 	case dsl.CmdNavigate:
-		err = rt.page.Navigate(ctx, cmd.URL)
+		url := rt.resolveVariables(cmd.URL)
+		err = rt.page.Navigate(ctx, url)
 
 	case dsl.CmdWait:
 		time.Sleep(time.Duration(cmd.WaitSeconds * float64(time.Second)))
 
-	case dsl.CmdClick, dsl.CmdFill, dsl.CmdSet, dsl.CmdType, dsl.CmdHover:
+	case dsl.CmdPrint:
+		text := rt.resolveVariables(cmd.PrintText)
+		rt.logger.Info("PRINT: %s", text)
+
+	case dsl.CmdSet:
+		if cmd.SetVar != "" {
+			val := rt.resolveVariables(cmd.SetValue)
+			rt.vars.Set(cmd.SetVar, val, LevelRow)
+			break
+		}
+		fallthrough
+
+	case dsl.CmdClick, dsl.CmdFill, dsl.CmdType, dsl.CmdHover:
 		// Target resolution needed for interaction
 		raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
 		if errProbe != nil {
@@ -131,9 +165,9 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 			mode = dsl.ModeClickable
 		}
 
-		targetPath := cmd.Target
+		targetPath := rt.resolveVariables(cmd.Target)
 		if cmd.Type == dsl.CmdSet {
-			targetPath = cmd.SetVar
+			targetPath = rt.resolveVariables(cmd.SetVar)
 		}
 
 		ranked := scorer.Rank(targetPath, cmd.TypeHint, string(mode), elements, 5, nil)
@@ -151,9 +185,11 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 		// Perform action
 		switch cmd.Type {
 		case dsl.CmdFill, dsl.CmdSet, dsl.CmdType:
-			val := cmd.Value
-			if cmd.Type == dsl.CmdSet {
-				val = cmd.SetValue
+			val := rt.resolveVariables(cmd.Value)
+			if cmd.Type == dsl.CmdSet && cmd.SetValue != "" {
+				// This case should be handled by the specialized CmdSet above,
+				// but we keep it for robustness if fallthrough happened.
+				val = rt.resolveVariables(cmd.SetValue)
 			}
 			err = rt.page.SetInputValue(ctx, winner.XPath, val)
 		case dsl.CmdClick:
@@ -163,20 +199,70 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 			} else {
 				err = rt.page.Click(ctx, x, y)
 			}
+		case dsl.CmdDoubleClick:
+			x, y, e := rt.page.GetElementCenter(ctx, winner.XPath)
+			if e != nil {
+				err = fmt.Errorf("center calc: %w", e)
+			} else {
+				err = rt.page.DoubleClick(ctx, x, y)
+			}
+		case dsl.CmdRightClick:
+			x, y, e := rt.page.GetElementCenter(ctx, winner.XPath)
+			if e != nil {
+				err = fmt.Errorf("center calc: %w", e)
+			} else {
+				err = rt.page.RightClick(ctx, x, y)
+			}
 		case dsl.CmdHover:
 			x, y, e := rt.page.GetElementCenter(ctx, winner.XPath)
 			if e != nil {
 				err = fmt.Errorf("center calc: %w", e)
 			} else {
-				if hoverer, ok := rt.page.(interface {
-					Hover(context.Context, float64, float64) error
-				}); ok {
-					err = hoverer.Hover(ctx, x, y)
-				} else {
-					err = fmt.Errorf("page does not support hover")
-				}
+				err = rt.page.Hover(ctx, x, y)
 			}
+		case dsl.CmdCheck, dsl.CmdUncheck:
+			checked := cmd.Type == dsl.CmdCheck
+			js := fmt.Sprintf(`document.evaluate("%s", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.checked = %v`,
+				strings.ReplaceAll(winner.XPath, `"`, `\"`), checked)
+			_, err = rt.page.EvalJS(ctx, js)
+		case dsl.CmdSelect:
+			val := rt.resolveVariables(cmd.Value)
+			js := fmt.Sprintf(`(() => {
+				const el = document.evaluate("%s", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+				if (!el) return;
+				for (let opt of el.options) {
+					if (opt.text === "%s" || opt.value === "%s") {
+						el.value = opt.value;
+						el.dispatchEvent(new Event('change', {bubbles: true}));
+						return;
+					}
+				}
+			})()`, strings.ReplaceAll(winner.XPath, `"`, `\"`),
+				strings.ReplaceAll(val, `"`, `\"`),
+				strings.ReplaceAll(val, `"`, `\"`))
+			_, err = rt.page.EvalJS(ctx, js)
 		}
+
+	case dsl.CmdExtract:
+		raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
+		if errProbe != nil {
+			err = errProbe
+			break
+		}
+		elements, _ := heuristics.ParseProbeResult(raw)
+		target := rt.resolveVariables(cmd.Target)
+		ranked := scorer.Rank(target, "", "none", elements, 1, nil)
+		if len(ranked) == 0 {
+			err = fmt.Errorf("extract target not found: %q", target)
+			break
+		}
+		val := ranked[0].Element.Value
+		if val == "" {
+			val = ranked[0].Element.VisibleText
+		}
+		rt.vars.Set(cmd.ExtractVar, val, LevelRow)
+		rt.logger.Info("Extracted '%s' into {%s}", val, cmd.ExtractVar)
+
 
 	case dsl.CmdScroll:
 		if scroller, ok := rt.page.(interface {
@@ -193,7 +279,93 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 		}
 
 	case dsl.CmdVerifyField, dsl.CmdVerify:
-		err = nil // stub
+		raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
+		if errProbe != nil {
+			err = errProbe
+			break
+		}
+		elements, _ := heuristics.ParseProbeResult(raw)
+		target := rt.resolveVariables(cmd.VerifyText)
+		ranked := scorer.Rank(target, "", "none", elements, 1, nil)
+		present := len(ranked) > 0 && ranked[0].Explain.Score.Total > 0.3
+		if cmd.VerifyNegated {
+			if present {
+				err = fmt.Errorf("verification failed: '%s' is present, but expected NOT to be", target)
+			}
+		} else {
+			if !present {
+				err = fmt.Errorf("verification failed: '%s' is not present", target)
+			}
+		}
+
+	case dsl.CmdIf:
+		var bodyToRun []dsl.Command
+		for _, b := range cmd.Branches {
+			if b.Kind == "else" {
+				bodyToRun = b.Body
+				break
+			}
+			matched, cerr := rt.evaluateCondition(ctx, b.Condition)
+			if cerr != nil {
+				err = cerr
+				break
+			}
+			if matched {
+				bodyToRun = b.Body
+				break
+			}
+		}
+		if err == nil && len(bodyToRun) > 0 {
+			_, _, err = rt.runCommands(ctx, bodyToRun, nil)
+		}
+
+	case dsl.CmdRepeat:
+		count := cmd.RepeatCount
+		for i := 0; i < count; i++ {
+			if cmd.RepeatVar != "" {
+				rt.vars.Set(cmd.RepeatVar, fmt.Sprintf("%d", i), LevelRow)
+			}
+			_, _, err = rt.runCommands(ctx, cmd.Body, nil)
+			if err != nil {
+				break
+			}
+		}
+
+	case dsl.CmdWhile:
+		limit := 100
+		for i := 0; i < limit; i++ {
+			matched, cerr := rt.evaluateCondition(ctx, cmd.WhileCondition)
+			if cerr != nil {
+				err = cerr
+				break
+			}
+			if !matched {
+				break
+			}
+			_, _, err = rt.runCommands(ctx, cmd.Body, nil)
+			if err != nil {
+				break
+			}
+			if i == limit-1 {
+				rt.logger.Warn("WHILE loop reached limit (100)")
+			}
+		}
+
+	case dsl.CmdForEach:
+		v, _ := rt.vars.Resolve(cmd.ForEachCollection)
+		coll := v
+		items := strings.Split(coll, ",")
+		for _, val := range items {
+			val = strings.TrimSpace(val)
+			if val == "" {
+				continue
+			}
+			rt.vars.Set(cmd.ForEachVar, val, LevelRow)
+			_, _, err = rt.runCommands(ctx, cmd.Body, nil)
+			if err != nil {
+				break
+			}
+		}
 
 	default:
 		err = fmt.Errorf("runtime: command %q not yet implemented", cmd.Type)
@@ -205,4 +377,101 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 		res.Success = true
 	}
 	return res, err
+}
+
+func (rt *Runtime) evaluateCondition(ctx context.Context, cond string) (bool, error) {
+	cond = strings.TrimSpace(cond)
+	if cond == "" {
+		return false, nil
+	}
+	if cond == "true" {
+		return true, nil
+	}
+	if cond == "false" {
+		return false, nil
+	}
+
+	// 1. Handle element existence: (button|link|field|element|checkbox) 'Target' [not] exists
+	if strings.Contains(cond, "exists") {
+		neg := strings.Contains(cond, "not exists")
+		// Simple parsing for now, actual implementation should use regex
+		parts := strings.Fields(cond)
+		if len(parts) >= 2 {
+			target := ""
+			// Extract quoted target
+			start := strings.Index(cond, "'")
+			end := strings.LastIndex(cond, "'")
+			if start != -1 && end != -1 && start < end {
+				target = cond[start+1 : end]
+			}
+			
+			raw, err := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
+			if err != nil {
+				return false, err
+			}
+			elements, _ := heuristics.ParseProbeResult(raw)
+			ranked := scorer.Rank(target, "", "clickable", elements, 1, nil)
+			found := len(ranked) > 0 && ranked[0].Explain.Score.Total > 0.2
+			if neg {
+				return !found, nil
+			}
+			return found, nil
+		}
+	}
+
+	// 2. Handle text presence: text 'Target' is [not] present
+	if strings.Contains(cond, "is present") || strings.Contains(cond, "is not present") {
+		neg := strings.Contains(cond, "is not present")
+		start := strings.Index(cond, "'")
+		end := strings.LastIndex(cond, "'")
+		target := ""
+		if start != -1 && end != -1 && start < end {
+			target = cond[start+1 : end]
+		}
+
+		raw, err := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
+		if err != nil {
+			return false, err
+		}
+		elements, _ := heuristics.ParseProbeResult(raw)
+		ranked := scorer.Rank(target, "", "none", elements, 1, nil)
+		found := len(ranked) > 0 && ranked[0].Explain.Score.Total > 0.2
+		if neg {
+			return !found, nil
+		}
+		return found, nil
+	}
+
+	// 3. Handle variable comparisons: {var} == 'val', $var != 'val'
+	if strings.HasPrefix(cond, "{") || strings.HasPrefix(cond, "$") {
+		// Resolve variables first
+		resolved := rt.resolveVariables(cond)
+		if strings.Contains(resolved, " == ") {
+			parts := strings.Split(resolved, " == ")
+			v1 := strings.TrimSpace(parts[0])
+			v2 := strings.Trim(strings.TrimSpace(parts[1]), "'\"")
+			return v1 == v2, nil
+		}
+		if strings.Contains(resolved, " != ") {
+			parts := strings.Split(resolved, " != ")
+			v1 := strings.TrimSpace(parts[0])
+			v2 := strings.Trim(strings.TrimSpace(parts[1]), "'\"")
+			return v1 != v2, nil
+		}
+		if strings.Contains(resolved, " contains ") {
+			parts := strings.Split(resolved, " contains ")
+			v1 := strings.TrimSpace(parts[0])
+			v2 := strings.Trim(strings.TrimSpace(parts[1]), "'\"")
+			return strings.Contains(v1, v2), nil
+		}
+		// Truthy check for {var}
+		val := strings.TrimSpace(resolved)
+		return val != "" && val != "false" && val != "0" && val != "null", nil
+	}
+
+	return false, fmt.Errorf("unknown condition format: %q", cond)
+}
+
+func (rt *Runtime) resolveVariables(s string) string {
+	return rt.vars.Interpolate(s)
 }

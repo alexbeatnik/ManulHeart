@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VERIFY CHECKED / NOT CHECKED — Checkbox & Radio State Test Suite
@@ -23,6 +23,7 @@ package scorer
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
+	"github.com/manulengineer/manulheart/pkg/scorer"
 	"testing"
 
 	"github.com/manulengineer/manulheart/pkg/dom"
@@ -63,7 +64,7 @@ func allCheckboxElements() []dom.ElementSnapshot {
 // verifyTargetFound ensures the scorer ranks the expected element first.
 func verifyTargetFound(t *testing.T, query, expectedID string, elements []dom.ElementSnapshot) {
 	t.Helper()
-	ranked := Rank(query, "", "checkbox", elements, 10, nil)
+	ranked := scorer.Rank(query, "", "checkbox", elements, 10, nil)
 	if len(ranked) == 0 {
 		t.Fatalf("Rank returned 0 for query=%q", query)
 	}

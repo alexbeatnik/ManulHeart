@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONTEXTUAL PROXIMITY TEST SUITE
@@ -16,6 +16,7 @@ package scorer
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
+	"github.com/manulengineer/manulheart/pkg/scorer"
 	"math"
 	"testing"
 
@@ -46,7 +47,7 @@ func makeElWithRect(id string, tag string, text string, top, left, bottom, right
 func TestProximity_NearClosestWins(t *testing.T) {
 	// Use non-matching text so text channel doesn't cap total at 1.0.
 	// Both elements have the same weak signal — proximity breaks the tie.
-	anchor := &AnchorContext{
+	anchor := &scorer.AnchorContext{
 		Rect: dom.Rect{Top: 90, Left: 190, Bottom: 120, Right: 250, Width: 60, Height: 30},
 	}
 	close := makeElWithRect("close", "button", "Action", 110, 240, 140, 340,
@@ -54,13 +55,13 @@ func TestProximity_NearClosestWins(t *testing.T) {
 	far := makeElWithRect("far", "button", "Action", 580, 780, 610, 880,
 		"/html/body/div/button[2]")
 
-	ranked := Rank("action", "button", "clickable",
+	ranked := scorer.Rank("action", "button", "clickable",
 		[]dom.ElementSnapshot{close, far}, 10, anchor)
 
 	if ranked[0].Element.HTMLId != "close" {
 		t.Errorf("closest element should win with NEAR, got %s", ranked[0].Element.HTMLId)
 	}
-	// Rank() sorts by RawScore (unclamped), so compare RawScore not Total
+	// scorer.Rank() sorts by RawScore (unclamped), so compare RawScore not Total
 	if ranked[0].Explain.Score.RawScore <= ranked[1].Explain.Score.RawScore {
 		t.Errorf("close raw score (%.4f) should beat far raw score (%.4f)",
 			ranked[0].Explain.Score.RawScore, ranked[1].Explain.Score.RawScore)
@@ -73,14 +74,14 @@ func TestProximity_NearClosestWins(t *testing.T) {
 
 func TestProximity_NearOverlappingElement(t *testing.T) {
 	// Element directly overlapping anchor → near score should be ~1.0
-	anchor := &AnchorContext{
+	anchor := &scorer.AnchorContext{
 		Rect:  dom.Rect{Top: 100, Left: 100, Bottom: 130, Right: 200, Width: 100, Height: 30},
 		XPath: "/html/body/div/span[1]",
 	}
 	el := makeElWithRect("onTop", "button", "Save", 100, 100, 130, 200,
 		"/html/body/div/button[1]")
 
-	score := Score("save", "button", "clickable", &el, anchor)
+	score := scorer.Score("save", "button", "clickable", &el, anchor)
 	if score.ProximityScore < 0.5 {
 		t.Errorf("overlapping element proximity should be high, got %.4f", score.ProximityScore)
 	}
@@ -92,7 +93,7 @@ func TestProximity_NearOverlappingElement(t *testing.T) {
 
 func TestProximity_NearSameContainerBeatsCloserNeighbor(t *testing.T) {
 	// Anchor in card [4]. Same-card button vs. neighbor-card button that's slightly closer.
-	anchor := &AnchorContext{
+	anchor := &scorer.AnchorContext{
 		Rect:  dom.Rect{Top: 100, Left: 420, Bottom: 130, Right: 560, Width: 140, Height: 30},
 		XPath: "/html/body/div/div[1]/div[4]/div[1]/a/div",
 	}
@@ -101,7 +102,7 @@ func TestProximity_NearSameContainerBeatsCloserNeighbor(t *testing.T) {
 	neighborCard := makeElWithRect("neighbor", "button", "Add to cart", 106, 360, 136, 465,
 		"/html/body/div/div[1]/div[3]/div[2]/button")
 
-	ranked := Rank("add to cart", "button", "clickable",
+	ranked := scorer.Rank("add to cart", "button", "clickable",
 		[]dom.ElementSnapshot{neighborCard, sameCard}, 10, anchor)
 
 	if ranked[0].Element.HTMLId != "same" {
@@ -115,13 +116,13 @@ func TestProximity_NearSameContainerBeatsCloserNeighbor(t *testing.T) {
 
 func TestProximity_NearBeyondThreshold(t *testing.T) {
 	// Element very far away (>500px center distance)
-	anchor := &AnchorContext{
+	anchor := &scorer.AnchorContext{
 		Rect: dom.Rect{Top: 0, Left: 0, Bottom: 30, Right: 100, Width: 100, Height: 30},
 	}
 	el := makeElWithRect("far", "button", "Save", 1400, 1400, 1430, 1500,
 		"/html/body/footer/button[1]")
 
-	score := Score("save", "button", "clickable", &el, anchor)
+	score := scorer.Score("save", "button", "clickable", &el, anchor)
 	if score.ProximityScore > 0.01 {
 		t.Errorf("element beyond 500px threshold should get ~0 proximity, got %.4f", score.ProximityScore)
 	}
@@ -135,7 +136,7 @@ func TestProximity_NearAnchorDevAttrAffinity(t *testing.T) {
 	// Anchor text: "Sauce Labs Fleece Jacket"
 	// Words: ["sauce", "labs", "fleece", "jacket"]
 	// The correct button has id="add-to-cart-sauce-labs-fleece-jacket"
-	anchor := &AnchorContext{
+	anchor := &scorer.AnchorContext{
 		Rect:  dom.Rect{Top: 427, Left: 916, Bottom: 447, Right: 1215, Width: 299, Height: 20},
 		XPath: `//*[@id="item_5_title_link"]`,
 		Words: []string{"sauce", "labs", "fleece", "jacket"},
@@ -152,7 +153,7 @@ func TestProximity_NearAnchorDevAttrAffinity(t *testing.T) {
 	fleece.DataQA = "add-to-cart-sauce-labs-fleece-jacket"
 	fleece.Normalize()
 
-	ranked := Rank("add to cart", "button", "clickable",
+	ranked := scorer.Rank("add to cart", "button", "clickable",
 		[]dom.ElementSnapshot{bike, fleece}, 10, anchor)
 
 	if ranked[0].Element.HTMLId != "add-to-cart-sauce-labs-fleece-jacket" {
@@ -168,7 +169,7 @@ func TestProximity_NearAnchorDevAttrAffinity(t *testing.T) {
 func TestProximity_WeightBoostedWithNear(t *testing.T) {
 	// Use RawScore instead of Total (which is clamped to 1.0).
 	// With NEAR active, proximity weight is 1.5 (vs default 0.10).
-	anchor := &AnchorContext{
+	anchor := &scorer.AnchorContext{
 		Rect: dom.Rect{Top: 100, Left: 100, Bottom: 130, Right: 200, Width: 100, Height: 30},
 	}
 	close := makeElWithRect("close", "button", "Action", 100, 210, 130, 310,
@@ -176,8 +177,8 @@ func TestProximity_WeightBoostedWithNear(t *testing.T) {
 	far := makeElWithRect("far", "button", "Action", 300, 400, 330, 500,
 		"/html/body/div/button[2]")
 
-	closeScore := Score("action", "button", "clickable", &close, anchor)
-	farScore := Score("action", "button", "clickable", &far, anchor)
+	closeScore := scorer.Score("action", "button", "clickable", &close, anchor)
+	farScore := scorer.Score("action", "button", "clickable", &far, anchor)
 
 	diff := closeScore.RawScore - farScore.RawScore
 	if diff <= 0 {
@@ -186,8 +187,8 @@ func TestProximity_WeightBoostedWithNear(t *testing.T) {
 	}
 
 	// Without NEAR, proximity difference should be much smaller
-	closeNoNear := Score("action", "button", "clickable", &close, nil)
-	farNoNear := Score("action", "button", "clickable", &far, nil)
+	closeNoNear := scorer.Score("action", "button", "clickable", &close, nil)
+	farNoNear := scorer.Score("action", "button", "clickable", &far, nil)
 	diffNoNear := math.Abs(closeNoNear.RawScore - farNoNear.RawScore)
 
 	if diff <= diffNoNear {
@@ -210,8 +211,8 @@ func TestProximity_DefaultXPathProximity(t *testing.T) {
 		withID("deep"),
 	)
 
-	shallowScore := Score("submit", "button", "clickable", &shallow, nil)
-	deepScore := Score("submit", "button", "clickable", &deep, nil)
+	shallowScore := scorer.Score("submit", "button", "clickable", &shallow, nil)
+	deepScore := scorer.Score("submit", "button", "clickable", &deep, nil)
 
 	// Both should have some proximity score
 	if shallowScore.ProximityScore < 0 {
@@ -227,7 +228,7 @@ func TestProximity_DefaultXPathProximity(t *testing.T) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 func TestProximity_IdenticalPositions(t *testing.T) {
-	anchor := &AnchorContext{
+	anchor := &scorer.AnchorContext{
 		Rect:  dom.Rect{Top: 100, Left: 200, Bottom: 130, Right: 300, Width: 100, Height: 30},
 		XPath: "/html/body/div/label",
 	}
@@ -236,8 +237,8 @@ func TestProximity_IdenticalPositions(t *testing.T) {
 	el2 := makeElWithRect("el2", "button", "OK", 100, 200, 130, 300,
 		"/html/body/div/button[2]")
 
-	score1 := Score("ok", "button", "clickable", &el1, anchor)
-	score2 := Score("ok", "button", "clickable", &el2, anchor)
+	score1 := scorer.Score("ok", "button", "clickable", &el1, anchor)
+	score2 := scorer.Score("ok", "button", "clickable", &el2, anchor)
 
 	// At identical positions, scores should be equal or very close
 	if math.Abs(score1.ProximityScore-score2.ProximityScore) > 0.01 {
@@ -248,13 +249,13 @@ func TestProximity_IdenticalPositions(t *testing.T) {
 
 func TestProximity_NearNoXPath(t *testing.T) {
 	// When no XPath available, should fall back to pure spatial distance
-	anchor := &AnchorContext{
+	anchor := &scorer.AnchorContext{
 		Rect: dom.Rect{Top: 100, Left: 100, Bottom: 130, Right: 200, Width: 100, Height: 30},
 		// No XPath
 	}
 	el := makeElWithRect("noXP", "button", "Save", 100, 210, 130, 310, "")
 
-	score := Score("save", "button", "clickable", &el, anchor)
+	score := scorer.Score("save", "button", "clickable", &el, anchor)
 	// Should still get proximity from spatial distance
 	if score.ProximityScore <= 0 {
 		t.Errorf("NEAR without XPath should still use spatial distance, got %.4f", score.ProximityScore)
@@ -263,14 +264,14 @@ func TestProximity_NearNoXPath(t *testing.T) {
 
 func TestProximity_AnchorWordsEmpty(t *testing.T) {
 	// Anchor with no words — attr affinity should be 0
-	anchor := &AnchorContext{
+	anchor := &scorer.AnchorContext{
 		Rect:  dom.Rect{Top: 100, Left: 100, Bottom: 130, Right: 200, Width: 100, Height: 30},
 		Words: nil,
 	}
 	el := makeElWithRect("el", "button", "Save", 100, 210, 130, 310,
 		"/html/body/div/button[1]")
 
-	score := Score("save", "button", "clickable", &el, anchor)
+	score := scorer.Score("save", "button", "clickable", &el, anchor)
 	// Should still have proximity from spatial distance, just no attr affinity bonus
 	if score.ProximityScore < 0 {
 		t.Errorf("proximity should be ≥ 0 even without anchor words, got %.4f", score.ProximityScore)
@@ -282,7 +283,7 @@ func TestProximity_AnchorWordsEmpty(t *testing.T) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 func TestProximity_NearRankingFiveCandidates(t *testing.T) {
-	anchor := &AnchorContext{
+	anchor := &scorer.AnchorContext{
 		Rect: dom.Rect{Top: 200, Left: 200, Bottom: 230, Right: 300, Width: 100, Height: 30},
 	}
 	// 5 candidates at increasing distances
@@ -294,7 +295,7 @@ func TestProximity_NearRankingFiveCandidates(t *testing.T) {
 		makeElWithRect("d100", "button", "Save", 260, 310, 290, 410, "/html/body/div[2]/button"),
 	}
 
-	ranked := Rank("save", "button", "clickable", els, 5, anchor)
+	ranked := scorer.Rank("save", "button", "clickable", els, 5, anchor)
 
 	// The closest (d50) should rank first
 	if ranked[0].Element.HTMLId != "d50" {

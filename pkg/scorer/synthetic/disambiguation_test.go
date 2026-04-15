@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DISAMBIGUATION EDGE CASES TEST SUITE
@@ -26,6 +26,7 @@ package scorer
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
+	"github.com/manulengineer/manulheart/pkg/scorer"
 	"testing"
 
 	"github.com/manulengineer/manulheart/pkg/dom"
@@ -44,7 +45,7 @@ func withClassName(c string) func(*dom.ElementSnapshot) {
 // rankFirstID is a test helper that returns the HTMLId of the top-ranked element.
 func rankFirstID(t *testing.T, query, typeHint, mode string, elements []dom.ElementSnapshot) string {
 	t.Helper()
-	ranked := Rank(query, typeHint, mode, elements, 10, nil)
+	ranked := scorer.Rank(query, typeHint, mode, elements, 10, nil)
 	if len(ranked) == 0 {
 		t.Fatalf("Rank returned 0 candidates for query=%q", query)
 	}
@@ -576,7 +577,7 @@ func TestDisambiguation_ConfirmApprove(t *testing.T) {
 		makeEl(withTag("button"), withText("Confirm"), withClassName("btn-confirm-approve"), withID("d89")),
 	}
 	// Searching for "confirm" + "approve" — class name match for "approve"
-	ranked := Rank("confirm", "", "clickable", els, 10, nil)
+	ranked := scorer.Rank("confirm", "", "clickable", els, 10, nil)
 	// All three have identical text: the scorer may rank them identically.
 	// With additional keywords, the class should differentiate.
 	// This test validates the scorer considers class name tokens.

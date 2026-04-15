@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ATTRIBUTE SEMANTIC KEYWORD MATCH TEST SUITE
@@ -15,13 +15,14 @@ package scorer
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
+	"github.com/manulengineer/manulheart/pkg/scorer"
 	"testing"
 
 	"github.com/manulengineer/manulheart/pkg/dom"
 )
 
 // rankByID finds the rank position (0-indexed) of the element with the given ID.
-func rankByID(ranked []RankedCandidate, id string) int {
+func rankByID(ranked []scorer.RankedCandidate, id string) int {
 	for i, r := range ranked {
 		if r.Element.HTMLId == id {
 			return i
@@ -37,7 +38,7 @@ func TestAttrSemantic_CartClassBadgeText(t *testing.T) {
 		func(e *dom.ElementSnapshot) { e.ClassName = "shopping_cart_link" },
 		withID("cart1"),
 	)
-	ranked := Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("shopping_cart_link class should score > 0, got %.4f", ranked[0].Explain.Score.Total)
 	}
@@ -49,7 +50,7 @@ func TestAttrSemantic_CartId(t *testing.T) {
 	el := makeEl(withTag("a"), withText("2"),
 		withID("shopping_cart_container"),
 	)
-	ranked := Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("shopping_cart_container id should score > 0, got %.4f", ranked[0].Explain.Score.Total)
 	}
@@ -62,7 +63,7 @@ func TestAttrSemantic_CartDataQA(t *testing.T) {
 		func(e *dom.ElementSnapshot) { e.DataQA = "shopping-cart-badge" },
 		withID("dqa1"),
 	)
-	ranked := Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	score := ranked[0].Explain.Score
 	if score.DataQAMatch <= 0 && score.Total <= 0 {
 		t.Errorf("shopping-cart-badge data-qa should contribute, total=%.4f", score.Total)
@@ -76,7 +77,7 @@ func TestAttrSemantic_SingleWordCart(t *testing.T) {
 		func(e *dom.ElementSnapshot) { e.ClassName = "header_cart_icon" },
 		withID("cart4"),
 	)
-	ranked := Rank("cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("header_cart_icon class should score > 0, got %.4f", ranked[0].Explain.Score.Total)
 	}
@@ -90,7 +91,7 @@ func TestAttrSemantic_BasketKeyword(t *testing.T) {
 		withRole("button"),
 		withID("basket5"),
 	)
-	ranked := Rank("basket", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("basket", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("mini_basket_trigger class should score > 0, got %.4f", ranked[0].Explain.Score.Total)
 	}
@@ -104,7 +105,7 @@ func TestAttrSemantic_NotificationBell(t *testing.T) {
 		withRole("button"),
 		withID("bell6"),
 	)
-	ranked := Rank("notification bell", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("notification bell", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("notification_bell class should score > 0, got %.4f", ranked[0].Explain.Score.Total)
 	}
@@ -117,7 +118,7 @@ func TestAttrSemantic_HamburgerMenu(t *testing.T) {
 		withID("nav_menu_btn"),
 		withRole("button"),
 	)
-	ranked := Rank("menu", "button", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("menu", "button", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("nav_menu_btn id should score > 0, got %.4f", ranked[0].Explain.Score.Total)
 	}
@@ -130,7 +131,7 @@ func TestAttrSemantic_UserProfile(t *testing.T) {
 		func(e *dom.ElementSnapshot) { e.ClassName = "user_profile_icon" },
 		withID("profile8"),
 	)
-	ranked := Rank("user profile", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("user profile", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("user_profile_icon class should score > 0, got %.4f", ranked[0].Explain.Score.Total)
 	}
@@ -146,7 +147,7 @@ func TestAttrSemantic_CartBeatsPlainNumber(t *testing.T) {
 	plain := makeEl(withTag("span"), withText("2 items in your list"),
 		withID("plain"),
 	)
-	ranked := Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{cart, plain}, 10, nil)
+	ranked := scorer.Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{cart, plain}, 10, nil)
 	if ranked[0].Element.HTMLId != "cart" {
 		t.Errorf("cart link should win, got %s", ranked[0].Element.HTMLId)
 	}
@@ -164,7 +165,7 @@ func TestAttrSemantic_CartBeatsDisabled(t *testing.T) {
 		withDisabled(),
 		withID("dis"),
 	)
-	ranked := Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{enabled, disabled}, 10, nil)
+	ranked := scorer.Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{enabled, disabled}, 10, nil)
 	if ranked[0].Element.HTMLId != "en" {
 		t.Errorf("enabled cart should win, got %s", ranked[0].Element.HTMLId)
 	}
@@ -178,7 +179,7 @@ func TestAttrSemantic_MultiClass(t *testing.T) {
 		withRole("button"),
 		withID("multi11"),
 	)
-	ranked := Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("multi-class with cart keyword should score > 0, got %.4f", ranked[0].Explain.Score.Total)
 	}
@@ -195,7 +196,7 @@ func TestAttrSemantic_PartialCoverage(t *testing.T) {
 		func(e *dom.ElementSnapshot) { e.ClassName = "shopping_cart_link" },
 		withID("full"),
 	)
-	ranked := Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{partial, full}, 10, nil)
+	ranked := scorer.Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{partial, full}, 10, nil)
 	if ranked[0].Element.HTMLId != "full" {
 		t.Errorf("full coverage should win, got %s", ranked[0].Element.HTMLId)
 	}
@@ -209,7 +210,7 @@ func TestAttrSemantic_SearchIcon(t *testing.T) {
 		withRole("button"),
 		withID("search13"),
 	)
-	ranked := Rank("search", "button", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("search", "button", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("search_btn_icon class should score > 0, got %.4f", ranked[0].Explain.Score.Total)
 	}
@@ -227,7 +228,7 @@ func TestAttrSemantic_CheckoutVsCart(t *testing.T) {
 		withRole("button"),
 		withID("checkout"),
 	)
-	ranked := Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{cart, checkout}, 10, nil)
+	ranked := scorer.Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{cart, checkout}, 10, nil)
 	if ranked[0].Element.HTMLId != "cart" {
 		t.Errorf("cart icon should win over checkout, got %s", ranked[0].Element.HTMLId)
 	}
@@ -240,7 +241,7 @@ func TestAttrSemantic_DataQADashes(t *testing.T) {
 		func(e *dom.ElementSnapshot) { e.DataQA = "shopping-cart" },
 		withID("dqa15"),
 	)
-	ranked := Rank("shopping-cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("shopping-cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.DataQAMatch <= 0 {
 		t.Errorf("data-qa dashed match should score > 0, got %.4f", ranked[0].Explain.Score.DataQAMatch)
 	}
@@ -252,7 +253,7 @@ func TestAttrSemantic_IdUnderscores(t *testing.T) {
 	el := makeEl(withTag("a"), withText(""),
 		withID("shopping_cart"),
 	)
-	ranked := Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.IDMatch <= 0 && ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("html_id underscore match should score > 0, total=%.4f", ranked[0].Explain.Score.Total)
 	}
@@ -265,7 +266,7 @@ func TestAttrSemantic_CamelCaseClass(t *testing.T) {
 		func(e *dom.ElementSnapshot) { e.ClassName = "shoppingCartLink" },
 		withID("camel17"),
 	)
-	ranked := Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	// camelCase class matching may or may not work — depends on tokenizer
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Logf("camelCase class scoring: total=%.4f (tokenizer may not split camelCase yet)", ranked[0].Explain.Score.Total)
@@ -279,7 +280,7 @@ func TestAttrSemantic_FalsePositiveUnrelated(t *testing.T) {
 		func(e *dom.ElementSnapshot) { e.ClassName = "footer_links" },
 		withID("fp18"),
 	)
-	ranked := Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	score := ranked[0].Explain.Score.Total
 	// Unrelated class should not produce high score
 	if score > 0.5 {
@@ -294,7 +295,7 @@ func TestAttrSemantic_FalsePositiveSubstring(t *testing.T) {
 		func(e *dom.ElementSnapshot) { e.ClassName = "cartography_section" },
 		withID("fp19"),
 	)
-	ranked := Rank("cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("cart", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	score := ranked[0].Explain.Score.Total
 	// "cartography" should not trigger full "cart" match
 	if score > 0.5 {
@@ -314,7 +315,7 @@ func TestAttrSemantic_HiddenCartPenalty(t *testing.T) {
 		withHidden(),
 		withID("hid"),
 	)
-	ranked := Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{visible, hidden}, 10, nil)
+	ranked := scorer.Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{visible, hidden}, 10, nil)
 	if ranked[0].Element.HTMLId != "vis" {
 		t.Errorf("visible cart should win, got %s", ranked[0].Element.HTMLId)
 	}
@@ -331,7 +332,7 @@ func TestAttrSemantic_SauceDemoCart(t *testing.T) {
 		func(e *dom.ElementSnapshot) { e.ClassName = "shopping_cart_badge" },
 		withID("badge"),
 	)
-	ranked := Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{link, badge}, 10, nil)
+	ranked := scorer.Rank("shopping cart", "", "clickable", []dom.ElementSnapshot{link, badge}, 10, nil)
 	// The <a> should win because it's an anchor tag with both id + class match
 	if ranked[0].Element.HTMLId != "shopping_cart_container" {
 		t.Errorf("<a> cart link should win over <span> badge, got %s", ranked[0].Element.HTMLId)
@@ -346,7 +347,7 @@ func TestAttrSemantic_Wishlist(t *testing.T) {
 		withRole("button"),
 		withID("wish22"),
 	)
-	ranked := Rank("wish list", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("wish list", "", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("wish_list_icon class should score > 0, got %.4f", ranked[0].Explain.Score.Total)
 	}
@@ -359,7 +360,7 @@ func TestAttrSemantic_CloseModal(t *testing.T) {
 		withID("close_modal_btn"),
 		withRole("button"),
 	)
-	ranked := Rank("close modal", "button", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("close modal", "button", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("close_modal_btn id should score > 0, got %.4f", ranked[0].Explain.Score.Total)
 	}
@@ -377,7 +378,7 @@ func TestAttrSemantic_DataQAWins(t *testing.T) {
 		withRole("button"),
 		withID("text"),
 	)
-	ranked := Rank("add-to-cart", "button", "clickable", []dom.ElementSnapshot{withDqa, textOnly}, 10, nil)
+	ranked := scorer.Rank("add-to-cart", "button", "clickable", []dom.ElementSnapshot{withDqa, textOnly}, 10, nil)
 	if ranked[0].Element.HTMLId != "dqa" {
 		t.Errorf("data-qa btn should win over text-only, got %s", ranked[0].Element.HTMLId)
 	}
@@ -395,7 +396,7 @@ func TestAttrSemantic_AttrPlusModeSynergy(t *testing.T) {
 		func(e *dom.ElementSnapshot) { e.ClassName = "shopping_cart_summary" },
 		withID("div"),
 	)
-	ranked := Rank("shopping cart", "link", "clickable", []dom.ElementSnapshot{link, div}, 10, nil)
+	ranked := scorer.Rank("shopping cart", "link", "clickable", []dom.ElementSnapshot{link, div}, 10, nil)
 	if ranked[0].Element.HTMLId != "link" {
 		t.Errorf("<a> link should beat <div>, got %s", ranked[0].Element.HTMLId)
 	}
@@ -409,7 +410,7 @@ func TestAttrSemantic_ThreeWordClass(t *testing.T) {
 		withRole("button"),
 		withID("atc26"),
 	)
-	ranked := Rank("add to cart", "button", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("add to cart", "button", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("add_to_cart_btn class should score > 0, got %.4f", ranked[0].Explain.Score.Total)
 	}
@@ -422,7 +423,7 @@ func TestAttrSemantic_NotPerfectText(t *testing.T) {
 		func(e *dom.ElementSnapshot) { e.ClassName = "shopping_cart_link" },
 		withID("np27"),
 	)
-	score := Score("shopping cart", "", "clickable", &el, nil)
+	score := scorer.Score("shopping cart", "", "clickable", &el, nil)
 	// Exact text match should be 0 (text is "2", not "shopping cart")
 	if score.ExactTextMatch > 0 {
 		t.Errorf("visible text '2' should not exact-match 'shopping cart', got %.4f", score.ExactTextMatch)
@@ -444,8 +445,8 @@ func TestAttrSemantic_SingleWordPartial(t *testing.T) {
 		func(e *dom.ElementSnapshot) { e.ClassName = "shopping_cart_link" },
 		withID("full"),
 	)
-	partialScore := Score("shopping cart", "", "clickable", &partial, nil)
-	fullScore := Score("shopping cart", "", "clickable", &full, nil)
+	partialScore := scorer.Score("shopping cart", "", "clickable", &partial, nil)
+	fullScore := scorer.Score("shopping cart", "", "clickable", &full, nil)
 	// Full coverage should outscore partial
 	if fullScore.Total < partialScore.Total {
 		t.Errorf("full coverage (%.4f) should beat partial (%.4f)", fullScore.Total, partialScore.Total)
@@ -467,9 +468,9 @@ func TestAttrSemantic_IdAndClassStack(t *testing.T) {
 		withID("class_only"),
 	)
 
-	bothScore := Score("shopping cart", "", "clickable", &both, nil)
-	idScore := Score("shopping cart", "", "clickable", &idOnly, nil)
-	classScore := Score("shopping cart", "", "clickable", &classOnly, nil)
+	bothScore := scorer.Score("shopping cart", "", "clickable", &both, nil)
+	idScore := scorer.Score("shopping cart", "", "clickable", &idOnly, nil)
+	classScore := scorer.Score("shopping cart", "", "clickable", &classOnly, nil)
 
 	// Both should score >= either individual
 	if bothScore.Total < idScore.Total || bothScore.Total < classScore.Total {
@@ -486,7 +487,7 @@ func TestAttrSemantic_CheckoutClass(t *testing.T) {
 		withRole("button"),
 		withID("ck30"),
 	)
-	ranked := Rank("checkout", "button", "clickable", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("checkout", "button", "clickable", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("checkout class should score > 0, got %.4f", ranked[0].Explain.Score.Total)
 	}
@@ -499,7 +500,7 @@ func TestAttrSemantic_LoginInputClass(t *testing.T) {
 		func(e *dom.ElementSnapshot) { e.ClassName = "login_email_field" },
 		withID("login31"),
 	)
-	ranked := Rank("login email", "field", "input", []dom.ElementSnapshot{el}, 10, nil)
+	ranked := scorer.Rank("login email", "field", "input", []dom.ElementSnapshot{el}, 10, nil)
 	if ranked[0].Explain.Score.Total <= 0 {
 		t.Errorf("login_email_field input class should score > 0, got %.4f", ranked[0].Explain.Score.Total)
 	}

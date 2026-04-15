@@ -1,73 +1,11 @@
-package scorer
+package synthetic
 
 import (
+	"github.com/manulengineer/manulheart/pkg/scorer"
 	"testing"
 
 	"github.com/manulengineer/manulheart/pkg/dom"
 )
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-func makeEl(opts ...func(*dom.ElementSnapshot)) dom.ElementSnapshot {
-	el := dom.ElementSnapshot{
-		ID:        1,
-		XPath:     "/html/body/div[1]/button[1]",
-		Tag:       "button",
-		IsVisible: true,
-	}
-	for _, o := range opts {
-		o(&el)
-	}
-	el.Normalize()
-	return el
-}
-
-func withTag(tag string) func(*dom.ElementSnapshot) {
-	return func(e *dom.ElementSnapshot) { e.Tag = tag }
-}
-func withInputType(t string) func(*dom.ElementSnapshot) {
-	return func(e *dom.ElementSnapshot) { e.InputType = t }
-}
-func withText(text string) func(*dom.ElementSnapshot) {
-	return func(e *dom.ElementSnapshot) { e.VisibleText = text }
-}
-func withLabel(label string) func(*dom.ElementSnapshot) {
-	return func(e *dom.ElementSnapshot) { e.LabelText = label }
-}
-func withID(id string) func(*dom.ElementSnapshot) {
-	return func(e *dom.ElementSnapshot) { e.HTMLId = id }
-}
-func withRole(role string) func(*dom.ElementSnapshot) {
-	return func(e *dom.ElementSnapshot) { e.Role = role }
-}
-func withAriaLabel(a string) func(*dom.ElementSnapshot) {
-	return func(e *dom.ElementSnapshot) { e.AriaLabel = a }
-}
-func withXPath(x string) func(*dom.ElementSnapshot) {
-	return func(e *dom.ElementSnapshot) { e.XPath = x }
-}
-func withDisabled() func(*dom.ElementSnapshot) {
-	return func(e *dom.ElementSnapshot) { e.IsDisabled = true }
-}
-func withHidden() func(*dom.ElementSnapshot) {
-	return func(e *dom.ElementSnapshot) { e.IsHidden = true; e.IsVisible = false }
-}
-func withAccessibleName(n string) func(*dom.ElementSnapshot) {
-	return func(e *dom.ElementSnapshot) { e.AccessibleName = n }
-}
-func withValue(v string) func(*dom.ElementSnapshot) {
-	return func(e *dom.ElementSnapshot) { e.Value = v }
-}
-
-// rankFirst returns the winning element from Rank.
-func rankFirst(t *testing.T, query, typeHint, mode string, elements []dom.ElementSnapshot) RankedCandidate {
-	t.Helper()
-	ranked := Rank(query, typeHint, mode, elements, 10, nil)
-	if len(ranked) == 0 {
-		t.Fatalf("Rank returned 0 candidates for query=%q mode=%s", query, mode)
-	}
-	return ranked[0]
-}
 
 // ── Test: Pagination links ────────────────────────────────────────────────────
 // Scenario: a table has rows with numbers, and below it is a pagination nav
@@ -94,7 +32,7 @@ func TestPaginationLink_ClickOn2(t *testing.T) {
 			winner.Element.Tag, winner.Element.VisibleText, winner.Element.XPath, winner.Explain.Score.Total)
 
 		// Print all candidates for debugging
-		ranked := Rank("2", "link", "clickable", elements, 10, nil)
+		ranked := scorer.Rank("2", "link", "clickable", elements, 10, nil)
 		for _, r := range ranked {
 			t.Logf("  rank=%d tag=%-8s text=%-20q hint=%.4f semantic=%.4f text_exact=%.4f total=%.4f",
 				r.Explain.Rank, r.Element.Tag, r.Element.VisibleText,
@@ -143,7 +81,7 @@ func TestTableCheckbox_CheckFor7(t *testing.T) {
 		t.Errorf("expected <input type=checkbox>, got <%s type=%s> text=%q label=%q",
 			winner.Element.Tag, winner.Element.InputType,
 			winner.Element.VisibleText, winner.Element.LabelText)
-		ranked := Rank("7", "checkbox", "checkbox", elements, 10, nil)
+		ranked := scorer.Rank("7", "checkbox", "checkbox", elements, 10, nil)
 		for _, r := range ranked {
 			t.Logf("  rank=%d tag=%-8s type=%-10s text=%-10q label=%-10q semantic=%.4f total=%.4f",
 				r.Explain.Rank, r.Element.Tag, r.Element.InputType,
@@ -284,7 +222,7 @@ func TestShortTextAmbiguity_TdVsLink(t *testing.T) {
 	winner := rankFirst(t, "2", "link", "clickable", elements)
 	if winner.Element.Tag != "a" {
 		t.Errorf("expected <a>, got <%s> xpath=%s", winner.Element.Tag, winner.Element.XPath)
-		ranked := Rank("2", "link", "clickable", elements, 10, nil)
+		ranked := scorer.Rank("2", "link", "clickable", elements, 10, nil)
 		for _, r := range ranked {
 			t.Logf("  tag=%-5s text=%-5q exact=%.3f norm=%.3f semantic=%.3f hint=%.3f total=%.4f",
 				r.Element.Tag, r.Element.VisibleText,
@@ -359,7 +297,7 @@ func TestCheckboxInTableRow_RealisticScoring(t *testing.T) {
 
 func TestScoreExactText(t *testing.T) {
 	el := makeEl(withTag("button"), withText("Submit"))
-	s := Score("submit", "", "clickable", &el, nil)
+	s := scorer.Score("submit", "", "clickable", &el, nil)
 	if s.ExactTextMatch != 1.0 {
 		t.Errorf("ExactTextMatch = %.3f, want 1.0", s.ExactTextMatch)
 	}
@@ -367,7 +305,7 @@ func TestScoreExactText(t *testing.T) {
 
 func TestScoreExactText_NoMatch(t *testing.T) {
 	el := makeEl(withTag("button"), withText("Cancel"))
-	s := Score("submit", "", "clickable", &el, nil)
+	s := scorer.Score("submit", "", "clickable", &el, nil)
 	if s.ExactTextMatch != 0.0 {
 		t.Errorf("ExactTextMatch = %.3f, want 0.0", s.ExactTextMatch)
 	}
@@ -375,7 +313,7 @@ func TestScoreExactText_NoMatch(t *testing.T) {
 
 func TestScoreNormText_Substring(t *testing.T) {
 	el := makeEl(withTag("button"), withText("Save and Continue"))
-	s := Score("save", "", "clickable", &el, nil)
+	s := scorer.Score("save", "", "clickable", &el, nil)
 	if s.NormalizedTextMatch <= 0 {
 		t.Errorf("NormTextMatch = %.3f, want > 0", s.NormalizedTextMatch)
 	}
@@ -383,7 +321,7 @@ func TestScoreNormText_Substring(t *testing.T) {
 
 func TestScoreLabel_Exact(t *testing.T) {
 	el := makeEl(withTag("input"), withInputType("checkbox"), withLabel("Monday"))
-	s := Score("monday", "checkbox", "checkbox", &el, nil)
+	s := scorer.Score("monday", "checkbox", "checkbox", &el, nil)
 	if s.LabelMatch < 0.5 {
 		t.Errorf("LabelMatch = %.3f, want >= 0.5", s.LabelMatch)
 	}
@@ -391,7 +329,7 @@ func TestScoreLabel_Exact(t *testing.T) {
 
 func TestScoreLabel_Contains(t *testing.T) {
 	el := makeEl(withTag("input"), withInputType("text"), withLabel("Full Name"))
-	s := Score("name", "", "input", &el, nil)
+	s := scorer.Score("name", "", "input", &el, nil)
 	if s.LabelMatch <= 0 {
 		t.Errorf("LabelMatch = %.3f, want > 0", s.LabelMatch)
 	}
@@ -399,7 +337,7 @@ func TestScoreLabel_Contains(t *testing.T) {
 
 func TestScoreAriaLabel(t *testing.T) {
 	el := makeEl(withTag("button"), withAriaLabel("Close dialog"))
-	s := Score("close dialog", "", "clickable", &el, nil)
+	s := scorer.Score("close dialog", "", "clickable", &el, nil)
 	if s.AriaMatch < 0.5 {
 		t.Errorf("AriaMatch = %.3f, want >= 0.5", s.AriaMatch)
 	}
@@ -407,7 +345,7 @@ func TestScoreAriaLabel(t *testing.T) {
 
 func TestScoreID(t *testing.T) {
 	el := makeEl(withTag("button"), withID("submit-btn"))
-	s := Score("submit btn", "", "clickable", &el, nil)
+	s := scorer.Score("submit btn", "", "clickable", &el, nil)
 	if s.IDMatch <= 0 {
 		t.Errorf("IDMatch = %.3f, want > 0", s.IDMatch)
 	}
@@ -415,7 +353,7 @@ func TestScoreID(t *testing.T) {
 
 func TestScoreTagSemantics_ButtonInClickable(t *testing.T) {
 	el := makeEl(withTag("button"))
-	s := Score("x", "", "clickable", &el, nil)
+	s := scorer.Score("x", "", "clickable", &el, nil)
 	if s.TagSemantics < 0.3 {
 		t.Errorf("TagSemantics = %.3f, want >= 0.3 for button in clickable", s.TagSemantics)
 	}
@@ -423,7 +361,7 @@ func TestScoreTagSemantics_ButtonInClickable(t *testing.T) {
 
 func TestScoreTagSemantics_CheckboxInCheckboxMode(t *testing.T) {
 	el := makeEl(withTag("input"), withInputType("checkbox"))
-	s := Score("x", "", "checkbox", &el, nil)
+	s := scorer.Score("x", "", "checkbox", &el, nil)
 	if s.TagSemantics < 0.4 {
 		t.Errorf("TagSemantics = %.3f, want >= 0.4 for checkbox in checkbox mode", s.TagSemantics)
 	}
@@ -431,7 +369,7 @@ func TestScoreTagSemantics_CheckboxInCheckboxMode(t *testing.T) {
 
 func TestScoreTagSemantics_ButtonPenaltyInCheckboxMode(t *testing.T) {
 	el := makeEl(withTag("button"))
-	s := Score("x", "", "checkbox", &el, nil)
+	s := scorer.Score("x", "", "checkbox", &el, nil)
 	if s.TagSemantics >= 0 {
 		t.Errorf("TagSemantics = %.3f, want < 0 for button in checkbox mode", s.TagSemantics)
 	}
@@ -439,7 +377,7 @@ func TestScoreTagSemantics_ButtonPenaltyInCheckboxMode(t *testing.T) {
 
 func TestScoreTagSemantics_SelectInSelectMode(t *testing.T) {
 	el := makeEl(withTag("select"))
-	s := Score("x", "", "select", &el, nil)
+	s := scorer.Score("x", "", "select", &el, nil)
 	if s.TagSemantics < 0.4 {
 		t.Errorf("TagSemantics = %.3f, want >= 0.4 for select in select mode", s.TagSemantics)
 	}
@@ -447,7 +385,7 @@ func TestScoreTagSemantics_SelectInSelectMode(t *testing.T) {
 
 func TestScoreTypeHint_LinkBoostsAnchor(t *testing.T) {
 	el := makeEl(withTag("a"))
-	s := Score("x", "link", "clickable", &el, nil)
+	s := scorer.Score("x", "link", "clickable", &el, nil)
 	if s.TypeHintAlignment < 0.3 {
 		t.Errorf("TypeHintAlignment = %.3f, want >= 0.3 for <a> with hint=link", s.TypeHintAlignment)
 	}
@@ -455,7 +393,7 @@ func TestScoreTypeHint_LinkBoostsAnchor(t *testing.T) {
 
 func TestScoreTypeHint_LinkDoesNotBoostTd(t *testing.T) {
 	el := makeEl(withTag("td"))
-	s := Score("x", "link", "clickable", &el, nil)
+	s := scorer.Score("x", "link", "clickable", &el, nil)
 	if s.TypeHintAlignment > 0 {
 		t.Errorf("TypeHintAlignment = %.3f for <td> with hint=link, want 0", s.TypeHintAlignment)
 	}
@@ -463,7 +401,7 @@ func TestScoreTypeHint_LinkDoesNotBoostTd(t *testing.T) {
 
 func TestScorePenalty_DisabledZero(t *testing.T) {
 	el := makeEl(withTag("button"), withText("Submit"), withDisabled())
-	s := Score("submit", "", "clickable", &el, nil)
+	s := scorer.Score("submit", "", "clickable", &el, nil)
 	if s.Total != 0.0 {
 		t.Errorf("Total = %.3f, want 0.0 for disabled", s.Total)
 	}
@@ -472,8 +410,8 @@ func TestScorePenalty_DisabledZero(t *testing.T) {
 func TestScorePenalty_HiddenReduced(t *testing.T) {
 	visible := makeEl(withTag("button"), withText("Submit"))
 	hidden := makeEl(withTag("button"), withText("Submit"), withHidden())
-	sv := Score("submit", "", "clickable", &visible, nil)
-	sh := Score("submit", "", "clickable", &hidden, nil)
+	sv := scorer.Score("submit", "", "clickable", &visible, nil)
+	sh := scorer.Score("submit", "", "clickable", &hidden, nil)
 	if sh.Total >= sv.Total {
 		t.Errorf("hidden (%.3f) should be less than visible (%.3f)", sh.Total, sv.Total)
 	}
@@ -486,7 +424,7 @@ func TestRank_TopN(t *testing.T) {
 	for i := range elements {
 		elements[i] = makeEl(withTag("button"), withText("btn"))
 	}
-	ranked := Rank("btn", "", "clickable", elements, 5, nil)
+	ranked := scorer.Rank("btn", "", "clickable", elements, 5, nil)
 	if len(ranked) != 5 {
 		t.Errorf("Rank(topN=5) returned %d, want 5", len(ranked))
 	}
@@ -497,7 +435,7 @@ func TestRank_OnlyFirstIsChosen(t *testing.T) {
 		makeEl(withTag("button"), withText("Submit")),
 		makeEl(withTag("button"), withText("Submit")),
 	}
-	ranked := Rank("submit", "", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("submit", "", "clickable", elements, 10, nil)
 	if !ranked[0].Explain.Chosen {
 		t.Error("first should be chosen")
 	}
@@ -517,14 +455,14 @@ func TestNearProximity_CloserWins(t *testing.T) {
 		withXPath("/html/body/div[2]/button[1]"))
 	farBtn.Rect = dom.Rect{Left: 100, Top: 600, Width: 80, Height: 30}
 
-	anchor := &AnchorContext{
+	anchor := &scorer.AnchorContext{
 		Rect:  dom.Rect{Left: 100, Top: 80, Width: 200, Height: 30},
 		XPath: "/html/body/div[1]/h2[1]",
 		Words: []string{"product"},
 	}
 
 	elements := []dom.ElementSnapshot{farBtn, closeBtn}
-	ranked := Rank("Add to Cart", "", "clickable", elements, 10, anchor)
+	ranked := scorer.Rank("Add to Cart", "", "clickable", elements, 10, anchor)
 	if len(ranked) < 2 {
 		t.Fatal("expected at least 2 ranked candidates")
 	}
@@ -596,7 +534,7 @@ func TestRealScenario_TableCheckboxFullContext(t *testing.T) {
 		t.Errorf("expected checkbox with label '7', got <%s type=%s> label=%q xpath=%s score=%.4f",
 			winner.Element.Tag, winner.Element.InputType, winner.Element.LabelText,
 			winner.Element.XPath, winner.Explain.Score.Total)
-		ranked := Rank("7", "checkbox", "checkbox", elements, 10, nil)
+		ranked := scorer.Rank("7", "checkbox", "checkbox", elements, 10, nil)
 		for _, r := range ranked {
 			t.Logf("  rank=%d <%s type=%s> label=%q text=%q semantic=%.3f label=%.3f total=%.4f",
 				r.Explain.Rank, r.Element.Tag, r.Element.InputType,
@@ -621,9 +559,9 @@ func TestSignificantWords(t *testing.T) {
 		{"the quick brown fox", 3},     // "quick", "brown", "fox"; "the" is stop word
 	}
 	for _, tc := range tests {
-		got := significantWords(tc.input)
+		got := scorer.SignificantWords(tc.input)
 		if len(got) != tc.want {
-			t.Errorf("significantWords(%q) = %v (len=%d), want len=%d", tc.input, got, len(got), tc.want)
+			t.Errorf("scorer.SignificantWords(%q) = %v (len=%d), want len=%d", tc.input, got, len(got), tc.want)
 		}
 	}
 }
@@ -631,7 +569,7 @@ func TestSignificantWords(t *testing.T) {
 func TestScoreNormText_WordOverlap(t *testing.T) {
 	// A <td> cell whose label text includes both "cpu" and "chrome"
 	el := makeEl(withTag("td"), withText("3.2 GHz"), withLabel("CPU Chrome"))
-	s := Score("cpu of chrome", "", "none", &el, nil)
+	s := scorer.Score("cpu of chrome", "", "none", &el, nil)
 	if s.NormalizedTextMatch < 0.5 {
 		t.Errorf("NormalizedTextMatch = %.3f, want >= 0.5 for word-overlap 'cpu of chrome' vs label 'CPU Chrome'", s.NormalizedTextMatch)
 	}
@@ -639,7 +577,7 @@ func TestScoreNormText_WordOverlap(t *testing.T) {
 
 func TestScoreLabelText_WordOverlap(t *testing.T) {
 	el := makeEl(withTag("td"), withLabel("CPU Chrome 3000"))
-	s := Score("cpu of chrome", "", "none", &el, nil)
+	s := scorer.Score("cpu of chrome", "", "none", &el, nil)
 	if s.LabelMatch < 0.5 {
 		t.Errorf("LabelMatch = %.3f, want >= 0.5 for word-overlap", s.LabelMatch)
 	}
@@ -648,7 +586,7 @@ func TestScoreLabelText_WordOverlap(t *testing.T) {
 func TestScoreLabelText_PartialWordOverlap(t *testing.T) {
 	// Only 1 of 2 significant words matches
 	el := makeEl(withTag("td"), withLabel("Firefox 2.5GHz"))
-	s := Score("cpu of chrome", "", "none", &el, nil)
+	s := scorer.Score("cpu of chrome", "", "none", &el, nil)
 	// "chrome" not in label, only "cpu" would need to match... wait, neither "cpu" nor "chrome" is in "firefox 2.5ghz"
 	if s.LabelMatch > 0.1 {
 		t.Errorf("LabelMatch = %.3f, want < 0.1 for no word overlap", s.LabelMatch)
@@ -659,7 +597,7 @@ func TestScoreLabelText_PartialWordOverlap(t *testing.T) {
 
 func TestScoreTagSemantics_TdInLocateMode(t *testing.T) {
 	el := makeEl(withTag("td"), withText("Chrome"))
-	s := Score("chrome", "", "none", &el, nil)
+	s := scorer.Score("chrome", "", "none", &el, nil)
 	if s.TagSemantics < 0.15 {
 		t.Errorf("TagSemantics = %.3f, want >= 0.15 for <td> in locate mode", s.TagSemantics)
 	}
@@ -667,7 +605,7 @@ func TestScoreTagSemantics_TdInLocateMode(t *testing.T) {
 
 func TestScoreTagSemantics_ButtonInLocateMode(t *testing.T) {
 	el := makeEl(withTag("button"), withText("Popup"))
-	s := Score("popup", "", "none", &el, nil)
+	s := scorer.Score("popup", "", "none", &el, nil)
 	if s.TagSemantics > 0.15 {
 		t.Errorf("TagSemantics = %.3f, want <= 0.15 for <button> in locate mode (should not be preferred)", s.TagSemantics)
 	}
@@ -675,7 +613,7 @@ func TestScoreTagSemantics_ButtonInLocateMode(t *testing.T) {
 
 func TestScoreTagSemantics_HeadingInLocateMode(t *testing.T) {
 	el := makeEl(withTag("h2"), withText("Products"))
-	s := Score("products", "", "none", &el, nil)
+	s := scorer.Score("products", "", "none", &el, nil)
 	if s.TagSemantics < 0.2 {
 		t.Errorf("TagSemantics = %.3f, want >= 0.2 for <h2> in locate mode", s.TagSemantics)
 	}
@@ -717,7 +655,7 @@ func TestRealScenario_ExtractCPUofChrome(t *testing.T) {
 	if winner.Element.VisibleText != "3.2 GHz" {
 		t.Errorf("EXTRACT 'CPU of Chrome': expected '3.2 GHz', got %q (tag=%s, xpath=%s, score=%.4f)",
 			winner.Element.VisibleText, winner.Element.Tag, winner.Element.XPath, winner.Explain.Score.Total)
-		ranked := Rank("cpu of chrome", "element", "none", elements, 10, nil)
+		ranked := scorer.Rank("cpu of chrome", "element", "none", elements, 10, nil)
 		for _, r := range ranked {
 			t.Logf("  rank=%d <%s> text=%-15q label=%-25q norm=%.3f label=%.3f sem=%.3f total=%.4f",
 				r.Explain.Rank, r.Element.Tag, r.Element.VisibleText, r.Element.LabelText,
@@ -759,7 +697,7 @@ func TestRealScenario_DropdownItem100VsPagination(t *testing.T) {
 	if winner.Element.VisibleText != "Item 100" {
 		t.Errorf("CLICK 'Item 100': expected 'Item 100', got %q (tag=%s, xpath=%s, score=%.4f)",
 			winner.Element.VisibleText, winner.Element.Tag, winner.Element.XPath, winner.Explain.Score.Total)
-		ranked := Rank("item 100", "element", "clickable", elements, 10, nil)
+		ranked := scorer.Rank("item 100", "element", "clickable", elements, 10, nil)
 		for _, r := range ranked {
 			t.Logf("  rank=%d <%s> text=%-20q exact=%.3f norm=%.3f sem=%.3f total=%.4f",
 				r.Explain.Rank, r.Element.Tag, r.Element.VisibleText,

@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FRONTEND HELL & ANTI-PATTERN GAUNTLET DOM SCORING TEST SUITE

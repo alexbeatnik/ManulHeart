@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VERIFY ENABLED / DISABLED — State Detection Test Suite
@@ -16,6 +16,7 @@ package scorer
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
+	"github.com/manulengineer/manulheart/pkg/scorer"
 	"testing"
 
 	"github.com/manulengineer/manulheart/pkg/dom"
@@ -66,7 +67,7 @@ func allEnabledDisabledElements() []dom.ElementSnapshot {
 // rank #1 when competing with enabled elements. We search the full ranked list.
 func verifyState(t *testing.T, query string, elements []dom.ElementSnapshot, expectedID string, expectDisabled bool) {
 	t.Helper()
-	ranked := Rank(query, "", "clickable", elements, len(elements), nil)
+	ranked := scorer.Rank(query, "", "clickable", elements, len(elements), nil)
 	if len(ranked) == 0 {
 		t.Fatalf("Rank returned 0 candidates for query=%q", query)
 	}

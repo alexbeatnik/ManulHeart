@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ECOMMERCE DOM SCORING TEST SUITE
@@ -10,6 +10,7 @@ package scorer
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
+	"github.com/manulengineer/manulheart/pkg/scorer"
 	"testing"
 
 	"github.com/manulengineer/manulheart/pkg/dom"
@@ -327,7 +328,7 @@ func TestEcommerce_Select(t *testing.T) {
 func TestEcommerce_ShippingForm(t *testing.T) {
 	elements := ecommerceDOM()
 
-	shippingAnchor := &AnchorContext{
+	shippingAnchor := &scorer.AnchorContext{
 		XPath: "/html/body/div[@id='shipping_section']/h3",
 		Rect:  dom.Rect{Top: 380, Left: 50, Width: 200, Height: 25},
 		Words: []string{"shipping"},
@@ -348,7 +349,7 @@ func TestEcommerce_ShippingForm(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ranked := Rank(tc.query, "", tc.mode, elements, 10, shippingAnchor)
+			ranked := scorer.Rank(tc.query, "", tc.mode, elements, 10, shippingAnchor)
 			if len(ranked) == 0 {
 				t.Fatalf("Rank returned 0 candidates for query=%q", tc.query)
 			}
@@ -362,7 +363,7 @@ func TestEcommerce_ShippingForm(t *testing.T) {
 func TestEcommerce_BillingForm(t *testing.T) {
 	elements := ecommerceDOM()
 
-	billingAnchor := &AnchorContext{
+	billingAnchor := &scorer.AnchorContext{
 		XPath: "/html/body/div[@id='billing_section']/h3",
 		Rect:  dom.Rect{Top: 940, Left: 50, Width: 200, Height: 25},
 		Words: []string{"billing"},
@@ -383,7 +384,7 @@ func TestEcommerce_BillingForm(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ranked := Rank(tc.query, "", tc.mode, elements, 10, billingAnchor)
+			ranked := scorer.Rank(tc.query, "", tc.mode, elements, 10, billingAnchor)
 			if len(ranked) == 0 {
 				t.Fatalf("Rank returned 0 candidates for query=%q", tc.query)
 			}

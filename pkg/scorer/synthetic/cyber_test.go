@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CYBERSECURITY & DEVSECOPS DOM SCORING TEST SUITE

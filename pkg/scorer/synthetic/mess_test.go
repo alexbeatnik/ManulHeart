@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE UNHOLY MESS & FINAL BOSS DOM SCORING TEST SUITE

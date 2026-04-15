@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FACEBOOK COMET UI DOM SCORING TEST SUITE

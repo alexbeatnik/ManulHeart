@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CRM / ATS / PM DOM SCORING TEST SUITE

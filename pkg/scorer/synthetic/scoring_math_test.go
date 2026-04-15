@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SCORING MATH LAB — Exact Numerical Validation
@@ -7,13 +7,14 @@ package scorer
 //
 // Validates:
 // 1. Individual scoring functions return expected values for known inputs
-// 2. Score() combines channels correctly via Weights
+// 2. scorer.Score() combines channels correctly via scorer.Weights
 // 3. Penalty multipliers (disabled ×0.0, hidden ×0.1) apply after weighting
 // 4. Stacked signals accumulate correctly across channels
 // 5. Normalized scores clamp to [0.0, 1.0]
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
+	"github.com/manulengineer/manulheart/pkg/scorer"
 	"testing"
 
 	"github.com/manulengineer/manulheart/pkg/dom"
@@ -27,7 +28,7 @@ func TestScoringMath_DataQAExactScore(t *testing.T) {
 		withID("dqa_btn"),
 	)
 	elements := []dom.ElementSnapshot{el}
-	ranked := Rank("Submit", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Submit", "button", "clickable", elements, 10, nil)
 	if len(ranked) == 0 {
 		t.Fatal("Rank returned 0 candidates")
 	}
@@ -46,7 +47,7 @@ func TestScoringMath_DataQAExactScore(t *testing.T) {
 func TestScoringMath_TextExactMatchScore(t *testing.T) {
 	el := makeEl(withTag("button"), withText("Submit"), withID("btn_submit"))
 	elements := []dom.ElementSnapshot{el}
-	ranked := Rank("Submit", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Submit", "button", "clickable", elements, 10, nil)
 	if len(ranked) == 0 {
 		t.Fatal("no candidates")
 	}
@@ -64,7 +65,7 @@ func TestScoringMath_TextExactMatchScore(t *testing.T) {
 func TestScoringMath_DisabledPenaltyZeroes(t *testing.T) {
 	el := makeEl(withTag("button"), withText("Submit"), withDisabled())
 	elements := []dom.ElementSnapshot{el}
-	ranked := Rank("Submit", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Submit", "button", "clickable", elements, 10, nil)
 	if len(ranked) == 0 {
 		t.Fatal("no candidates")
 	}
@@ -84,7 +85,7 @@ func TestScoringMath_HiddenPenaltyTenth(t *testing.T) {
 	elHid := makeEl(withTag("button"), withText("Submit"), withID("hid"), withHidden())
 
 	elements := []dom.ElementSnapshot{elVis, elHid}
-	ranked := Rank("Submit", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Submit", "button", "clickable", elements, 10, nil)
 
 	var visScore, hidScore float64
 	for _, r := range ranked {
@@ -115,7 +116,7 @@ func TestScoringMath_AriaExactMatch(t *testing.T) {
 		withAriaLabel("Email Address"), withID("aria_inp"),
 	)
 	elements := []dom.ElementSnapshot{el}
-	ranked := Rank("email address", "", "input", elements, 10, nil)
+	ranked := scorer.Rank("email address", "", "input", elements, 10, nil)
 	if len(ranked) == 0 {
 		t.Fatal("no candidates")
 	}
@@ -136,7 +137,7 @@ func TestScoringMath_PlaceholderExactMatch(t *testing.T) {
 		withID("ph_inp"),
 	)
 	elements := []dom.ElementSnapshot{el}
-	ranked := Rank("search query", "", "input", elements, 10, nil)
+	ranked := scorer.Rank("search query", "", "input", elements, 10, nil)
 	if len(ranked) == 0 {
 		t.Fatal("no candidates")
 	}
@@ -146,32 +147,32 @@ func TestScoringMath_PlaceholderExactMatch(t *testing.T) {
 	}
 }
 
-// ── Test 7: Weights ordering ────────────────────────────────────────────────
+// ── Test 7: scorer.Weights ordering ────────────────────────────────────────────────
 
 func TestScoringMath_WeightsOrdering(t *testing.T) {
-	if Weights.Semantic <= Weights.Text {
-		t.Errorf("semantic weight (%.2f) should be > text weight (%.2f)", Weights.Semantic, Weights.Text)
+	if scorer.Weights.Semantic <= scorer.Weights.Text {
+		t.Errorf("semantic weight (%.2f) should be > text weight (%.2f)", scorer.Weights.Semantic, scorer.Weights.Text)
 	}
-	if Weights.Text <= Weights.ID {
-		t.Errorf("text weight (%.2f) should be > ID weight (%.2f)", Weights.Text, Weights.ID)
+	if scorer.Weights.Text <= scorer.Weights.ID {
+		t.Errorf("text weight (%.2f) should be > ID weight (%.2f)", scorer.Weights.Text, scorer.Weights.ID)
 	}
-	if Weights.ID <= Weights.Proximity {
-		t.Errorf("ID weight (%.2f) should be > proximity weight (%.2f)", Weights.ID, Weights.Proximity)
+	if scorer.Weights.ID <= scorer.Weights.Proximity {
+		t.Errorf("ID weight (%.2f) should be > proximity weight (%.2f)", scorer.Weights.ID, scorer.Weights.Proximity)
 	}
 }
 
 func TestScoringMath_WeightsValues(t *testing.T) {
-	if Weights.Semantic != 0.60 {
-		t.Errorf("semantic weight = %.2f, want 0.60", Weights.Semantic)
+	if scorer.Weights.Semantic != 0.60 {
+		t.Errorf("semantic weight = %.2f, want 0.60", scorer.Weights.Semantic)
 	}
-	if Weights.Text != 0.45 {
-		t.Errorf("text weight = %.2f, want 0.45", Weights.Text)
+	if scorer.Weights.Text != 0.45 {
+		t.Errorf("text weight = %.2f, want 0.45", scorer.Weights.Text)
 	}
-	if Weights.ID != 0.25 {
-		t.Errorf("ID weight = %.2f, want 0.25", Weights.ID)
+	if scorer.Weights.ID != 0.25 {
+		t.Errorf("ID weight = %.2f, want 0.25", scorer.Weights.ID)
 	}
-	if Weights.Proximity != 0.10 {
-		t.Errorf("proximity weight = %.2f, want 0.10", Weights.Proximity)
+	if scorer.Weights.Proximity != 0.10 {
+		t.Errorf("proximity weight = %.2f, want 0.10", scorer.Weights.Proximity)
 	}
 }
 
@@ -180,7 +181,7 @@ func TestScoringMath_WeightsValues(t *testing.T) {
 func TestScoringMath_CheckboxPenaltyNonCheckbox(t *testing.T) {
 	el := makeEl(withTag("button"), withText("Newsletter"), withID("chk_decoy"))
 	elements := []dom.ElementSnapshot{el}
-	ranked := Rank("Newsletter", "checkbox", "checkbox", elements, 10, nil)
+	ranked := scorer.Rank("Newsletter", "checkbox", "checkbox", elements, 10, nil)
 	if len(ranked) == 0 {
 		t.Fatal("no candidates")
 	}
@@ -198,7 +199,7 @@ func TestScoringMath_CheckboxSemanticBonus(t *testing.T) {
 	el := makeEl(withTag("input"), withInputType("checkbox"),
 		withLabel("Newsletter"), withID("chk_real"))
 	elements := []dom.ElementSnapshot{el}
-	ranked := Rank("Newsletter", "checkbox", "checkbox", elements, 10, nil)
+	ranked := scorer.Rank("Newsletter", "checkbox", "checkbox", elements, 10, nil)
 	if len(ranked) == 0 {
 		t.Fatal("no candidates")
 	}
@@ -221,7 +222,7 @@ func TestScoringMath_ProximityBonus(t *testing.T) {
 		withXPath("/html/body/footer/button[1]"), withID("far_btn"),
 	)
 	elements := []dom.ElementSnapshot{elClose, elFar}
-	ranked := Rank("Submit", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Submit", "button", "clickable", elements, 10, nil)
 
 	var closeScore, farScore float64
 	for _, r := range ranked {
@@ -252,7 +253,7 @@ func TestScoringMath_InputModeSynergy(t *testing.T) {
 	elButton := makeEl(withTag("button"), withText("Query"), withID("btn_decoy"))
 
 	elements := []dom.ElementSnapshot{elInput, elButton}
-	ranked := Rank("query", "", "input", elements, 10, nil)
+	ranked := scorer.Rank("query", "", "input", elements, 10, nil)
 
 	var inpScore, btnScore float64
 	for _, r := range ranked {
@@ -283,7 +284,7 @@ func TestScoringMath_StackedSignals(t *testing.T) {
 	)
 
 	elements := []dom.ElementSnapshot{elStack, elWeak}
-	ranked := Rank("promo code", "", "input", elements, 10, nil)
+	ranked := scorer.Rank("promo code", "", "input", elements, 10, nil)
 
 	var stackScore, weakScore float64
 	for _, r := range ranked {
@@ -306,7 +307,7 @@ func TestScoringMath_TargetFieldHtmlId(t *testing.T) {
 		withID("shipping-address"),
 	)
 	elements := []dom.ElementSnapshot{el}
-	ranked := Rank("shipping address", "field", "input", elements, 10, nil)
+	ranked := scorer.Rank("shipping address", "field", "input", elements, 10, nil)
 	if len(ranked) == 0 {
 		t.Fatal("no candidates")
 	}
@@ -331,7 +332,7 @@ func TestScoringMath_DataQABeatsText(t *testing.T) {
 	// - dqa_btn via data-qa (contains "confirm" and "order")
 	// - text_btn via exact text match
 	elements := []dom.ElementSnapshot{elDQA, elText}
-	ranked := Rank("Confirm Order", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Confirm Order", "button", "clickable", elements, 10, nil)
 
 	// The text exact match should win since data-qa is "confirm-order" (hyphenated)
 	// which doesn't exactly match "confirm order"
@@ -351,7 +352,7 @@ func TestScoringMath_DataQABeatsText(t *testing.T) {
 func TestScoringMath_DisabledAlwaysZero(t *testing.T) {
 	el := makeEl(withTag("button"), withText("Submit"), withDisabled(), withID("aria_dis"))
 	elements := []dom.ElementSnapshot{el}
-	ranked := Rank("Submit", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Submit", "button", "clickable", elements, 10, nil)
 	if len(ranked) == 0 {
 		t.Fatal("no candidates")
 	}
@@ -367,7 +368,7 @@ func TestScoringMath_EnabledBeatsDisabled(t *testing.T) {
 	elEnabled := makeEl(withTag("button"), withText("Submit"), withID("en"))
 
 	elements := []dom.ElementSnapshot{elDisabled, elEnabled}
-	ranked := Rank("Submit", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Submit", "button", "clickable", elements, 10, nil)
 	if ranked[0].Element.HTMLId != "en" {
 		t.Errorf("enabled should win, got %s", ranked[0].Element.HTMLId)
 	}
@@ -380,7 +381,7 @@ func TestScoringMath_VisibleBeatsHidden(t *testing.T) {
 	elVisible := makeEl(withTag("button"), withText("Submit"), withID("vis"))
 
 	elements := []dom.ElementSnapshot{elHidden, elVisible}
-	ranked := Rank("Submit", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Submit", "button", "clickable", elements, 10, nil)
 	if ranked[0].Element.HTMLId != "vis" {
 		t.Errorf("visible should win, got %s", ranked[0].Element.HTMLId)
 	}
@@ -393,7 +394,7 @@ func TestScoringMath_SelectModeStrictness(t *testing.T) {
 	elButton := makeEl(withTag("button"), withText("Country"), withID("country_btn"))
 
 	elements := []dom.ElementSnapshot{elSelect, elButton}
-	ranked := Rank("Country", "dropdown", "select", elements, 10, nil)
+	ranked := scorer.Rank("Country", "dropdown", "select", elements, 10, nil)
 	if ranked[0].Element.Tag != "select" {
 		t.Errorf("select mode should prefer <select>, got <%s>", ranked[0].Element.Tag)
 	}

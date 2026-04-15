@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EDTECH & E-LEARNING DOM SCORING TEST SUITE

@@ -71,6 +71,8 @@ type ElementSnapshot struct {
 	IsHidden bool `json:"is_hidden"`
 	// IsEditable reports whether the element accepts text input.
 	IsEditable bool `json:"is_editable"`
+	// IsChecked reports whether the element (checkbox/radio) is checked.
+	IsChecked bool `json:"is_checked"`
 	// IsInShadow reports whether the element is inside a shadow DOM.
 	IsInShadow bool `json:"is_in_shadow,omitempty"`
 

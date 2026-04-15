@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GOV/HEALTHCARE DOM SCORING TEST SUITE

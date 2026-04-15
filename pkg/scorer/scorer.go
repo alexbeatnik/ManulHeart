@@ -259,7 +259,7 @@ func scoreLabel(q string, el *dom.ElementSnapshot) float64 {
 		return 0.5
 	}
 	// Word-overlap for multi-word queries like "CPU of Chrome".
-	if sigWords := significantWords(q); len(sigWords) >= 2 {
+	if sigWords := SignificantWords(q); len(sigWords) >= 2 {
 		hits := 0
 		for _, w := range sigWords {
 			if strings.Contains(el.NormLabelText, w) {
@@ -612,7 +612,7 @@ func partialMatch(q, s string) float64 {
 // wordOverlap returns the fraction of significant query words found in s.
 // Minimum word length ≥ 2 and stop-word filtering prevent single-char false positives.
 func wordOverlap(q, s string) float64 {
-	qWords := significantWords(q)
+	qWords := SignificantWords(q)
 	if len(qWords) == 0 {
 		return 0.0
 	}
@@ -645,8 +645,8 @@ var stopWords = map[string]bool{
 	"as": true, "are": true, "was": true, "were": true, "not": true,
 }
 
-// significantWords returns query words with length ≥ 2 and not a stop word.
-func significantWords(s string) []string {
+// SignificantWords returns query words with length ≥ 2 and not a stop word.
+func SignificantWords(s string) []string {
 	var words []string
 	for _, w := range strings.Fields(s) {
 		if len(w) >= 2 && !stopWords[w] {

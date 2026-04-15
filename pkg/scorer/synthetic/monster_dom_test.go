@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MONSTER DOM SCORING TEST SUITE
@@ -15,6 +15,7 @@ package scorer
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
+	"github.com/manulengineer/manulheart/pkg/scorer"
 	"testing"
 
 	"github.com/manulengineer/manulheart/pkg/dom"
@@ -368,13 +369,13 @@ func TestMonsterDOM_Select(t *testing.T) {
 func TestMonsterDOM_LoginFormEmail(t *testing.T) {
 	elements := monsterDOM()
 
-	loginAnchor := &AnchorContext{
+	loginAnchor := &scorer.AnchorContext{
 		XPath: "/html/body/section[@id='login-form-section']/h3",
 		Rect:  dom.Rect{Top: 190, Left: 50, Width: 200, Height: 25},
 		Words: []string{"login", "form"},
 	}
 
-	ranked := Rank("Email", "", "input", elements, 10, loginAnchor)
+	ranked := scorer.Rank("Email", "", "input", elements, 10, loginAnchor)
 	if len(ranked) == 0 {
 		t.Fatal("Rank returned 0 candidates")
 	}
@@ -393,12 +394,12 @@ func TestMonsterDOM_DeleteSelected(t *testing.T) {
 	// "Delete" for the selected item should match data-qa="delete-selected"
 	// since both buttons have identical visible text "Delete".
 	// The Python test expects "delete-selected" via context hint.
-	anchor := &AnchorContext{
+	anchor := &scorer.AnchorContext{
 		Words: []string{"selected"},
 		XPath: "/html/body/div[15]",
 		Rect:  dom.Rect{Top: 100, Left: 50, Width: 200, Height: 25},
 	}
-	ranked := Rank("Delete", "", "clickable", elements, 10, anchor)
+	ranked := scorer.Rank("Delete", "", "clickable", elements, 10, anchor)
 	if len(ranked) == 0 {
 		t.Fatal("Rank returned 0 candidates")
 	}

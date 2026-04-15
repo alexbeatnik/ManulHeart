@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WIKIPEDIA SEARCH INPUT SCORING TEST SUITE
@@ -19,6 +19,7 @@ package scorer
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
+	"github.com/manulengineer/manulheart/pkg/scorer"
 	"testing"
 
 	"github.com/manulengineer/manulheart/pkg/dom"
@@ -44,7 +45,7 @@ func TestWiki_SearchInputWinsOverButton(t *testing.T) {
 			func(e *dom.ElementSnapshot) { e.ID = 2 }),
 	}
 
-	ranked := Rank("Search Wikipedia", "", "input", elements, 10, nil)
+	ranked := scorer.Rank("Search Wikipedia", "", "input", elements, 10, nil)
 	if len(ranked) == 0 {
 		t.Fatal("Rank returned 0 candidates")
 	}
@@ -72,8 +73,8 @@ func TestWiki_ExactAriaMatchHighScore(t *testing.T) {
 	decoy := makeEl(withTag("input"), withInputType("text"), withAriaLabel("Username"),
 		func(e *dom.ElementSnapshot) { e.ID = 1 })
 
-	tScore := Score("Search Wikipedia", "", "input", &target, nil).Total
-	dScore := Score("Search Wikipedia", "", "input", &decoy, nil).Total
+	tScore := scorer.Score("Search Wikipedia", "", "input", &target, nil).Total
+	dScore := scorer.Score("Search Wikipedia", "", "input", &decoy, nil).Total
 
 	if tScore <= 0.35 {
 		t.Errorf("exact aria match should produce high score, got %.4f", tScore)
@@ -89,7 +90,7 @@ func TestWiki_ExactPlaceholderMatch(t *testing.T) {
 	el := makeEl(withTag("input"), withInputType("search"), withPlaceholder("search wikipedia"),
 		func(e *dom.ElementSnapshot) { e.ID = 0 })
 
-	score := Score("Search Wikipedia", "", "input", &el, nil).Total
+	score := scorer.Score("Search Wikipedia", "", "input", &el, nil).Total
 	if score <= 0.3 {
 		t.Errorf("exact placeholder match should produce good score, got %.4f", score)
 	}
@@ -103,8 +104,8 @@ func TestWiki_PartialAriaLessThanExact(t *testing.T) {
 	partial := makeEl(withTag("input"), withInputType("search"), withAriaLabel("Wikipedia Help"),
 		func(e *dom.ElementSnapshot) { e.ID = 1 })
 
-	eScore := Score("Search Wikipedia", "", "input", &exact, nil).Total
-	pScore := Score("Search Wikipedia", "", "input", &partial, nil).Total
+	eScore := scorer.Score("Search Wikipedia", "", "input", &exact, nil).Total
+	pScore := scorer.Score("Search Wikipedia", "", "input", &partial, nil).Total
 
 	if eScore <= pScore {
 		t.Errorf("exact aria (%.4f) should beat partial aria (%.4f)", eScore, pScore)
@@ -119,8 +120,8 @@ func TestWiki_SearchTypeNotPenalized(t *testing.T) {
 	textEl := makeEl(withTag("input"), withInputType("text"), withAriaLabel("My Search"),
 		func(e *dom.ElementSnapshot) { e.ID = 1 })
 
-	sScore := Score("My Search", "", "input", &searchEl, nil).Total
-	tScore := Score("My Search", "", "input", &textEl, nil).Total
+	sScore := scorer.Score("My Search", "", "input", &searchEl, nil).Total
+	tScore := scorer.Score("My Search", "", "input", &textEl, nil).Total
 
 	if sScore < tScore {
 		t.Errorf("type=search (%.4f) should not be penalized vs type=text (%.4f)", sScore, tScore)
@@ -163,7 +164,7 @@ func TestWiki_FullDisambiguation(t *testing.T) {
 			func(e *dom.ElementSnapshot) { e.ID = 4 }),
 	}
 
-	ranked := Rank("Search Wikipedia", "", "input", elements, 10, nil)
+	ranked := scorer.Rank("Search Wikipedia", "", "input", elements, 10, nil)
 	if ranked[0].Element.ID != 0 {
 		t.Errorf("search input should be #1, got #%d", ranked[0].Element.ID)
 	}
@@ -195,8 +196,8 @@ func TestWiki_DisabledPenalized(t *testing.T) {
 		withDisabled(),
 		func(e *dom.ElementSnapshot) { e.ID = 1 })
 
-	eScore := Score("Search Wikipedia", "", "input", &enabled, nil).Total
-	dScore := Score("Search Wikipedia", "", "input", &disabled, nil).Total
+	eScore := scorer.Score("Search Wikipedia", "", "input", &enabled, nil).Total
+	dScore := scorer.Score("Search Wikipedia", "", "input", &disabled, nil).Total
 
 	if eScore <= dScore {
 		t.Errorf("enabled (%.4f) should outscore disabled (%.4f)", eScore, dScore)

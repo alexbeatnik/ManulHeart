@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SOCIAL MEDIA DOM SCORING TEST SUITE

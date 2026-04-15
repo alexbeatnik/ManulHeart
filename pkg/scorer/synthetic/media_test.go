@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MEDIA & VIDEO STREAMING DOM SCORING TEST SUITE

@@ -1,0 +1,101 @@
+package runtime
+
+import (
+	"context"
+	"testing"
+
+	"github.com/manulengineer/manulheart/pkg/config"
+	"github.com/manulengineer/manulheart/pkg/dom"
+	"github.com/manulengineer/manulheart/pkg/dsl"
+	"github.com/manulengineer/manulheart/pkg/utils"
+)
+
+func TestRuntime_Conditionals(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, Tag: "button", VisibleText: "Save", IsVisible: true, Rect: dom.Rect{Top: 10, Left: 10, Width: 100, Height: 30}},
+		},
+	}
+	mock.Elements[0].Normalize()
+
+	cfg := config.Config{}
+	logger := utils.NewLogger(utils.LogLevelInfo, nil)
+	rt := New(cfg, mock, logger)
+	ctx := context.Background()
+
+	tests := []struct {
+		name      string
+		condition string
+		expected  bool
+	}{
+		{"ExistsTrue", "button 'Save' exists", true},
+		{"ExistsFalse", "button 'Cancel' exists", false},
+		{"NotExistsTrue", "button 'Cancel' not exists", true},
+		{"NotExistsFalse", "button 'Save' not exists", false},
+		{"TextPresentTrue", "text 'Save' is present", true},
+		{"TextPresentFalse", "text 'Cancel' is present", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := rt.evaluateCondition(ctx, tc.condition)
+			if err != nil {
+				t.Fatalf("evaluateCondition failed: %v", err)
+			}
+			if got != tc.expected {
+				t.Errorf("condition %q: got %v, want %v", tc.condition, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestRuntime_Loops(t *testing.T) {
+	mock := &MockPage{}
+	cfg := config.Config{}
+	logger := utils.NewLogger(utils.LogLevelInfo, nil)
+	rt := New(cfg, mock, logger)
+	ctx := context.Background()
+
+	// 1. REPEAT loop
+	hunt := &dsl.Hunt{
+		Commands: []dsl.Command{
+			{
+				Type: dsl.CmdRepeat,
+				RepeatCount: 3,
+				RepeatVar: "i",
+				Body: []dsl.Command{
+					{Type: dsl.CmdPrint, PrintText: "Iteration {i}"},
+				},
+			},
+		},
+	}
+
+	_, err := rt.RunHunt(ctx, hunt)
+	if err != nil {
+		t.Fatalf("REPEAT hunt failed: %v", err)
+	}
+	// Verify i was 2 after the loop
+	val, _ := rt.vars.Resolve("i")
+	if val != "2" {
+		t.Errorf("expected i=2, got %q", val)
+	}
+
+	// 2. WHILE loop
+	rt.vars.Set("counter", "0", LevelGlobal)
+	huntWhile := &dsl.Hunt{
+		Commands: []dsl.Command{
+			{
+				Type: dsl.CmdWhile,
+				WhileCondition: "{counter} != '3'",
+				Body: []dsl.Command{
+					{Type: dsl.CmdPrint, PrintText: "While {counter}"},
+					{Type: dsl.CmdSet, SetVar: "counter", SetValue: "3"}, // Break manually for now as we don't have math
+				},
+			},
+		},
+	}
+	_, err = rt.RunHunt(ctx, huntWhile)
+	if err != nil {
+		t.Fatalf("WHILE hunt failed: %v", err)
+	}
+}

@@ -308,23 +308,10 @@ func parseLines(hunt *Hunt, lines []string) error {
 			}
 		}
 
-		if strings.HasPrefix(trimmed, "@") {
-			if err := parseDirective(hunt, trimmed); err != nil {
-				return fmt.Errorf("line %d: %w", i+1, err)
-			}
-			continue
-		}
-
 		upper := strings.ToUpper(trimmed)
 
-		if strings.HasPrefix(upper, "STEP ") {
-			currentStep = strings.TrimSuffix(trimmed, ":")
-			continue
-		}
-		if upper == "DONE." || upper == "DONE" {
-			break
-		}
-		if strings.HasPrefix(upper, "@TAG:") || strings.HasPrefix(upper, "@TAGS:") {
+		// In-line tags (apply to the NEXT command) - Case sensitive (@TAG vs @tags)
+		if strings.HasPrefix(trimmed, "@TAG:") || strings.HasPrefix(trimmed, "@TAGS:") {
 			parts := strings.SplitN(trimmed, ":", 2)
 			if len(parts) == 2 {
 				for _, t := range strings.Split(parts[1], ",") {
@@ -332,6 +319,23 @@ func parseLines(hunt *Hunt, lines []string) error {
 				}
 			}
 			continue
+		}
+
+		// Metadata headers (@context, @title, @var, @tags)
+		if strings.HasPrefix(trimmed, "@") {
+			if err := parseDirective(hunt, trimmed); err != nil {
+				return fmt.Errorf("line %d: %w", i+1, err)
+			}
+			continue
+		}
+
+		// Logical steps (optionally numbered: "1. STEP 1: ..." or "STEP: Login")
+		if (strings.Contains(upper, "STEP ") || strings.HasPrefix(upper, "STEP:")) && !strings.Contains(upper, "'") && !strings.Contains(upper, "\"") {
+			currentStep = strings.TrimSuffix(trimmed, ":")
+			continue
+		}
+		if upper == "DONE." || upper == "DONE" {
+			break
 		}
 
 		for len(stack) > 0 && indent <= stack[len(stack)-1].indent {

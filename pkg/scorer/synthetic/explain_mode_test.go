@@ -1,23 +1,24 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPLAIN MODE TEST SUITE
 //
 // Port of ManulEngine test_44_explain_mode.py
 //
-// In Go the ScoreBreakdown is always populated (no explain flag).
+// In Go the scorer.ScoreBreakdown is always populated (no explain flag).
 // Tests validate:
 // 1. All breakdown fields are populated for a matching element
 // 2. Field values are in [0.0, 1.0]
 // 3. Disabled penalty zeros total and raw score
 // 4. Hidden penalty reduces total
-// 5. Multiple elements all get scored via Rank()
+// 5. Multiple elements all get scored via scorer.Rank()
 // 6. Signals list is populated in Candidate
 // 7. Channel sum consistency (text+id+semantic+proximity ≈ raw / penalty)
 // 8. Rank order is reflected in Candidate.Rank field
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
+	"github.com/manulengineer/manulheart/pkg/scorer"
 	"math"
 	"testing"
 
@@ -30,7 +31,7 @@ import (
 
 func TestExplain_BreakdownFieldsPopulated(t *testing.T) {
 	el := makeEl(withTag("button"), withText("Login"))
-	score := Score("login", "button", "clickable", &el, nil)
+	score := scorer.Score("login", "button", "clickable", &el, nil)
 
 	if score.ExactTextMatch <= 0 {
 		t.Errorf("ExactTextMatch should be > 0 for exact match, got %.4f", score.ExactTextMatch)
@@ -63,7 +64,7 @@ func TestExplain_AllValuesInRange(t *testing.T) {
 			e.HTMLId = "username"
 		},
 	)
-	score := Score("username", "", "input", &el, nil)
+	score := scorer.Score("username", "", "input", &el, nil)
 
 	fields := map[string]float64{
 		"ExactTextMatch":      score.ExactTextMatch,
@@ -94,7 +95,7 @@ func TestExplain_AllValuesInRange(t *testing.T) {
 
 func TestExplain_DisabledPenaltyZero(t *testing.T) {
 	el := makeEl(withTag("button"), withText("Login"), withDisabled())
-	score := Score("login", "button", "clickable", &el, nil)
+	score := scorer.Score("login", "button", "clickable", &el, nil)
 
 	if score.Total != 0.0 {
 		t.Errorf("disabled element Total should be 0.0, got %.4f", score.Total)
@@ -115,8 +116,8 @@ func TestExplain_HiddenPenaltyReduced(t *testing.T) {
 	visible := makeEl(withTag("button"), withText("Login"))
 	hidden := makeEl(withTag("button"), withText("Login"), withHidden())
 
-	visScore := Score("login", "button", "clickable", &visible, nil)
-	hidScore := Score("login", "button", "clickable", &hidden, nil)
+	visScore := scorer.Score("login", "button", "clickable", &visible, nil)
+	hidScore := scorer.Score("login", "button", "clickable", &hidden, nil)
 
 	if hidScore.Total >= visScore.Total {
 		t.Errorf("hidden total (%.4f) should be < visible total (%.4f)",
@@ -139,7 +140,7 @@ func TestExplain_MultipleElementsAllScored(t *testing.T) {
 		makeEl(withTag("button"), withText("Submit"), withID("btn3")),
 	}
 
-	ranked := Rank("login", "button", "clickable", els, 10, nil)
+	ranked := scorer.Rank("login", "button", "clickable", els, 10, nil)
 
 	if len(ranked) != 3 {
 		t.Fatalf("expected 3 ranked candidates, got %d", len(ranked))
@@ -166,7 +167,7 @@ func TestExplain_MultipleElementsAllScored(t *testing.T) {
 
 func TestExplain_SignalsPopulated(t *testing.T) {
 	el := makeEl(withTag("button"), withText("Login"))
-	ranked := Rank("login", "button", "clickable",
+	ranked := scorer.Rank("login", "button", "clickable",
 		[]dom.ElementSnapshot{el}, 1, nil)
 
 	if len(ranked) != 1 {
@@ -199,7 +200,7 @@ func TestExplain_ChosenFlag(t *testing.T) {
 		makeEl(withTag("button"), withText("Cancel"), withID("btn2")),
 	}
 
-	ranked := Rank("login", "button", "clickable", els, 10, nil)
+	ranked := scorer.Rank("login", "button", "clickable", els, 10, nil)
 
 	if !ranked[0].Explain.Chosen {
 		t.Error("first-ranked candidate should have Chosen=true")
@@ -216,7 +217,7 @@ func TestExplain_ChosenFlag(t *testing.T) {
 func TestExplain_ChannelScoreConsistency(t *testing.T) {
 	// For a non-penalized element, raw ≈ text*wt + id*wi + semantic*ws + proximity*wp
 	el := makeEl(withTag("button"), withText("Login"))
-	score := Score("login", "button", "clickable", &el, nil)
+	score := scorer.Score("login", "button", "clickable", &el, nil)
 
 	recomputed := score.ExactTextMatch*1.0 +
 		score.NormalizedTextMatch*0.7 +

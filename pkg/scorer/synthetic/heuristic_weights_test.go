@@ -1,4 +1,4 @@
-package scorer
+package synthetic
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HEURISTIC WEIGHTS TEST SUITE
@@ -21,6 +21,7 @@ package scorer
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
+	"github.com/manulengineer/manulheart/pkg/scorer"
 	"testing"
 
 	"github.com/manulengineer/manulheart/pkg/dom"
@@ -37,7 +38,7 @@ func TestHeuristicWeights_DataQADominance(t *testing.T) {
 	elText := makeEl(withTag("button"), withText("Submit Order"), withID("text_btn"))
 
 	elements := []dom.ElementSnapshot{elDQA, elText}
-	ranked := Rank("submit-order", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("submit-order", "button", "clickable", elements, 10, nil)
 
 	// data-qa exact match should outscore text only
 	if len(ranked) < 2 {
@@ -65,7 +66,7 @@ func TestHeuristicWeights_AriaVsPlaceholder(t *testing.T) {
 	)
 
 	elements := []dom.ElementSnapshot{elAria, elPH}
-	ranked := Rank("email address", "field", "input", elements, 10, nil)
+	ranked := scorer.Rank("email address", "field", "input", elements, 10, nil)
 
 	// Both should score positively
 	for _, r := range ranked {
@@ -94,7 +95,7 @@ func TestHeuristicWeights_HtmlIdAlignment(t *testing.T) {
 	)
 
 	elements := []dom.ElementSnapshot{elMatch, elNoMatch}
-	ranked := Rank("shipping address", "field", "input", elements, 10, nil)
+	ranked := scorer.Rank("shipping address", "field", "input", elements, 10, nil)
 
 	if ranked[0].Element.HTMLId != "shipping-address" {
 		t.Errorf("expected shipping-address to win, got %s", ranked[0].Element.HTMLId)
@@ -108,7 +109,7 @@ func TestHeuristicWeights_EnabledBeatsDisabled(t *testing.T) {
 	elEnabled := makeEl(withTag("button"), withText("Submit"), withID("en"))
 
 	elements := []dom.ElementSnapshot{elDisabled, elEnabled}
-	ranked := Rank("Submit", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Submit", "button", "clickable", elements, 10, nil)
 
 	if ranked[0].Element.HTMLId != "en" {
 		t.Errorf("enabled should win, got %s", ranked[0].Element.HTMLId)
@@ -126,7 +127,7 @@ func TestHeuristicWeights_VisibleBeatsHidden(t *testing.T) {
 	elVisible := makeEl(withTag("button"), withText("Delete"), withID("vis"))
 
 	elements := []dom.ElementSnapshot{elHidden, elVisible}
-	ranked := Rank("Delete", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Delete", "button", "clickable", elements, 10, nil)
 
 	if ranked[0].Element.HTMLId != "vis" {
 		t.Errorf("visible should win, got %s", ranked[0].Element.HTMLId)
@@ -143,7 +144,7 @@ func TestHeuristicWeights_CheckboxModeStrictness(t *testing.T) {
 	elLink := makeEl(withTag("a"), withText("Accept Terms"), withID("fake_link"))
 
 	elements := []dom.ElementSnapshot{elCheckbox, elButton, elLink}
-	ranked := Rank("Accept Terms", "checkbox", "checkbox", elements, 10, nil)
+	ranked := scorer.Rank("Accept Terms", "checkbox", "checkbox", elements, 10, nil)
 
 	if ranked[0].Element.HTMLId != "real_chk" {
 		t.Errorf("checkbox should win in checkbox mode, got %s (tag=%s, type=%s)",
@@ -160,7 +161,7 @@ func TestHeuristicWeights_InputModeSynergy(t *testing.T) {
 	elButton := makeEl(withTag("button"), withText("Username"), withID("decoy_btn"))
 
 	elements := []dom.ElementSnapshot{elInput, elButton}
-	ranked := Rank("Username", "field", "input", elements, 10, nil)
+	ranked := scorer.Rank("Username", "field", "input", elements, 10, nil)
 
 	if ranked[0].Element.HTMLId != "real_input" {
 		t.Errorf("input should win in input mode, got %s", ranked[0].Element.HTMLId)
@@ -175,7 +176,7 @@ func TestHeuristicWeights_SelectMode(t *testing.T) {
 	elDiv := makeEl(withTag("div"), withText("Country"), withID("decoy_div"))
 
 	elements := []dom.ElementSnapshot{elSelect, elButton, elDiv}
-	ranked := Rank("Country", "dropdown", "select", elements, 10, nil)
+	ranked := scorer.Rank("Country", "dropdown", "select", elements, 10, nil)
 
 	if ranked[0].Element.HTMLId != "real_sel" {
 		t.Errorf("select should win in select mode, got %s (tag=%s)",
@@ -191,7 +192,7 @@ func TestHeuristicWeights_DataTestIdFallback(t *testing.T) {
 		withID("testid_btn"),
 	)
 	elements := []dom.ElementSnapshot{el}
-	ranked := Rank("Edit", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Edit", "button", "clickable", elements, 10, nil)
 
 	if len(ranked) == 0 {
 		t.Fatal("no candidates")
@@ -211,7 +212,7 @@ func TestHeuristicWeights_ExactVsSubstring(t *testing.T) {
 	elSubstr2 := makeEl(withTag("button"), withText("Save Draft"), withID("substr2"))
 
 	elements := []dom.ElementSnapshot{elExact, elSubstr1, elSubstr2}
-	ranked := Rank("Save", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Save", "button", "clickable", elements, 10, nil)
 
 	if ranked[0].Element.HTMLId != "exact" {
 		t.Errorf("exact match should win, got %s (text=%q)",
@@ -227,7 +228,7 @@ func TestHeuristicWeights_NameAttrMatching(t *testing.T) {
 		withID("name_inp"),
 	)
 	elements := []dom.ElementSnapshot{el}
-	ranked := Rank("username", "", "input", elements, 10, nil)
+	ranked := scorer.Rank("username", "", "input", elements, 10, nil)
 
 	if len(ranked) == 0 {
 		t.Fatal("no candidates")
@@ -253,7 +254,7 @@ func TestHeuristicWeights_StackedSignals(t *testing.T) {
 	)
 
 	elements := []dom.ElementSnapshot{elStacked, elSingle}
-	ranked := Rank("promo code", "", "input", elements, 10, nil)
+	ranked := scorer.Rank("promo code", "", "input", elements, 10, nil)
 
 	if ranked[0].Element.HTMLId != "stacked" {
 		t.Errorf("stacked signals should win, got %s", ranked[0].Element.HTMLId)
@@ -270,7 +271,7 @@ func TestHeuristicWeights_ClassNameContextWords(t *testing.T) {
 		withID("class_btn"),
 	)
 	elements := []dom.ElementSnapshot{el}
-	ranked := Rank("deploy", "", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("deploy", "", "clickable", elements, 10, nil)
 
 	if len(ranked) == 0 {
 		t.Fatal("no candidates")
@@ -288,7 +289,7 @@ func TestHeuristicWeights_LinkHintBoostsAnchor(t *testing.T) {
 	elBtn := makeEl(withTag("button"), withText("Register"), withID("btn"))
 
 	elements := []dom.ElementSnapshot{elA, elBtn}
-	ranked := Rank("Register", "link", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Register", "link", "clickable", elements, 10, nil)
 
 	if ranked[0].Element.HTMLId != "link" {
 		t.Errorf("link hint should boost <a>, got %s", ranked[0].Element.HTMLId)
@@ -302,7 +303,7 @@ func TestHeuristicWeights_ButtonHintBoostsButton(t *testing.T) {
 	elA := makeEl(withTag("a"), withText("Download"), withID("link"))
 
 	elements := []dom.ElementSnapshot{elBtn, elA}
-	ranked := Rank("Download", "button", "clickable", elements, 10, nil)
+	ranked := scorer.Rank("Download", "button", "clickable", elements, 10, nil)
 
 	if ranked[0].Element.HTMLId != "btn" {
 		t.Errorf("button hint should boost <button>, got %s", ranked[0].Element.HTMLId)
