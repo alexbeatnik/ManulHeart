@@ -218,14 +218,17 @@ func TestExplain_ChannelScoreConsistency(t *testing.T) {
 	el := makeEl(withTag("button"), withText("Login"))
 	score := Score("login", "button", "clickable", &el, nil)
 
-	textRaw := score.ExactTextMatch + score.NormalizedTextMatch + score.LabelMatch +
-		score.PlaceholderMatch + score.AriaMatch + score.DataQAMatch
-	idRaw := score.IDMatch // className not exposed in breakdown
-	semRaw := score.TagSemantics + score.TypeHintAlignment
-	proxRaw := score.ProximityScore
-
-	recomputed := textRaw*Weights.Text + idRaw*Weights.ID +
-		semRaw*Weights.Semantic + proxRaw*Weights.Proximity
+	recomputed := score.ExactTextMatch*1.0 +
+		score.NormalizedTextMatch*0.7 +
+		score.LabelMatch*0.85 +
+		score.PlaceholderMatch*0.6 +
+		score.AriaMatch*0.7 +
+		score.DataQAMatch*0.8 +
+		score.IDMatch*0.5 +
+		score.TagSemantics*0.6 +
+		score.TypeHintAlignment*0.5 +
+		0.05 + // base depth 1.0 * 0.05
+		score.ProximityScore*0.4
 
 	// RawScore may include className which isn't in breakdown, so allow some tolerance
 	if math.Abs(score.RawScore-recomputed) > 0.2 {

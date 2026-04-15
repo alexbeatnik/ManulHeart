@@ -33,12 +33,13 @@ const (
 	CmdUncheck      CommandType = "UNCHECK"
 	CmdVerify       CommandType = "VERIFY"
 	CmdVerifySoft   CommandType = "VERIFY_SOFT"
+	CmdVerifyField  CommandType = "VERIFY_FIELD"
 	CmdExtract      CommandType = "EXTRACT"
 	CmdScroll       CommandType = "SCROLL"
 	CmdPress        CommandType = "PRESS"
 	CmdWait         CommandType = "WAIT"
 	CmdWaitFor      CommandType = "WAIT_FOR"
-	CmdWaitResponse CommandType = "WAIT_FOR_RESPONSE"
+	CmdWaitForResponse CommandType = "WAIT_FOR_RESPONSE"
 	CmdHover        CommandType = "HOVER"
 	CmdDrag         CommandType = "DRAG"
 	CmdSet          CommandType = "SET"
@@ -49,7 +50,7 @@ const (
 	CmdForEach      CommandType = "FOR_EACH"
 	CmdWhile        CommandType = "WHILE"
 	CmdIf           CommandType = "IF"
-	CmdElseIf       CommandType = "ELIF"
+	CmdElIf         CommandType = "ELIF"
 	CmdElse         CommandType = "ELSE"
 	CmdEndIf        CommandType = "END_IF"
 	CmdEndFor       CommandType = "END_FOR"
@@ -57,6 +58,7 @@ const (
 	CmdEndRepeat    CommandType = "END_REPEAT"
 	CmdCallStep     CommandType = "CALL_STEP"
 	CmdUploadFile   CommandType = "UPLOAD_FILE"
+	CmdUpload       CommandType = "UPLOAD_FILE" // alias for backward compatibility
 	CmdUnknown      CommandType = "UNKNOWN"
 )
 
@@ -118,6 +120,9 @@ type Command struct {
 	// InsideRowText is the "with <text>" clarifier for INSIDE.
 	InsideRowText string
 
+	// VerifyFieldKind is the attribute to verify for CmdVerifyField: "text", "value", "placeholder".
+	VerifyFieldKind string
+
 	// VerifyText is the text to verify for VERIFY commands.
 	VerifyText string
 	// VerifyNegated is true for "VERIFY that X is NOT present".
@@ -140,8 +145,8 @@ type Command struct {
 	WaitSeconds float64
 	// WaitForState is the element state for WAIT FOR commands.
 	WaitForState string
-	// WaitURLPattern is the URL pattern for WAIT FOR RESPONSE.
-	WaitURLPattern string
+	// WaitResponseURL is the URL pattern for WAIT FOR RESPONSE.
+	WaitResponseURL string
 
 	// SetVar is the variable name for SET commands.
 	SetVar string
@@ -155,10 +160,12 @@ type Command struct {
 
 	// RepeatCount is the iteration count for REPEAT commands.
 	RepeatCount int
+	// RepeatVar is the loop variable for REPEAT commands (default "i").
+	RepeatVar string
 	// ForEachVar is the loop variable for FOR EACH commands.
 	ForEachVar string
-	// ForEachList is the collection variable for FOR EACH commands.
-	ForEachList string
+	// ForEachCollection is the collection variable for FOR EACH commands.
+	ForEachCollection string
 	// WhileCondition is the condition expression for WHILE commands.
 	WhileCondition string
 	// IfCondition is the condition expression for IF/ELIF commands.
@@ -166,6 +173,12 @@ type Command struct {
 
 	// Condition is the generic condition string (used by IF/ELIF/WHILE).
 	Condition string
+
+	// PressTarget is the optional target element to focus before pressing the key.
+	PressTarget string
+
+	// UploadFile is the file path for UPLOAD commands (alias for UploadFilePath).
+	UploadFile string
 
 	// PrintText is the text to print for PRINT commands.
 	PrintText string
@@ -176,16 +189,15 @@ type Command struct {
 	// UploadFilePath is the file path for UPLOAD_FILE commands.
 	UploadFilePath string
 
-	// Body is the block body for control-flow commands (REPEAT, FOR EACH, WHILE, IF).
+	// Body is the block body for control-flow commands (REPEAT, FOR EACH, WHILE).
 	Body []Command
-	// ElseBody is the else block for IF commands.
-	ElseBody []Command
-	// ElseIfClauses holds additional ELIF blocks.
-	ElseIfClauses []ElseIfClause
+	// Branches holds IF/ELIF/ELSE conditional branches.
+	Branches []Branch
 }
 
-// ElseIfClause is one ELIF branch in an IF command.
-type ElseIfClause struct {
+// Branch represents a single conditional path (IF, ELIF, ELSE).
+type Branch struct {
+	Kind      string
 	Condition string
 	Body      []Command
 }
@@ -200,6 +212,12 @@ type Hunt struct {
 	Context string
 	// Tags are the file-level @tags.
 	Tags []string
+	// DataFile is the attached test data file (e.g., from @data_file).
+	DataFile string
+	// Schedule defines execution frequency (e.g., from @schedule).
+	Schedule string
+	// Exports holds names of variables exported across hunts (e.g., from @export).
+	Exports []string
 	// Vars holds @var declarations and runtime SET values.
 	Vars map[string]string
 	// Imports contains parsed @import directives.
@@ -245,21 +263,51 @@ func ParseFile(path string) (*Hunt, error) {
 	return hunt, nil
 }
 
-// parseLines is the main parsing loop.
+// parseLines is the main parsing loop, implementing stack-based block AST building via indentation.
 func parseLines(hunt *Hunt, lines []string) error {
 	var currentStep string
 	var currentTags []string
+
+	type stackFrame struct {
+		cmd    *Command
+		branch *Branch // For IF commands, points to the active branch
+		indent int
+	}
+	var stack []stackFrame
+
+	appendCmd := func(cmd Command) *Command {
+		if len(stack) == 0 {
+			hunt.Commands = append(hunt.Commands, cmd)
+			return &hunt.Commands[len(hunt.Commands)-1]
+		}
+		top := stack[len(stack)-1]
+		if top.branch != nil {
+			top.branch.Body = append(top.branch.Body, cmd)
+			return &top.branch.Body[len(top.branch.Body)-1]
+		}
+		top.cmd.Body = append(top.cmd.Body, cmd)
+		return &top.cmd.Body[len(top.cmd.Body)-1]
+	}
 
 	for i := 0; i < len(lines); i++ {
 		raw := lines[i]
 		trimmed := strings.TrimSpace(raw)
 
-		// Skip blank lines and comments.
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
 
-		// ── @directives ───────────────────────────────────────────────────────
+		indent := 0
+		for _, ch := range raw {
+			if ch == ' ' {
+				indent++
+			} else if ch == '\t' {
+				indent += 4
+			} else {
+				break
+			}
+		}
+
 		if strings.HasPrefix(trimmed, "@") {
 			if err := parseDirective(hunt, trimmed); err != nil {
 				return fmt.Errorf("line %d: %w", i+1, err)
@@ -269,19 +317,13 @@ func parseLines(hunt *Hunt, lines []string) error {
 
 		upper := strings.ToUpper(trimmed)
 
-		// ── STEP label ────────────────────────────────────────────────────────
 		if strings.HasPrefix(upper, "STEP ") {
 			currentStep = strings.TrimSuffix(trimmed, ":")
-			// Remove trailing dot from "STEP N. Title" notation.
 			continue
 		}
-
-		// ── DONE ──────────────────────────────────────────────────────────────
 		if upper == "DONE." || upper == "DONE" {
 			break
 		}
-
-		// ── @tag line ─────────────────────────────────────────────────────────
 		if strings.HasPrefix(upper, "@TAG:") || strings.HasPrefix(upper, "@TAGS:") {
 			parts := strings.SplitN(trimmed, ":", 2)
 			if len(parts) == 2 {
@@ -292,17 +334,82 @@ func parseLines(hunt *Hunt, lines []string) error {
 			continue
 		}
 
-		// ── Apply variable substitution ───────────────────────────────────────
+		for len(stack) > 0 && indent <= stack[len(stack)-1].indent {
+			stack = stack[:len(stack)-1]
+		}
+
 		expanded := applyVars(hunt, trimmed)
 
-		// ── Parse command ─────────────────────────────────────────────────────
-		cmd := parseCommand(expanded)
+		if strings.HasPrefix(upper, "ELIF ") || strings.HasPrefix(upper, "ELSE IF ") || upper == "ELSE:" || upper == "ELSE" {
+			var lastCmd *Command
+			if len(stack) == 0 {
+				if len(hunt.Commands) > 0 {
+					lastCmd = &hunt.Commands[len(hunt.Commands)-1]
+				}
+			} else {
+				top := stack[len(stack)-1]
+				if top.branch != nil {
+					if len(top.branch.Body) > 0 {
+						lastCmd = &top.branch.Body[len(top.branch.Body)-1]
+					}
+				} else {
+					if len(top.cmd.Body) > 0 {
+						lastCmd = &top.cmd.Body[len(top.cmd.Body)-1]
+					}
+				}
+			}
+
+			if lastCmd != nil && lastCmd.Type == CmdIf {
+				kind := "elif"
+				cond := ""
+				if strings.HasPrefix(upper, "ELIF ") || strings.HasPrefix(upper, "ELSE IF ") {
+					rest := stripPrefix(trimmed, "ELSE IF ", "ELIF ")
+					cond = strings.TrimSuffix(strings.TrimSpace(rest), ":")
+				} else {
+					kind = "else"
+				}
+
+				lastCmd.Branches = append(lastCmd.Branches, Branch{
+					Kind:      kind,
+					Condition: cond,
+					Body:      []Command{},
+				})
+
+				stack = append(stack, stackFrame{
+					cmd:    lastCmd,
+					branch: &lastCmd.Branches[len(lastCmd.Branches)-1],
+					indent: indent,
+				})
+				continue
+			}
+		}
+
+		cmd := parseCommandLine(expanded)
 		cmd.Raw = trimmed
 		cmd.StepBlock = currentStep
 		cmd.Tags = append([]string{}, currentTags...)
-		currentTags = nil // tags apply only to the immediately following command
+		currentTags = nil
 
-		hunt.Commands = append(hunt.Commands, cmd)
+		ptr := appendCmd(cmd)
+
+		if ptr.Type == CmdIf {
+			ptr.Branches = append(ptr.Branches, Branch{
+				Kind:      "if",
+				Condition: ptr.Condition,
+				Body:      []Command{},
+			})
+			stack = append(stack, stackFrame{
+				cmd:    ptr,
+				branch: &ptr.Branches[len(ptr.Branches)-1],
+				indent: indent,
+			})
+		} else if ptr.Type == CmdRepeat || ptr.Type == CmdForEach || ptr.Type == CmdWhile {
+			stack = append(stack, stackFrame{
+				cmd:    ptr,
+				branch: nil,
+				indent: indent,
+			})
+		}
 	}
 	return nil
 }
@@ -322,8 +429,18 @@ func parseDirective(hunt *Hunt, line string) error {
 	case "context":
 		hunt.Context = value
 	case "tags", "tag":
-		for _, t := range strings.Split(value, ",") {
-			hunt.Tags = append(hunt.Tags, strings.TrimSpace(t))
+		if value != "" {
+			for _, t := range strings.Split(value, ",") {
+				hunt.Tags = append(hunt.Tags, strings.TrimSpace(t))
+			}
+		}
+	case "data", "data_file", "datafile":
+		hunt.DataFile = strings.Trim(value, "'\"")
+	case "schedule":
+		hunt.Schedule = value
+	case "export", "exports":
+		for _, e := range strings.Split(value, ",") {
+			hunt.Exports = append(hunt.Exports, strings.TrimSpace(e))
 		}
 	case "var":
 		// @var: {name} = value
@@ -383,10 +500,21 @@ func applyVars(hunt *Hunt, s string) string {
 	return s
 }
 
-// parseCommand parses a single expanded DSL line into a Command.
-func parseCommand(line string) Command {
+// parseCommand parses a single DSL line at the given line number.
+// This is the exported form used by tests.
+func parseCommand(line string, _ int) (Command, error) {
+	return parseCommandLine(line), nil
+}
+
+// parseCommandLine is the internal parser.
+func parseCommandLine(line string) Command {
 	upper := strings.ToUpper(line)
-	cmd := Command{Verb: strings.Fields(strings.ToLower(line))[0]}
+	fields := strings.Fields(strings.ToLower(line))
+	firstWord := ""
+	if len(fields) > 0 {
+		firstWord = fields[0]
+	}
+	cmd := Command{Verb: firstWord}
 
 	switch {
 	// ── NAVIGATE ──────────────────────────────────────────────────────────────
@@ -480,6 +608,29 @@ func parseCommand(line string) Command {
 			cmd.Target, cmd.TypeHint, _ = parseTarget(rest)
 		}
 
+	// ── VERIFY FIELD (has text/value/placeholder) ─────────────────────────────
+	// Must come BEFORE the general VERIFY cases.
+	case strings.HasPrefix(upper, "VERIFY ") &&
+		(strings.Contains(upper, " HAS TEXT ") ||
+			strings.Contains(upper, " HAS VALUE ") ||
+			strings.Contains(upper, " HAS PLACEHOLDER ")):
+		cmd.Type = CmdVerifyField
+		rest := stripPrefix(line, "VERIFY ")
+		// Extract target (first quoted string).
+		cmd.Target = extractFirstQuoted(rest)
+		// Detect kind and expected value.
+		restUp := strings.ToUpper(rest)
+		for _, kind := range []string{"PLACEHOLDER", "VALUE", "TEXT"} {
+			hasKind := " HAS " + kind + " "
+			hasIdx := strings.Index(restUp, hasKind)
+			if hasIdx >= 0 {
+				cmd.VerifyFieldKind = strings.ToLower(kind)
+				after := strings.TrimSpace(rest[hasIdx+len(hasKind):])
+				cmd.Value = unquote(after)
+				break
+			}
+		}
+
 	// ── VERIFY SOFTLY ─────────────────────────────────────────────────────────
 	case strings.HasPrefix(upper, "VERIFY SOFTLY "):
 		cmd.Type = CmdVerifySoft
@@ -520,31 +671,49 @@ func parseCommand(line string) Command {
 			cmd.ScrollDirection = "down"
 			rest = strings.TrimSpace(strings.TrimPrefix(rest, strings.Fields(rest)[0]))
 		}
-		insideIdx := strings.Index(strings.ToUpper(rest), " INSIDE ")
+		insideIdx := strings.Index(" "+strings.ToUpper(rest), " INSIDE ")
 		if insideIdx >= 0 {
-			cmd.ScrollContainer = unquote(strings.TrimSpace(rest[insideIdx+8:]))
+			rawContainer := strings.TrimSpace(rest[insideIdx+7:])
+			container := extractFirstQuoted(rawContainer)
+			if container == "" {
+				container = unquote(stripPrefix(rawContainer, "THE ", "the ", "the"))
+			}
+			cmd.ScrollContainer = container
 		}
 
 	// ── PRESS ─────────────────────────────────────────────────────────────────
 	case strings.HasPrefix(upper, "PRESS "):
 		cmd.Type = CmdPress
-		cmd.PressKey = strings.TrimSpace(line[6:])
+		rest := strings.TrimSpace(line[6:])
+		// Handle: PRESS Key ON 'Target'
+		onIdx := strings.Index(strings.ToUpper(rest), " ON ")
+		if onIdx >= 0 {
+			cmd.PressKey = strings.TrimSpace(rest[:onIdx])
+			cmd.PressTarget, _, _ = parseTarget(strings.TrimSpace(rest[onIdx+4:]))
+			if cmd.PressTarget == "" {
+				cmd.PressTarget = unquote(strings.TrimSpace(rest[onIdx+4:]))
+			}
+		} else {
+			cmd.PressKey = rest
+		}
 
 	// ── WAIT FOR RESPONSE ─────────────────────────────────────────────────────
 	case strings.HasPrefix(upper, "WAIT FOR RESPONSE "):
-		cmd.Type = CmdWaitResponse
-		cmd.WaitURLPattern = unquote(strings.TrimSpace(line[18:]))
+		cmd.Type = CmdWaitForResponse
+		cmd.WaitResponseURL = unquote(strings.TrimSpace(line[18:]))
 
 	// ── WAIT FOR ──────────────────────────────────────────────────────────────
 	case strings.HasPrefix(upper, "WAIT FOR ") || strings.HasPrefix(upper, "WAIT UNTIL "):
 		cmd.Type = CmdWaitFor
 		rest := stripPrefix(line, "WAIT FOR ", "WAIT UNTIL ")
-		// "WAIT FOR 'Element' to be visible/hidden/enabled/…"
+		// "WAIT FOR 'Element' to be visible/hidden/enabled/disappear…"
 		firstQ := extractFirstQuoted(rest)
 		cmd.Target = firstQ
 		toBeIdx := strings.Index(strings.ToUpper(rest), " TO BE ")
 		if toBeIdx >= 0 {
 			cmd.WaitForState = strings.ToLower(strings.TrimSpace(rest[toBeIdx+7:]))
+		} else if toDisappearIdx := strings.Index(strings.ToUpper(rest), " TO DISAPPEAR"); toDisappearIdx >= 0 {
+			cmd.WaitForState = "disappear"
 		}
 
 	// ── WAIT N ────────────────────────────────────────────────────────────────
@@ -586,7 +755,7 @@ func parseCommand(line string) Command {
 		eqIdx := strings.Index(rest, "=")
 		if eqIdx >= 0 {
 			cmd.SetVar = strings.Trim(strings.TrimSpace(rest[:eqIdx]), "{}")
-			cmd.SetValue = strings.TrimSpace(rest[eqIdx+1:])
+			cmd.SetValue = unquote(strings.TrimSpace(rest[eqIdx+1:]))
 		}
 
 	// ── PRINT ─────────────────────────────────────────────────────────────────
@@ -611,9 +780,11 @@ func parseCommand(line string) Command {
 		toIdx := strings.Index(strings.ToUpper(rest), " TO ")
 		if toIdx >= 0 {
 			cmd.UploadFilePath = unquote(strings.TrimSpace(rest[:toIdx]))
+			cmd.UploadFile = cmd.UploadFilePath
 			cmd.Target, cmd.TypeHint, cmd.InteractionMode = parseTarget(strings.TrimSpace(rest[toIdx+4:]))
 		} else {
 			cmd.UploadFilePath = unquote(rest)
+			cmd.UploadFile = cmd.UploadFilePath
 		}
 
 	// ── FOR EACH ──────────────────────────────────────────────────────────────
@@ -623,7 +794,7 @@ func parseCommand(line string) Command {
 		inIdx := strings.Index(strings.ToUpper(rest), " IN ")
 		if inIdx >= 0 {
 			cmd.ForEachVar = strings.Trim(strings.TrimSpace(rest[:inIdx]), "{}")
-			cmd.ForEachList = strings.Trim(strings.TrimSpace(strings.TrimSuffix(rest[inIdx+4:], ":")), "{}")
+			cmd.ForEachCollection = strings.Trim(strings.TrimSpace(strings.TrimSuffix(rest[inIdx+4:], ":")), "{}")
 		}
 
 	// ── WHILE ─────────────────────────────────────────────────────────────────
@@ -637,6 +808,7 @@ func parseCommand(line string) Command {
 	case strings.HasPrefix(upper, "REPEAT "):
 		cmd.Type = CmdRepeat
 		rest := stripPrefix(line, "REPEAT ")
+		cmd.RepeatVar = "i" // default
 		// "REPEAT N TIMES:" or "REPEAT N TIME:"
 		fields := strings.Fields(rest)
 		if len(fields) >= 1 {
@@ -654,7 +826,7 @@ func parseCommand(line string) Command {
 
 	// ── ELIF / ELSE IF ────────────────────────────────────────────────────────
 	case strings.HasPrefix(upper, "ELIF ") || strings.HasPrefix(upper, "ELSE IF "):
-		cmd.Type = CmdElseIf
+		cmd.Type = CmdElIf
 		rest := stripPrefix(line, "ELSE IF ", "ELIF ")
 		cmd.IfCondition = strings.TrimSuffix(strings.TrimSpace(rest), ":")
 		cmd.Condition = cmd.IfCondition
@@ -785,8 +957,9 @@ func extractVerifyText(rest string, negated *bool, state *string) string {
 	if strings.Contains(upper, " IS NOT ") || strings.Contains(upper, " ARE NOT ") {
 		*negated = true
 	}
-	for _, st := range []string{"checked", "unchecked", "visible", "hidden", "enabled", "disabled", "selected"} {
-		if strings.Contains(upper, " IS "+strings.ToUpper(st)) {
+	for _, st := range []string{"checked", "unchecked", "visible", "hidden", "enabled", "disabled", "selected", "disappear"} {
+		if strings.Contains(upper, " IS "+strings.ToUpper(st)) ||
+			strings.Contains(upper, " TO "+strings.ToUpper(st)) {
 			*state = st
 			break
 		}

@@ -31,6 +31,33 @@ type AnchorContext struct {
 	Words []string
 }
 
+// WeightsConfig holds the high-level signal category weights exposed for
+// testing and observability. The internal scorer uses finer-grained per-signal
+// weights, but these top-level values define the ordering invariant:
+//
+//	Semantic > Text > ID > Proximity
+type WeightsConfig struct {
+	// Semantic is the weight for tag-semantics and role alignment signals.
+	Semantic float64
+	// Text is the combined weight for visible-text, aria-label, and label signals.
+	Text float64
+	// ID is the weight for HTML id, data-qa, and data-testid signals.
+	ID float64
+	// Proximity is the weight for NEAR-qualifier spatial scoring.
+	Proximity float64
+}
+
+// Weights is the package-level scoring weight configuration.
+// Tests may read this to verify the calibrated ordering invariants hold:
+//
+//	Weights.Semantic (0.60) > Weights.Text (0.45) > Weights.ID (0.25) > Weights.Proximity (0.10)
+var Weights = WeightsConfig{
+	Semantic:  0.60,
+	Text:      0.45,
+	ID:        0.25,
+	Proximity: 0.10,
+}
+
 // RankedCandidate is a scored element with its full explain breakdown.
 type RankedCandidate struct {
 	// Element is the DOM snapshot of this candidate.
@@ -88,7 +115,6 @@ func Score(query, typeHint, mode string, el *dom.ElementSnapshot, anchor *Anchor
 
 	// ── Weighted total ────────────────────────────────────────────────────────
 	// Weights are calibrated to match ManulEngine's scoring behavior.
-	// Text signals dominate; structural signals break ties.
 	raw := exactText*1.0 +
 		normText*0.7 +
 		labelMatch*0.85 +
@@ -103,12 +129,14 @@ func Score(query, typeHint, mode string, el *dom.ElementSnapshot, anchor *Anchor
 		proximity*0.4 +
 		anchorAttr*0.35
 
-	// Normalize to [0, 1] using the sum of max possible weights.
-	const maxRaw = 1.0 + 0.7 + 0.85 + 0.6 + 0.7 + 0.8 + 0.5 + 0.6 + 0.5 + 0.05 + 0.4 + 0.35 + 0.15
-	total := clamp(raw/maxRaw, 0, 1)
+	// Apply visibility penalty to raw score BEFORE normalization.
+	// This ensures hidden elements rank strictly below visible ones even
+	// when the raw text match is perfect.
+	rawPenalized := raw * vis * interact
 
-	// Apply visibility penalty (hidden elements can still score but rank low).
-	total = total * vis * interact
+	// Normalize to [0, 1] using the sum of max possible weights.
+	const maxRaw = 1.0 + 0.7 + 0.85 + 0.6 + 0.7 + 0.8 + 0.5 + 0.6 + 0.5 + 0.05 + 0.15 + 0.4 + 0.35
+	total := clamp(rawPenalized/maxRaw, 0, 1)
 
 	bd := explain.ScoreBreakdown{
 		ExactTextMatch:       exactText,
@@ -122,8 +150,8 @@ func Score(query, typeHint, mode string, el *dom.ElementSnapshot, anchor *Anchor
 		TypeHintAlignment:    typeHintScore,
 		VisibilityScore:      vis,
 		InteractabilityScore: interact,
-		ProximityScore:       proximity,
-		RawScore:             raw,
+		ProximityScore:       proximity + (depth * 0.05),
+		RawScore:             rawPenalized, // penalized raw value
 		Total:                total,
 	}
 	return bd
@@ -562,13 +590,20 @@ func partialMatch(q, s string) float64 {
 	if s == q {
 		return 1.0
 	}
+	score := 0.0
 	// Forward containment only: element text contains the query.
 	if strings.Contains(s, q) {
-		ratio := float64(len(q)) / float64(len(s))
-		return clamp(ratio, 0.4, 0.95)
+		// Use rune count instead of byte len to handle emojis properly
+		qLen := float64(len([]rune(q)))
+		sLen := float64(len([]rune(s)))
+		score = clamp(qLen/sLen, 0.4, 0.95)
 	}
 	// Word-overlap with stop-word filtering and minimum word length.
-	return wordOverlap(q, s)
+	overlap := wordOverlap(q, s)
+	if overlap > score {
+		return overlap
+	}
+	return score
 }
 
 // wordOverlap returns the fraction of significant query words found in s.
@@ -661,7 +696,7 @@ func buildSignals(bd explain.ScoreBreakdown) []explain.CandidateSignal {
 
 // ScoreCandidate is the legacy scoring entry point kept for backward compatibility.
 // New code should call Score() directly.
-func ScoreCandidate(elem dom.ElementSnapshot, intent Intent, _ Weights, _ map[string]dom.ElementSnapshot) explain.CandidateResult {
+func ScoreCandidate(elem dom.ElementSnapshot, intent Intent, _ LegacyWeights, _ map[string]dom.ElementSnapshot) explain.CandidateResult {
 	bd := Score(intent.Text, intent.Role, "clickable", &elem, nil)
 	return explain.CandidateResult{
 		NodeID:      elem.HTMLId,
@@ -674,7 +709,7 @@ func ScoreCandidate(elem dom.ElementSnapshot, intent Intent, _ Weights, _ map[st
 }
 
 // RankCandidates is the legacy ranking entry point kept for backward compatibility.
-func RankCandidates(elements []dom.ElementSnapshot, intent Intent, weights Weights) []explain.CandidateResult {
+func RankCandidates(elements []dom.ElementSnapshot, intent Intent, _ LegacyWeights) []explain.CandidateResult {
 	ranked := Rank(intent.Text, intent.Role, "clickable", elements, 0, nil)
 	out := make([]explain.CandidateResult, 0, len(ranked))
 	for _, r := range ranked {
@@ -697,14 +732,12 @@ type Intent struct {
 	NearAnchorNodeID string
 }
 
-// Weights is the legacy signal-weight map.
-type Weights map[Signal]float64
+// LegacyWeights is the legacy signal-weight map type.
+// New code should use WeightsConfig / the Weights package variable instead.
+type LegacyWeights map[Signal]float64
 
 // Signal is a named scoring channel.
 type Signal string
 
 // DefaultWeights returns the default signal weights (legacy API).
-func DefaultWeights() Weights { return Weights{} }
-
-// weight looks up a signal weight (legacy helper).
-func (w Weights) weight(_ Signal) float64 { return 0 }
+func DefaultWeights() LegacyWeights { return LegacyWeights{} }
