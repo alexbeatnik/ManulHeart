@@ -8,11 +8,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/manulengineer/manulheart/pkg/browser"
 	"github.com/manulengineer/manulheart/pkg/config"
 	"github.com/manulengineer/manulheart/pkg/dsl"
 	"github.com/manulengineer/manulheart/pkg/explain"
+	"github.com/manulengineer/manulheart/pkg/heuristics"
+	"github.com/manulengineer/manulheart/pkg/scorer"
 	"github.com/manulengineer/manulheart/pkg/utils"
 )
 
@@ -93,12 +96,110 @@ func (rt *Runtime) RunStep(ctx context.Context, rawStep string) (*StepResult, er
 }
 
 // executeCommand runs a single DSL command and returns its execution result.
-func (rt *Runtime) executeCommand(_ context.Context, cmd dsl.Command) (explain.ExecutionResult, error) {
+func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain.ExecutionResult, error) {
 	res := explain.ExecutionResult{
 		Step:        cmd.Raw,
 		CommandType: string(cmd.Type),
 	}
-	err := fmt.Errorf("runtime: command %q not yet implemented", cmd.Type)
-	res.Error = err.Error()
+	var err error
+
+	switch cmd.Type {
+	case dsl.CmdNavigate:
+		err = rt.page.Navigate(ctx, cmd.URL)
+
+	case dsl.CmdWait:
+		time.Sleep(time.Duration(cmd.WaitSeconds * float64(time.Second)))
+
+	case dsl.CmdClick, dsl.CmdFill, dsl.CmdSet, dsl.CmdType, dsl.CmdHover:
+		// Target resolution needed for interaction
+		raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
+		if errProbe != nil {
+			err = fmt.Errorf("probe failed: %w", errProbe)
+			break
+		}
+		elements, errParse := heuristics.ParseProbeResult(raw)
+		if errParse != nil {
+			err = fmt.Errorf("parse probe failed: %w", errParse)
+			break
+		}
+
+		// Figure out interaction mode
+		mode := dsl.ModeNone
+		if cmd.Type == dsl.CmdFill || cmd.Type == dsl.CmdSet || cmd.Type == dsl.CmdType {
+			mode = dsl.ModeInput
+		} else if cmd.Type == dsl.CmdClick {
+			mode = dsl.ModeClickable
+		}
+
+		targetPath := cmd.Target
+		if cmd.Type == dsl.CmdSet {
+			targetPath = cmd.SetVar
+		}
+
+		ranked := scorer.Rank(targetPath, cmd.TypeHint, string(mode), elements, 5, nil)
+		if len(ranked) == 0 {
+			err = fmt.Errorf("target not found: %q", targetPath)
+			break
+		}
+
+		for _, r := range ranked {
+			res.RankedCandidates = append(res.RankedCandidates, r.Explain)
+		}
+
+		winner := ranked[0].Element
+
+		// Perform action
+		switch cmd.Type {
+		case dsl.CmdFill, dsl.CmdSet, dsl.CmdType:
+			val := cmd.Value
+			if cmd.Type == dsl.CmdSet {
+				val = cmd.SetValue
+			}
+			err = rt.page.SetInputValue(ctx, winner.XPath, val)
+		case dsl.CmdClick:
+			x, y, e := rt.page.GetElementCenter(ctx, winner.XPath)
+			if e != nil {
+				err = fmt.Errorf("center calc: %w", e)
+			} else {
+				err = rt.page.Click(ctx, x, y)
+			}
+		case dsl.CmdHover:
+			x, y, e := rt.page.GetElementCenter(ctx, winner.XPath)
+			if e != nil {
+				err = fmt.Errorf("center calc: %w", e)
+			} else {
+				if hoverer, ok := rt.page.(interface {
+					Hover(context.Context, float64, float64) error
+				}); ok {
+					err = hoverer.Hover(ctx, x, y)
+				} else {
+					err = fmt.Errorf("page does not support hover")
+				}
+			}
+		}
+
+	case dsl.CmdScroll:
+		if scroller, ok := rt.page.(interface {
+			ScrollPage(context.Context, string, string) error
+		}); ok {
+			err = scroller.ScrollPage(ctx, cmd.ScrollDirection, cmd.ScrollContainer)
+		} else {
+			// fallback via EvalJS
+			amount := 500
+			if cmd.ScrollDirection == "up" {
+				amount = -500
+			}
+			_, err = rt.page.EvalJS(ctx, fmt.Sprintf("window.scrollBy(0, %d)", amount))
+		}
+
+	default:
+		err = fmt.Errorf("runtime: command %q not yet implemented", cmd.Type)
+	}
+
+	if err != nil {
+		res.Error = err.Error()
+	} else {
+		res.Success = true
+	}
 	return res, err
 }
