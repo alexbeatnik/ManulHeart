@@ -150,7 +150,7 @@ func Score(query, typeHint, mode string, el *dom.ElementSnapshot, anchor *Anchor
 		TypeHintAlignment:    typeHintScore,
 		VisibilityScore:      vis,
 		InteractabilityScore: interact,
-		ProximityScore:       proximity + (depth * 0.05),
+		ProximityScore:       proximity,
 		RawScore:             rawPenalized, // penalized raw value
 		Total:                total,
 	}
@@ -370,6 +370,9 @@ func scoreTagSemantics(mode string, el *dom.ElementSnapshot) float64 {
 
 	case "input":
 		if tag == "input" || tag == "textarea" {
+			if el.InputType == "password" {
+				return 0.55
+			}
 			return 0.5
 		}
 		if role == "textbox" || role == "spinbutton" || role == "combobox" {

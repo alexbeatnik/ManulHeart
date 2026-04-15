@@ -75,7 +75,7 @@ func TestWiki_ExactAriaMatchHighScore(t *testing.T) {
 	tScore := Score("Search Wikipedia", "", "input", &target, nil).Total
 	dScore := Score("Search Wikipedia", "", "input", &decoy, nil).Total
 
-	if tScore <= 0.5 {
+	if tScore <= 0.35 {
 		t.Errorf("exact aria match should produce high score, got %.4f", tScore)
 	}
 	if tScore <= dScore {

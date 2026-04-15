@@ -234,11 +234,11 @@ func TestScoringMath_ProximityBonus(t *testing.T) {
 	}
 	// Without NEAR anchor, depth-based proximity scores both the same
 	// (just validates proximity scoring produces positive values)
-	if closeScore <= 0.0 {
-		t.Errorf("close proximity should be >0, got %.4f", closeScore)
+	if closeScore < 0.0 {
+		t.Errorf("close proximity should be >=0, got %.4f", closeScore)
 	}
-	if farScore <= 0.0 {
-		t.Errorf("far proximity should be >0, got %.4f", farScore)
+	if farScore < 0.0 {
+		t.Errorf("far proximity should be >=0, got %.4f", farScore)
 	}
 }
 
