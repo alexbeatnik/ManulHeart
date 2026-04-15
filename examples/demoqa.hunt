@@ -1,3 +1,6 @@
+# ⚠️  PARTIALLY RUNNABLE — uses EXTRACT and DOUBLE CLICK which are not yet implemented.
+# Steps 1-3 work; steps 4-5 will fail.
+
 @context: DemoQA Gauntlet - Comprehensive UI Elements Test. Covers forms, checkbox trees, radio buttons, dynamic web tables, multi-click buttons, select menus, and date pickers.
 @title: full_ui_element_suite
 

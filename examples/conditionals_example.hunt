@@ -1,3 +1,6 @@
+# ⚠️  NOT RUNNABLE — uses IF/ELIF/ELSE syntax which is not yet implemented.
+# This file demonstrates planned conditional branching syntax.
+
 @context: Demonstrating IF/ELIF/ELSE conditional blocks in ManulEngine DSL
 @title: Conditional Branching Example
 

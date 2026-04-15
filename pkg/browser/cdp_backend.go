@@ -114,7 +114,7 @@ func (p *CDPPage) WaitForLoad(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
-			return nil // timeout is acceptable — proceed with the next step
+			return ctx.Err()
 		case <-time.After(pollInterval):
 		}
 	}

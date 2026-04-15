@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -71,8 +70,8 @@ func LaunchChrome(ctx context.Context, opts ChromeOptions) (*ChromeProcess, erro
 	cmd.Stderr = nil
 	// Inherit environment (required for DISPLAY on Linux).
 	cmd.Env = os.Environ()
-	// Start in its own process group so we can kill all child processes.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Platform-specific process group setup (implemented in chrome_unix.go / chrome_windows.go).
+	setProcGroup(cmd)
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start chrome: %w", err)
@@ -98,29 +97,6 @@ func LaunchChrome(ctx context.Context, opts ChromeOptions) (*ChromeProcess, erro
 // Endpoint returns the HTTP CDP endpoint URL.
 func (cp *ChromeProcess) Endpoint() string {
 	return fmt.Sprintf("http://127.0.0.1:%d", cp.port)
-}
-
-// Close terminates the Chrome process and all its children.
-func (cp *ChromeProcess) Close() error {
-	if cp.cmd == nil || cp.cmd.Process == nil {
-		return nil
-	}
-	pid := cp.cmd.Process.Pid
-	// Kill the entire process group (negative PID).
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
-	// Give it a moment to shut down, then force-kill.
-	done := make(chan struct{})
-	go func() {
-		_ = cp.cmd.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
-		<-done
-	}
-	return nil
 }
 
 // findChrome searches for a Chrome binary in common locations.

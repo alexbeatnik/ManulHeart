@@ -1,3 +1,6 @@
+# ⚠️  NOT RUNNABLE — uses EXTRACT, DOUBLE CLICK, DRAG, HOVER, and Shadow DOM
+# features which are not yet implemented. This file demonstrates the full planned DSL.
+
 @context: Automation Practice Gauntlet (testautomationpractice.blogspot.com). Includes text inputs, radio/checkboxes, dropdowns, date pickers, drag-and-drop, dynamic tables with pagination, and Shadow DOM.
 @title: complex_ui_full_inspection
 
@@ -101,9 +104,9 @@ STEP 2: Text inputs
     # Fill detects the "input" interaction mode from keywords like
     # "fill", "type", "enter". The engine resolves the target by
     # heuristic scoring — quoted text gets the strongest signal.
-    FILL "Name" field with "Mega Manul"
-    FILL "Email" field with "mega@manul.ai"
-    FILL "Phone" field with "9876543210"
+    FILL 'Name' field with 'Mega Manul'
+    FILL 'Email' field with 'mega@manul.ai'
+    FILL 'Phone' field with '9876543210'
     # Adding "textarea" outside the quotes acts as an element-type hint,
     # boosting the score for <textarea> tags over <input> tags.
     FILL 'Address' field with 'Selenium Avenue, 42, AI City'
@@ -114,7 +117,7 @@ STEP 3: Radio button and checkboxes
     # triggers strict mode scoring: non-matching element types get a
     # heavy penalty (-50,000), preventing accidental clicks on <td> or
     # <label> elements that share the same text.
-    CLICK the radio button for "Male"
+    CLICK the radio button for 'Male'
     VERIFY that 'Male' is checked
     CHECK the checkbox for 'Monday'
     VERIFY that 'Monday' is checked
@@ -127,14 +130,14 @@ STEP 4: Selection lists
     # "Select ... from ... dropdown" uses Playwright's select_option()
     # for native <select> elements. If the target is a custom div-based
     # dropdown, the engine gracefully falls back to click().
-    SELECT "Japan" from the "Country" dropdown
+    SELECT 'Japan' from the 'Country' dropdown
     VERIFY that 'Japan' is present
     SELECT 'Blue' from the 'Colors' dropdown
 
 STEP 5: Date picker and interactive buttons
-    FILL "Date Picker 1" field with "12/31/2026"
+    FILL 'Date Picker 1' field with '12/31/2026'
     SCROLL DOWN
-    CLICK the "START" button
+    CLICK the 'START' button
     # DOUBLE CLICK is detected as a "clickable" mode and uses
     # Playwright's dblclick() instead of click().
     DOUBLE CLICK the 'Copy Text' button
@@ -143,7 +146,7 @@ STEP 5: Date picker and interactive buttons
 STEP 6: Drag and drop
     # Drag-and-drop resolves two elements (source and destination)
     # and uses Playwright's drag_to(). Both targets are quoted.
-    DRAG the element "Drag me to my target" and drop it into "Drop here"
+    DRAG the element 'Drag me to my target' and drop it into 'Drop here'
     VERIFY that 'Dropped!' is present
 
 STEP 7: Data extraction from web table

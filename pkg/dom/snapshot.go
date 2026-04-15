@@ -38,6 +38,8 @@ type ElementSnapshot struct {
 	VisibleText string `json:"visible_text,omitempty"`
 	// AriaLabel is the aria-label attribute value.
 	AriaLabel string `json:"aria_label,omitempty"`
+	// AccessibleName is the computed accessible name (via browser heuristics).
+	AccessibleName string `json:"accessible_name,omitempty"`
 	// Placeholder is the placeholder attribute (inputs/textareas).
 	Placeholder string `json:"placeholder,omitempty"`
 	// Title is the title attribute.

@@ -62,6 +62,7 @@ func (r *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRes
 	}
 
 	result.TotalDuration = time.Since(start)
+	result.TotalDurationMS = result.TotalDuration.Milliseconds()
 	result.Success = result.Failed == 0
 	return result, nil
 }
@@ -124,7 +125,7 @@ func (r *Runtime) executeCommand(ctx context.Context, cmd dsl.Command, idx int) 
 		result.TargetRequired = true
 		result.TargetQuery = cmd.Target
 		result.TypeHint = cmd.TypeHint
-		result.ActionPerformed = "fill"
+		result.ActionPerformed = string(cmd.Type)
 		result.ActionValue = cmd.Value
 		execErr = r.doFill(ctx, cmd, &result)
 
@@ -148,6 +149,7 @@ func (r *Runtime) executeCommand(ctx context.Context, cmd dsl.Command, idx int) 
 	}
 
 	result.Duration = time.Since(start)
+	result.DurationMS = result.Duration.Milliseconds()
 	if execErr != nil {
 		result.Success = false
 		result.Error = execErr.Error()

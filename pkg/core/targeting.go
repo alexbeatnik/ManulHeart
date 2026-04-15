@@ -213,28 +213,29 @@ func BuildCandidateExplain(ranked []scorer.RankedCandidate) []explain.Candidate 
 
 // probeElement is the raw JSON shape returned by the in-page probe.
 type probeElement struct {
-	ID          int           `json:"id"`
-	XPath       string        `json:"xpath"`
-	Tag         string        `json:"tag"`
-	InputType   string        `json:"inputType"`
-	VisibleText string        `json:"visibleText"`
-	AriaLabel   string        `json:"ariaLabel"`
-	Placeholder string        `json:"placeholder"`
-	Title       string        `json:"title"`
-	DataQA      string        `json:"dataQA"`
-	DataTestID  string        `json:"dataTestId"`
-	LabelText   string        `json:"labelText"`
-	NameAttr    string        `json:"nameAttr"`
-	HTMLId      string        `json:"htmlId"`
-	ClassName   string        `json:"className"`
-	Role        string        `json:"role"`
-	Value       string        `json:"value"`
-	IsVisible   bool          `json:"isVisible"`
-	IsDisabled  bool          `json:"isDisabled"`
-	IsHidden    bool          `json:"isHidden"`
-	IsEditable  bool          `json:"isEditable"`
-	IsInShadow  bool          `json:"isInShadow"`
-	Rect        probeRect     `json:"rect"`
+	ID             int           `json:"id"`
+	XPath          string        `json:"xpath"`
+	Tag            string        `json:"tag"`
+	InputType      string        `json:"inputType"`
+	VisibleText    string        `json:"visibleText"`
+	AriaLabel      string        `json:"ariaLabel"`
+	AccessibleName string        `json:"accessibleName"`
+	Placeholder    string        `json:"placeholder"`
+	Title          string        `json:"title"`
+	DataQA         string        `json:"dataQA"`
+	DataTestID     string        `json:"dataTestId"`
+	LabelText      string        `json:"labelText"`
+	NameAttr       string        `json:"nameAttr"`
+	HTMLId         string        `json:"htmlId"`
+	ClassName      string        `json:"className"`
+	Role           string        `json:"role"`
+	Value          string        `json:"value"`
+	IsVisible      bool          `json:"isVisible"`
+	IsDisabled     bool          `json:"isDisabled"`
+	IsHidden       bool          `json:"isHidden"`
+	IsEditable     bool          `json:"isEditable"`
+	IsInShadow     bool          `json:"isInShadow"`
+	Rect           probeRect     `json:"rect"`
 }
 
 type probeRect struct {
@@ -266,9 +267,10 @@ func deserializeSnapshot(raw []byte) (*dom.PageSnapshot, error) {
 			XPath:       pe.XPath,
 			Tag:         strings.ToLower(pe.Tag),
 			InputType:   strings.ToLower(pe.InputType),
-			VisibleText: pe.VisibleText,
-			AriaLabel:   pe.AriaLabel,
-			Placeholder: pe.Placeholder,
+			VisibleText:    pe.VisibleText,
+			AriaLabel:      pe.AriaLabel,
+			AccessibleName: pe.AccessibleName,
+			Placeholder:    pe.Placeholder,
 			Title:       pe.Title,
 			DataQA:      pe.DataQA,
 			DataTestID:  pe.DataTestID,

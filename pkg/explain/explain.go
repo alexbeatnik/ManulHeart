@@ -115,8 +115,10 @@ type ExecutionResult struct {
 	Success bool `json:"success"`
 	// Error is the error message if Success is false.
 	Error string `json:"error,omitempty"`
-	// Duration is the wall-clock time taken to execute this command.
-	Duration time.Duration `json:"duration_ms"`
+	// DurationMS is the wall-clock time (milliseconds) taken to execute this command.
+	DurationMS int64 `json:"duration_ms"`
+	// Duration is the original time.Duration (not serialized).
+	Duration time.Duration `json:"-"`
 	// ProbeMetadata contains optional debug metadata from the in-page JS probe.
 	ProbeMetadata map[string]any `json:"probe_metadata,omitempty"`
 }
@@ -137,8 +139,10 @@ type HuntResult struct {
 	Failed int `json:"failed"`
 	// Results holds the per-command execution results in order.
 	Results []ExecutionResult `json:"results"`
-	// TotalDuration is the wall-clock time for the entire run.
-	TotalDuration time.Duration `json:"total_duration_ms"`
+	// TotalDurationMS is the wall-clock time (milliseconds) for the entire run.
+	TotalDurationMS int64 `json:"total_duration_ms"`
+	// TotalDuration is the original time.Duration (not serialized).
+	TotalDuration time.Duration `json:"-"`
 	// Success reports true if all commands passed.
 	Success bool `json:"success"`
 }

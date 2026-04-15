@@ -106,9 +106,9 @@ type Hunt struct {
 // ── regex patterns (compiled once) ─────────────────────────────────────────
 
 var (
-	reQuoted    = regexp.MustCompile(`'([^']*)'`)
+	reQuoted    = regexp.MustCompile(`"([^"]*)"|'([^']*)'`)
 	reStep      = regexp.MustCompile(`(?i)^STEP\s+\d+\s*:`)
-	reNear      = regexp.MustCompile(`(?i)\bNEAR\s+'([^']*)'`)
+	reNear      = regexp.MustCompile(`(?i)\bNEAR\s+(?:"([^"]*)"|'([^']*)')`)
 	reNavigate  = regexp.MustCompile(`(?i)\bNAVIGATE\b`)
 	reClick     = regexp.MustCompile(`(?i)\bCLICK\b`)
 	reDoubleClk = regexp.MustCompile(`(?i)\bDOUBLE\s+CLICK\b`)
@@ -130,6 +130,16 @@ var (
 		"textarea": true, "select": true, "option": true,
 	}
 )
+
+// quotedMatch returns the captured text from a reQuoted or reNear match.
+// The regex alternation produces two groups: [1] from double-quoted, [2] from
+// single-quoted.  Exactly one of them will be non-empty.
+func quotedMatch(m []string, groupOffset int) string {
+	if m[groupOffset] != "" {
+		return m[groupOffset]
+	}
+	return m[groupOffset+1]
+}
 
 // ParseFile reads and parses a .hunt file from disk.
 func ParseFile(path string) (*Hunt, error) {
@@ -230,7 +240,7 @@ func parseCommand(line string, lineNum int) (Command, error) {
 		cmd.Type = CmdNavigate
 		cmd.InteractionMode = ModeNone
 		if m := reQuoted.FindStringSubmatch(line); m != nil {
-			cmd.URL = m[1]
+			cmd.URL = quotedMatch(m, 1)
 		} else {
 			// bare URL after "to" (no quotes)
 			parts := strings.Fields(line)
@@ -256,7 +266,7 @@ func parseCommand(line string, lineNum int) (Command, error) {
 		cmd.Type = CmdVerify
 		cmd.InteractionMode = ModeNone
 		if m := reQuoted.FindStringSubmatch(line); m != nil {
-			cmd.VerifyText = m[1]
+			cmd.VerifyText = quotedMatch(m, 1)
 		}
 		cmd.VerifyNegated = reNotPres.MatchString(upper)
 
@@ -284,10 +294,10 @@ func parseCommand(line string, lineNum int) (Command, error) {
 		cmd.InteractionMode = ModeSelect
 		quotes := reQuoted.FindAllStringSubmatch(line, -1)
 		if len(quotes) >= 2 {
-			cmd.Value = quotes[0][1]
-			cmd.Target = quotes[1][1]
+			cmd.Value = quotedMatch(quotes[0], 1)
+			cmd.Target = quotedMatch(quotes[1], 1)
 		} else if len(quotes) == 1 {
-			cmd.Target = quotes[0][1]
+			cmd.Target = quotedMatch(quotes[0], 1)
 		}
 		cmd.TypeHint = "dropdown"
 
@@ -297,10 +307,10 @@ func parseCommand(line string, lineNum int) (Command, error) {
 		cmd.InteractionMode = ModeInput
 		quotes := reQuoted.FindAllStringSubmatch(line, -1)
 		if len(quotes) >= 2 {
-			cmd.Target = quotes[0][1]
-			cmd.Value = quotes[1][1]
+			cmd.Target = quotedMatch(quotes[0], 1)
+			cmd.Value = quotedMatch(quotes[1], 1)
 		} else if len(quotes) == 1 {
-			cmd.Target = quotes[0][1]
+			cmd.Target = quotedMatch(quotes[0], 1)
 		}
 		cmd.TypeHint = extractHintAfterTarget(line, cmd.Target)
 		if cmd.TypeHint == "" {
@@ -313,10 +323,10 @@ func parseCommand(line string, lineNum int) (Command, error) {
 		cmd.InteractionMode = ModeInput
 		quotes := reQuoted.FindAllStringSubmatch(line, -1)
 		if len(quotes) >= 2 {
-			cmd.Value = quotes[0][1]
-			cmd.Target = quotes[1][1]
+			cmd.Value = quotedMatch(quotes[0], 1)
+			cmd.Target = quotedMatch(quotes[1], 1)
 		} else if len(quotes) == 1 {
-			cmd.Target = quotes[0][1]
+			cmd.Target = quotedMatch(quotes[0], 1)
 		}
 		cmd.TypeHint = "field"
 
@@ -326,7 +336,7 @@ func parseCommand(line string, lineNum int) (Command, error) {
 		cmd.InteractionMode = ModeClickable
 		cmd.Target, cmd.TypeHint = extractTargetAndHint(line)
 		if m := reNear.FindStringSubmatch(line); m != nil {
-			cmd.NearAnchor = m[1]
+			cmd.NearAnchor = quotedMatch(m, 1)
 		}
 
 	default:
@@ -341,7 +351,7 @@ func parseCommand(line string, lineNum int) (Command, error) {
 func extractTargetAndHint(line string) (target, hint string) {
 	m := reQuoted.FindStringSubmatch(line)
 	if m != nil {
-		target = m[1]
+		target = quotedMatch(m, 1)
 	}
 	hint = extractHintAfterTarget(line, target)
 	return
@@ -352,12 +362,16 @@ func extractHintAfterTarget(line, target string) string {
 	if target == "" {
 		return ""
 	}
-	// Find the position of the closing quote of the target
+	// Find the position of the closing quote of the target (single or double)
 	idx := strings.LastIndex(line, "'"+target+"'")
+	closingLen := len(target) + 2
+	if idx < 0 {
+		idx = strings.LastIndex(line, "\""+target+"\"")
+	}
 	if idx < 0 {
 		return ""
 	}
-	after := strings.ToLower(strings.TrimSpace(line[idx+len(target)+2:]))
+	after := strings.ToLower(strings.TrimSpace(line[idx+closingLen:]))
 	for word := range typeHints {
 		if strings.HasPrefix(after, word) {
 			return word
