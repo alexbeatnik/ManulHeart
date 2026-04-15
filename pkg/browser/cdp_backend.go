@@ -68,7 +68,18 @@ func (p *CDPPage) EvalJS(ctx context.Context, expr string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return raw, nil
+	if raw == nil {
+		return nil, nil
+	}
+	switch v := raw.(type) {
+	case []byte:
+		return v, nil
+	case string:
+		return []byte(v), nil
+	default:
+		b, e := json.Marshal(v)
+		return b, e
+	}
 }
 
 func (p *CDPPage) CallProbe(ctx context.Context, fn string, arg any) ([]byte, error) {
@@ -76,7 +87,18 @@ func (p *CDPPage) CallProbe(ctx context.Context, fn string, arg any) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
-	return raw, nil
+	if raw == nil {
+		return nil, nil
+	}
+	switch v := raw.(type) {
+	case []byte:
+		return v, nil
+	case string:
+		return []byte(v), nil
+	default:
+		b, e := json.Marshal(v)
+		return b, e
+	}
 }
 
 func (p *CDPPage) Click(ctx context.Context, x, y float64) error {
@@ -136,10 +158,10 @@ func (p *CDPPage) GetElementCenter(ctx context.Context, xpath string) (float64, 
 }
 
 func (p *CDPPage) DispatchKey(ctx context.Context, key string, modifiers int) error {
-	params := map[string]any{
-		"key":                  key,
-		"windowsVirtualKeyCode": keyToVirtualCode(key),
-		"modifiers":            modifiers,
+	params := cdp.KeyEventParams{
+		Key:                   key,
+		WindowsVirtualKeyCode: keyToVirtualCode(key),
+		Modifiers:             modifiers,
 	}
 	if err := cdp.DispatchKeyEvent(ctx, p.conn, "keyDown", params); err != nil {
 		return err
@@ -179,9 +201,18 @@ func (p *CDPPage) WaitForLoad(ctx context.Context) error {
 	const pollInterval = 150 * time.Millisecond
 	for {
 		raw, err := cdp.Evaluate(ctx, p.conn, "document.readyState")
-		if err == nil {
+		if err == nil && raw != nil {
 			var state string
-			if json.Unmarshal(raw, &state) == nil && state == "complete" {
+			var b []byte
+			switch v := raw.(type) {
+			case []byte:
+				b = v
+			case string:
+				b = []byte(v)
+			default:
+				b, _ = json.Marshal(v)
+			}
+			if json.Unmarshal(b, &state) == nil && state == "complete" {
 				return nil
 			}
 		}
