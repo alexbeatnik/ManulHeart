@@ -95,31 +95,31 @@ func (r *Runtime) executeBlock(ctx context.Context, cmds []dsl.Command, fileVars
 
 		switch cmd.Type {
 		case dsl.CmdIf:
-			blockResults, endIdx, stop := r.executeIf(ctx, cmds, i, fileVars)
+			blockResults, stop := r.executeIf(ctx, cmd, fileVars)
 			results = append(results, blockResults...)
 			if stop {
 				return results, true
 			}
-			i = endIdx + 1
+			i++
 
 		case dsl.CmdWhile:
-			blockResults, endIdx, stop := r.executeWhile(ctx, cmds, i, fileVars)
+			blockResults, stop := r.executeWhile(ctx, cmd, fileVars)
 			results = append(results, blockResults...)
 			if stop {
 				return results, true
 			}
-			i = endIdx + 1
+			i++
 
 		case dsl.CmdRepeat:
-			blockResults, endIdx, stop := r.executeRepeat(ctx, cmds, i, fileVars)
+			blockResults, stop := r.executeRepeat(ctx, cmd, fileVars)
 			results = append(results, blockResults...)
 			if stop {
 				return results, true
 			}
-			i = endIdx + 1
+			i++
 
-		// Block terminators — should not appear outside their blocks.
-		case dsl.CmdEndIf, dsl.CmdElIf, dsl.CmdElse, dsl.CmdEndWhile, dsl.CmdEndRepeat:
+		// ELIF/ELSE at top level should not happen (they're nested inside IF).
+		case dsl.CmdElIf, dsl.CmdElse:
 			i++
 
 		default:
@@ -733,145 +733,91 @@ func (r *Runtime) doWaitFor(ctx context.Context, cmd dsl.Command, res *explain.E
 
 // ── Control flow ──────────────────────────────────────────────────────────────
 
-// findBlockEnd finds the matching end delimiter for a block starting at startIdx.
-// For IF: finds ENDIF, tracking nested IF/ENDIF pairs.
-// For WHILE: finds ENDWHILE. For REPEAT: finds ENDREPEAT.
-func findBlockEnd(cmds []dsl.Command, startIdx int, startType, endType dsl.CommandType) int {
-	depth := 0
-	for i := startIdx; i < len(cmds); i++ {
-		if cmds[i].Type == startType {
-			depth++
-		} else if cmds[i].Type == endType {
-			depth--
-			if depth == 0 {
-				return i
-			}
+// executeIf handles IF/ELIF/ELSE blocks using pre-nested Branches.
+func (r *Runtime) executeIf(ctx context.Context, cmd dsl.Command, fileVars map[string]string) ([]explain.ExecutionResult, bool) {
+	for _, branch := range cmd.Branches {
+		if branch.Kind == "else" || r.evaluateCondition(ctx, branch.Condition) {
+			r.logger.Debug("  [IF] taking %s branch (condition: %s)", branch.Kind, branch.Condition)
+			return r.executeBlock(ctx, branch.Body, fileVars)
 		}
 	}
-	return len(cmds) - 1 // fallback: end of commands
+	// No branch taken.
+	return nil, false
 }
 
-// executeIf handles IF/ELIF/ELSE/ENDIF blocks.
-func (r *Runtime) executeIf(ctx context.Context, cmds []dsl.Command, startIdx int, fileVars map[string]string) ([]explain.ExecutionResult, int, bool) {
-	endIdx := findBlockEnd(cmds, startIdx, dsl.CmdIf, dsl.CmdEndIf)
-
-	// Collect branches: [{condition, bodyStart, bodyEnd}]
-	type branch struct {
-		condition string
-		start     int
-		end       int
-	}
-	var branches []branch
-	currentStart := startIdx + 1
-
-	for i := startIdx + 1; i <= endIdx; i++ {
-		switch cmds[i].Type {
-		case dsl.CmdElIf:
-			branches = append(branches, branch{
-				condition: cmds[startIdx].Condition,
-				start:     currentStart,
-				end:       i,
-			})
-			// Update the condition for the next branch to this ELIF's condition.
-			startIdx = i
-			currentStart = i + 1
-		case dsl.CmdElse:
-			branches = append(branches, branch{
-				condition: cmds[startIdx].Condition,
-				start:     currentStart,
-				end:       i,
-			})
-			// ELSE is unconditional (empty condition = always true)
-			startIdx = i
-			currentStart = i + 1
-			branches = append(branches, branch{
-				condition: "", // always true
-				start:     currentStart,
-				end:       endIdx,
-			})
-			goto evaluate
-		case dsl.CmdEndIf:
-			branches = append(branches, branch{
-				condition: cmds[startIdx].Condition,
-				start:     currentStart,
-				end:       i,
-			})
-			goto evaluate
-		}
-	}
-
-evaluate:
-	// Evaluate each branch's condition; execute the first truthy one.
-	for _, br := range branches {
-		if br.condition == "" || r.evaluateCondition(ctx, br.condition) {
-			body := cmds[br.start:br.end]
-			results, stop := r.executeBlock(ctx, body, fileVars)
-			return results, endIdx, stop
-		}
-	}
-
-	return nil, endIdx, false
-}
-
-// executeWhile handles WHILE condition: / ENDWHILE blocks.
-func (r *Runtime) executeWhile(ctx context.Context, cmds []dsl.Command, startIdx int, fileVars map[string]string) ([]explain.ExecutionResult, int, bool) {
-	endIdx := findBlockEnd(cmds, startIdx, dsl.CmdWhile, dsl.CmdEndWhile)
-	body := cmds[startIdx+1 : endIdx]
-	condition := cmds[startIdx].Condition
-
+// executeWhile handles WHILE loops using pre-nested Body.
+func (r *Runtime) executeWhile(ctx context.Context, cmd dsl.Command, fileVars map[string]string) ([]explain.ExecutionResult, bool) {
+	condition := cmd.Condition
 	var allResults []explain.ExecutionResult
 	for iteration := 1; iteration <= maxLoopIterations; iteration++ {
 		if !r.evaluateCondition(ctx, condition) {
 			break
 		}
 		r.vars["i"] = strconv.Itoa(iteration)
-		results, stop := r.executeBlock(ctx, body, fileVars)
+		results, stop := r.executeBlock(ctx, cmd.Body, fileVars)
 		allResults = append(allResults, results...)
 		if stop {
-			return allResults, endIdx, true
+			return allResults, true
 		}
 	}
-	return allResults, endIdx, false
+	return allResults, false
 }
 
-// executeRepeat handles REPEAT N TIMES / ENDREPEAT blocks.
-func (r *Runtime) executeRepeat(ctx context.Context, cmds []dsl.Command, startIdx int, fileVars map[string]string) ([]explain.ExecutionResult, int, bool) {
-	endIdx := findBlockEnd(cmds, startIdx, dsl.CmdRepeat, dsl.CmdEndRepeat)
-	body := cmds[startIdx+1 : endIdx]
-	count := cmds[startIdx].RepeatCount
-	loopVar := cmds[startIdx].RepeatVar
+// executeRepeat handles REPEAT N TIMES loops using pre-nested Body.
+func (r *Runtime) executeRepeat(ctx context.Context, cmd dsl.Command, fileVars map[string]string) ([]explain.ExecutionResult, bool) {
+	count := cmd.RepeatCount
+	loopVar := cmd.RepeatVar
 
 	var allResults []explain.ExecutionResult
 	for iteration := 1; iteration <= count; iteration++ {
 		r.vars[loopVar] = strconv.Itoa(iteration)
 		r.vars["i"] = strconv.Itoa(iteration)
-		results, stop := r.executeBlock(ctx, body, fileVars)
+		results, stop := r.executeBlock(ctx, cmd.Body, fileVars)
 		allResults = append(allResults, results...)
 		if stop {
-			return allResults, endIdx, true
+			return allResults, true
 		}
 	}
-	return allResults, endIdx, false
+	return allResults, false
 }
 
 // evaluateCondition checks a condition string against runtime state.
-// Supports: text 'X' is present, text 'X' is not present,
-// {var} == 'value', {var} != 'value', {var} contains 'substring', {var} (truthy).
+// Supports:
+//   - button/element/link/field 'X' exists / not exists
+//   - text 'X' is present / text 'X' is not present
+//   - {var} == 'value', {var} != 'value', {var} contains 'substring'
+//   - {var} (truthy)
 func (r *Runtime) evaluateCondition(ctx context.Context, cond string) bool {
 	condLower := strings.ToLower(strings.TrimSpace(cond))
 
-	// text 'X' is present / text 'X' is not present
-	if strings.HasPrefix(condLower, "text ") || strings.Contains(condLower, "is present") || strings.Contains(condLower, "is not present") {
-		m := reQuotedSimple.FindStringSubmatch(cond)
-		if m == nil {
+	// button/element/link/field 'X' [not] exists
+	if reCondElementExists.MatchString(condLower) {
+		needle := extractQuotedFromCond(cond)
+		if needle == "" {
 			return false
 		}
-		needle := strings.ToLower(strings.TrimSpace(m[1]))
 		_, pageText, err := r.targeting.ProbeVisibleText(ctx, r.page)
 		if err != nil {
 			return false
 		}
-		found := strings.Contains(pageText, needle)
+		found := strings.Contains(pageText, strings.ToLower(needle))
+		if strings.Contains(condLower, "not exists") || strings.Contains(condLower, "not exist") {
+			return !found
+		}
+		return found
+	}
+
+	// text 'X' is present / text 'X' is not present
+	if strings.HasPrefix(condLower, "text ") || strings.Contains(condLower, "is present") || strings.Contains(condLower, "is not present") {
+		needle := extractQuotedFromCond(cond)
+		if needle == "" {
+			return false
+		}
+		_, pageText, err := r.targeting.ProbeVisibleText(ctx, r.page)
+		if err != nil {
+			return false
+		}
+		found := strings.Contains(pageText, strings.ToLower(needle))
 		if strings.Contains(condLower, "not present") {
 			return !found
 		}
@@ -913,8 +859,23 @@ func (r *Runtime) evaluateCondition(ctx context.Context, cond string) bool {
 	return v != "" && v != "false" && v != "0" && v != "none"
 }
 
+// reCondElementExists matches: button/element/link/field/input/checkbox/radio/dropdown 'X' [not] exists
+var reCondElementExists = regexp.MustCompile(`(?i)^(?:button|element|link|field|input|checkbox|radio|dropdown)\s+`)
+
 // reQuotedSimple is a simple single+double quote extractor for conditions.
 var reQuotedSimple = regexp.MustCompile(`(?:"([^"]*)"|'([^']*)')`)
+
+// extractQuotedFromCond extracts the first quoted string from a condition.
+func extractQuotedFromCond(s string) string {
+	m := reQuotedSimple.FindStringSubmatch(s)
+	if m == nil {
+		return ""
+	}
+	if m[1] != "" {
+		return m[1]
+	}
+	return m[2]
+}
 
 // resolveVar resolves a {varName} reference or returns the string as-is.
 func (r *Runtime) resolveVar(s string) string {

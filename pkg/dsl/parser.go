@@ -56,11 +56,8 @@ const (
 	CmdIf          CommandType = "if"
 	CmdElIf        CommandType = "elif"
 	CmdElse        CommandType = "else"
-	CmdEndIf       CommandType = "endif"
 	CmdWhile       CommandType = "while"
-	CmdEndWhile    CommandType = "endwhile"
 	CmdRepeat      CommandType = "repeat"
-	CmdEndRepeat   CommandType = "endrepeat"
 	CmdUnknown     CommandType = "unknown"
 )
 
@@ -135,6 +132,22 @@ type Command struct {
 	RepeatVar string
 	// WaitForState is "visible", "hidden", or "disappear" for WAIT FOR.
 	WaitForState string
+
+	// Indent is the indentation level (in characters) of the raw source line.
+	Indent int
+
+	// Branches holds the IF/ELIF/ELSE branches (only for CmdIf).
+	Branches []IfBranch
+
+	// Body holds the nested commands for WHILE/REPEAT loop bodies and IF branch bodies.
+	Body []Command
+}
+
+// IfBranch is a single branch in an IF/ELIF/ELSE block.
+type IfBranch struct {
+	Kind      string    // "if", "elif", "else"
+	Condition string
+	Body      []Command
 }
 
 // Hunt is the parsed representation of a complete .hunt file.
@@ -186,12 +199,9 @@ var (
 	reIf        = regexp.MustCompile(`(?i)^IF\s+(.+):\s*$`)
 	reElIf      = regexp.MustCompile(`(?i)^ELIF\s+(.+):\s*$`)
 	reElse      = regexp.MustCompile(`(?i)^ELSE\s*:\s*$`)
-	reEndIf     = regexp.MustCompile(`(?i)^ENDIF\s*$`)
 	reWhile     = regexp.MustCompile(`(?i)^WHILE\s+(.+):\s*$`)
-	reEndWhile  = regexp.MustCompile(`(?i)^ENDWHILE\s*$`)
-	reRepeat    = regexp.MustCompile(`(?i)^REPEAT\s+(\d+)\s+TIMES?\b`)
+	reRepeat    = regexp.MustCompile(`(?i)^REPEAT\s+(\d+)\s+TIMES?\s*:?\s*$`)
 	reRepeatVar = regexp.MustCompile(`(?i)\bas\s+\{?(\w+)\}?`)
-	reEndRepeat = regexp.MustCompile(`(?i)^ENDREPEAT\s*$`)
 	reHeader    = regexp.MustCompile(`(?i)^@(\w+):\s*(.*)`)
 	reVar       = regexp.MustCompile(`(?i)^@var:\s*\{(\w+)\}\s*=\s*(.*)`)
 
@@ -239,6 +249,9 @@ func Parse(r io.Reader) (*Hunt, error) {
 	lineNum := 0
 	currentStep := ""
 
+	// Flat list of parsed commands with indentation preserved.
+	var flatCmds []rawCmd
+
 	for scanner.Scan() {
 		lineNum++
 		raw := scanner.Text()
@@ -279,22 +292,170 @@ func Parse(r io.Reader) (*Hunt, error) {
 			continue
 		}
 
+		// Compute indentation (number of leading spaces/tabs as chars).
+		indent := len(raw) - len(strings.TrimLeft(raw, " \t"))
+
 		// Parse command
 		cmd, err := parseCommand(trimmed, lineNum)
 		if err != nil {
 			return nil, err
 		}
 		cmd.StepBlock = currentStep
+		cmd.Indent = indent
 		// Apply variable substitution to all text fields
 		applyVars(&cmd, hunt.Vars)
-		hunt.Commands = append(hunt.Commands, cmd)
+		flatCmds = append(flatCmds, rawCmd{cmd: cmd, indent: indent})
 	}
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("error reading hunt file: %w", err)
 	}
 
+	// Nest IF/ELIF/ELSE and WHILE/REPEAT blocks by indentation.
+	hunt.Commands = nestBlocks(flatCmds)
+
 	return hunt, nil
+}
+
+// indentLevel returns the indentation of a rawCmd.
+type rawCmd struct {
+	cmd    Command
+	indent int
+}
+
+// nestBlocks converts a flat list of commands (with indentation levels) into
+// a tree structure where IF/ELIF/ELSE branches and WHILE/REPEAT bodies are
+// nested inside their parent commands. This mirrors ManulEngine's
+// indentation-based block detection.
+func nestBlocks(cmds []rawCmd) []Command {
+	result, _ := nestBlocksFrom(cmds, 0, -1)
+	return result
+}
+
+// nestBlocksFrom nests commands starting at index `start`, collecting commands
+// whose indentation > parentIndent. Returns nested commands and the next index.
+func nestBlocksFrom(cmds []rawCmd, start int, parentIndent int) ([]Command, int) {
+	var result []Command
+	i := start
+
+	for i < len(cmds) {
+		rc := cmds[i]
+
+		// If this line's indent is at or below the parent's indent, we're done
+		// with this block (unless parentIndent is -1, meaning top-level).
+		if parentIndent >= 0 && rc.indent <= parentIndent {
+			break
+		}
+
+		switch rc.cmd.Type {
+		case CmdIf:
+			// Collect IF/ELIF/ELSE branches by indentation.
+			ifCmd, nextIdx := consumeIfBlock(cmds, i)
+			result = append(result, ifCmd)
+			i = nextIdx
+
+		case CmdWhile, CmdRepeat:
+			// Collect loop body: all lines indented deeper than the header.
+			headerIndent := rc.indent
+			loopCmd := rc.cmd
+			i++
+			body, nextIdx := nestBlocksFrom(cmds, i, headerIndent)
+			loopCmd.Body = body
+			result = append(result, loopCmd)
+			i = nextIdx
+
+		case CmdElIf, CmdElse:
+			// These should only appear inside consumeIfBlock. If we hit them
+			// at top level, treat as end of current block.
+			break
+
+		default:
+			result = append(result, rc.cmd)
+			i++
+		}
+	}
+	return result, i
+}
+
+// consumeIfBlock parses an IF/ELIF/ELSE block starting at cmds[start].
+// Uses indentation to determine branch boundaries.
+// Returns the constructed IF Command (with Branches populated) and the next index.
+func consumeIfBlock(cmds []rawCmd, start int) (Command, int) {
+	ifCmd := cmds[start].cmd
+	headerIndent := cmds[start].indent
+	i := start
+
+	var branches []IfBranch
+
+	for i < len(cmds) {
+		rc := cmds[i]
+
+		// After the first IF, subsequent lines at header indent that are
+		// ELIF/ELSE are sibling branches. Lines at lower indent or
+		// non-ELIF/ELSE at header indent end the block.
+		if i > start && rc.indent <= headerIndent {
+			if rc.indent < headerIndent {
+				// Lower indent than header → belongs to an outer block.
+				break
+			}
+			// Same indent as header.
+			if rc.cmd.Type != CmdElIf && rc.cmd.Type != CmdElse {
+				break
+			}
+		}
+
+		switch rc.cmd.Type {
+		case CmdIf:
+			if i != start {
+				// Nested IF inside a branch body — will be handled by nestBlocksFrom.
+				break
+			}
+			branch := IfBranch{
+				Kind:      "if",
+				Condition: rc.cmd.Condition,
+			}
+			i++
+			body, nextIdx := nestBlocksFrom(cmds, i, headerIndent)
+			branch.Body = body
+			branches = append(branches, branch)
+			i = nextIdx
+
+		case CmdElIf:
+			branch := IfBranch{
+				Kind:      "elif",
+				Condition: rc.cmd.Condition,
+			}
+			i++
+			body, nextIdx := nestBlocksFrom(cmds, i, headerIndent)
+			branch.Body = body
+			branches = append(branches, branch)
+			i = nextIdx
+
+		case CmdElse:
+			branch := IfBranch{
+				Kind:      "else",
+				Condition: "",
+			}
+			i++
+			body, nextIdx := nestBlocksFrom(cmds, i, headerIndent)
+			branch.Body = body
+			branches = append(branches, branch)
+			i = nextIdx
+
+		default:
+			// Should not reach here (handled by the break conditions above).
+			break
+		}
+
+		// If we hit a non-ELIF/ELSE at header indent, stop.
+		if i < len(cmds) && cmds[i].indent <= headerIndent &&
+			cmds[i].cmd.Type != CmdElIf && cmds[i].cmd.Type != CmdElse {
+			break
+		}
+	}
+
+	ifCmd.Branches = branches
+	return ifCmd, i
 }
 
 // parseCommand classifies and extracts fields from a single DSL line.
@@ -325,20 +486,10 @@ func parseCommand(line string, lineNum int) (Command, error) {
 		cmd.InteractionMode = ModeNone
 		return cmd, nil
 	}
-	if reEndIf.MatchString(strings.TrimSpace(line)) {
-		cmd.Type = CmdEndIf
-		cmd.InteractionMode = ModeNone
-		return cmd, nil
-	}
 	if m := reWhile.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
 		cmd.Type = CmdWhile
 		cmd.InteractionMode = ModeNone
 		cmd.Condition = strings.TrimSpace(m[1])
-		return cmd, nil
-	}
-	if reEndWhile.MatchString(strings.TrimSpace(line)) {
-		cmd.Type = CmdEndWhile
-		cmd.InteractionMode = ModeNone
 		return cmd, nil
 	}
 	if m := reRepeat.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
@@ -349,11 +500,6 @@ func parseCommand(line string, lineNum int) (Command, error) {
 		if rv := reRepeatVar.FindStringSubmatch(line); rv != nil {
 			cmd.RepeatVar = rv[1]
 		}
-		return cmd, nil
-	}
-	if reEndRepeat.MatchString(strings.TrimSpace(line)) {
-		cmd.Type = CmdEndRepeat
-		cmd.InteractionMode = ModeNone
 		return cmd, nil
 	}
 
