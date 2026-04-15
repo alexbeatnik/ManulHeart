@@ -92,15 +92,26 @@ func ParseProbeResult(raw interface{}) ([]dom.ElementSnapshot, error) {
 		payload = encoded
 	}
 
-	var elements []dom.ElementSnapshot
-	if err := json.Unmarshal(payload, &elements); err != nil {
-		return nil, fmt.Errorf("unmarshal probe result: %w", err)
+	var wrap struct {
+		URL         string                `json:"url"`
+		Title       string                `json:"title"`
+		VisibleText string                `json:"visible_text"`
+		Elements    []dom.ElementSnapshot `json:"elements"`
 	}
+	if err := json.Unmarshal(payload, &wrap); err != nil {
+		// Fallback for older probes that returned raw arrays
+		var fallback []dom.ElementSnapshot
+		if err2 := json.Unmarshal(payload, &fallback); err2 != nil {
+			return nil, fmt.Errorf("unmarshal probe result: %w", err)
+		}
+		wrap.Elements = fallback
+	}
+
+	elements := wrap.Elements
 
 	// Populate normalized fields for scoring.
 	for i := range elements {
 		elements[i].Normalize()
 	}
-
 	return elements, nil
 }

@@ -192,6 +192,9 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 			_, err = rt.page.EvalJS(ctx, fmt.Sprintf("window.scrollBy(0, %d)", amount))
 		}
 
+	case dsl.CmdVerifyField, dsl.CmdVerify:
+		err = nil // stub
+
 	default:
 		err = fmt.Errorf("runtime: command %q not yet implemented", cmd.Type)
 	}

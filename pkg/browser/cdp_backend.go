@@ -202,17 +202,7 @@ func (p *CDPPage) WaitForLoad(ctx context.Context) error {
 	for {
 		raw, err := cdp.Evaluate(ctx, p.conn, "document.readyState")
 		if err == nil && raw != nil {
-			var state string
-			var b []byte
-			switch v := raw.(type) {
-			case []byte:
-				b = v
-			case string:
-				b = []byte(v)
-			default:
-				b, _ = json.Marshal(v)
-			}
-			if json.Unmarshal(b, &state) == nil && state == "complete" {
+			if stateStr, ok := raw.(string); ok && stateStr == "complete" {
 				return nil
 			}
 		}

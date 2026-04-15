@@ -78,8 +78,49 @@ func Evaluate(ctx context.Context, c *Conn, expression string) (interface{}, err
 
 // CallFunctionOn calls a JS function string with a JSON-serialized argument.
 func CallFunctionOn(ctx context.Context, c *Conn, objectId string, arg interface{}) (interface{}, error) {
-	// For now, if we don't use real objectId, we just map it to an evaluation.
-	return nil, fmt.Errorf("cdp.CallFunctionOn: not fully implemented")
+	args := []map[string]interface{}{}
+	if arg != nil {
+		args = append(args, map[string]interface{}{"value": arg})
+	}
+
+// If objectId was meant to be a real remote object ID, we could pass it.
+	// We'll evaluate it unconditionally in the default context:
+	var expr string
+	if arg == nil {
+		expr = objectId
+	} else {
+		expr = fmt.Sprintf("(%s)(%s)", objectId, MustMarshalString(arg))
+	}
+	res, err := c.Call(ctx, "Runtime.evaluate", map[string]interface{}{
+		"expression":    expr,
+		"returnByValue": true,
+		"awaitPromise":  true,
+	})
+	if err == nil {
+		// Just parse Evaluate wrapper
+		var wrap struct {
+			Result struct {
+				Value interface{} `json:"value"`
+			} `json:"result"`
+			ExceptionDetails interface{} `json:"exceptionDetails"`
+		}
+		if json.Unmarshal(res, &wrap) == nil {
+			if wrap.ExceptionDetails != nil {
+				return nil, fmt.Errorf("js exception: %v", wrap.ExceptionDetails)
+			}
+			return wrap.Result.Value, nil
+		}
+	}
+	
+	return nil, err
+}
+
+func MustMarshalString(v interface{}) string {
+	b, err := json.Marshal(v)
+	if err != nil || string(b) == "null" {
+		return "undefined"
+	}
+	return string(b)
 }
 
 // Click dispatches a mouse click at the given page coordinates.

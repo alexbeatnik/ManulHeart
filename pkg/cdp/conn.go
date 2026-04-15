@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -92,8 +93,10 @@ func (c *Conn) readLoop() {
 		}
 		var resp msgResp
 		if err := json.Unmarshal(msg, &resp); err != nil {
+			// fmt.Printf("cdp readLoop unmarshal error: %v, msg=%s\n", err, string(msg))
 			continue
 		}
+		// fmt.Printf("cdp readLoop: %s\n", string(msg))
 
 		if resp.ID != 0 {
 			// It's a response to a request
@@ -182,7 +185,12 @@ func (c *Conn) Call(ctx context.Context, method string, params interface{}) (jso
 
 // ListTargets queries the Chrome HTTP endpoint and returns all available targets.
 func ListTargets(ctx context.Context, endpoint string) ([]Target, error) {
-	url := fmt.Sprintf("http://%s/json/list", endpoint)
+	url := endpoint
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		url = fmt.Sprintf("http://%s", endpoint)
+	}
+	url = strings.TrimSuffix(url, "/") + "/json/list"
+	
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
