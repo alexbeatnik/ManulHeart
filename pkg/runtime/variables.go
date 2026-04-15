@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -86,9 +87,22 @@ func (sv *ScopedVariables) Flatten() map[string]string {
 }
 
 // Interpolate replaces $var, ${var}, or {var} placeholders in a string.
+// It sorts keys by length (longest-first) to avoid partial matches
+// (e.g., replacing $user before $user_id).
 func (sv *ScopedVariables) Interpolate(s string) string {
 	flat := sv.Flatten()
-	for k, v := range flat {
+
+	// Get keys and sort by length descending
+	keys := make([]string, 0, len(flat))
+	for k := range flat {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return len(keys[i]) > len(keys[j])
+	})
+
+	for _, k := range keys {
+		v := flat[k]
 		s = strings.ReplaceAll(s, "$"+k, v)
 		s = strings.ReplaceAll(s, "${"+k+"}", v)
 		s = strings.ReplaceAll(s, "{"+k+"}", v)

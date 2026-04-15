@@ -254,7 +254,7 @@ func writeAutomationPrefs(userDataDir string) error {
 			"credit_card_enabled": false,
 		},
 		"savefile": map[string]any{
-			"default_directory": "/tmp",
+			"default_directory": os.TempDir(),
 		},
 		"download": map[string]any{
 			"prompt_for_download": false,

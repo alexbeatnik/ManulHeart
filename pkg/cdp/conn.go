@@ -37,8 +37,9 @@ type msgError struct {
 type Conn struct {
 	wsURL string
 	ws    *websocket.Conn
-	mu    sync.Mutex
-	idSeq int
+	mu      sync.Mutex
+	writeMu sync.Mutex
+	idSeq   int
 
 	// pending maps message IDs to channels waiting for the response.
 	pending map[int]chan *msgResp
@@ -159,7 +160,9 @@ func (c *Conn) Call(ctx context.Context, method string, params interface{}) (jso
 		Params: params,
 	}
 
+	c.writeMu.Lock()
 	err := c.ws.WriteJSON(req)
+	c.writeMu.Unlock()
 	if err != nil {
 		c.mu.Lock()
 		delete(c.pending, id)
@@ -174,6 +177,9 @@ func (c *Conn) Call(ctx context.Context, method string, params interface{}) (jso
 		c.mu.Unlock()
 		return nil, ctx.Err()
 	case <-c.ctx.Done():
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
 		return nil, fmt.Errorf("connection closed")
 	case resp := <-ch:
 		if resp.Error != nil {

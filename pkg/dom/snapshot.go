@@ -23,7 +23,8 @@ type Rect struct {
 type ElementSnapshot struct {
 	// -- Identity -------------------------------------------------------
 
-	// ID is the engine-assigned numeric identifier (from window.manulIdCounter).
+	// ID is the engine-assigned numeric identifier stored on el.__manulId,
+	// allocated from window.__manulIdCounter by the in-page JS probe.
 	ID int `json:"id"`
 	// XPath is the deterministic full XPath computed in-page.
 	XPath string `json:"xpath"`

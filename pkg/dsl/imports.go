@@ -120,12 +120,36 @@ func resolveImports(hunt *Hunt, visited map[string]bool) error {
 }
 
 // extractStepBlocks groups commands by their StepBlock label.
-// Commands without a StepBlock are grouped under "".
+// It normalizes labels (e.g., "STEP 1: Login" -> "login") as keys.
 func extractStepBlocks(cmds []Command) map[string][]Command {
 	blocks := make(map[string][]Command)
 	for _, cmd := range cmds {
 		label := cmd.StepBlock
-		blocks[label] = append(blocks[label], cmd)
+		if label == "" {
+			continue
+		}
+		norm := normalizeStepName(label)
+		blocks[norm] = append(blocks[norm], cmd)
 	}
 	return blocks
+}
+
+// normalizeStepName strips leading numbering and "STEP :" prefix, e.g.:
+// "1. STEP 1: Login" -> "login"
+// "STEP: Finalize" -> "finalize"
+func normalizeStepName(s string) string {
+	s = strings.ToUpper(s)
+	// Strip "STEP"
+	idx := strings.Index(s, "STEP")
+	if idx >= 0 {
+		s = s[idx+4:]
+	}
+	// Strip colon
+	idx = strings.Index(s, ":")
+	if idx >= 0 {
+		s = s[idx+1:]
+	}
+	// Strip leading numbers/dots/whitespace
+	s = strings.TrimLeft(s, " 0123456789.")
+	return strings.ToLower(strings.TrimSpace(s))
 }

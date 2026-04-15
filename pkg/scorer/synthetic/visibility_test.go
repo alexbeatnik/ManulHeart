@@ -15,7 +15,10 @@ func TestScorer_Visibility(t *testing.T) {
 	}
 
 	ranked := scorer.Rank("Checkout", "button", "clickable", elements, 1, nil)
-	if len(ranked) == 0 || ranked[0].Element.HTMLId != "vis_btn1" {
+	if len(ranked) == 0 {
+		t.Fatalf("expected 1 candidate, got 0")
+	}
+	if ranked[0].Element.HTMLId != "vis_btn1" {
 		t.Errorf("expected vis_btn1 to win, got %v", ranked[0].Element.HTMLId)
 	}
 

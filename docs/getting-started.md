@@ -21,7 +21,7 @@ go build -o driver ./cmd/driver
 ## 2. Run an example (auto-launches Chrome)
 
 ```bash
-./driver run examples/saucedemo.hunt
+./driver run examples/login.hunt
 ```
 
 Chrome is launched automatically with remote debugging, the hunt is executed,
@@ -29,12 +29,12 @@ and Chrome is closed when done. No manual browser setup required.
 
 **Headless (no window):**
 ```bash
-./driver run examples/saucedemo.hunt --headless
+./driver run examples/login.hunt --headless
 ```
 
 **Connect to existing Chrome** (if you already have Chrome running):
 ```bash
-./driver run examples/saucedemo.hunt --cdp http://127.0.0.1:9222
+./driver run examples/login.hunt --cdp http://127.0.0.1:9222
 ```
 
 ---

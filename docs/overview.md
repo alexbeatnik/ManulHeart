@@ -148,7 +148,9 @@ ManulHeart does not do this. Instead, the heuristic probe:
 - Computes the element's **accessible name** in-page (where the DOM context is
   available at zero extra cost).
 - Builds a **deterministic XPath** (with `[@id=]` anchors where possible).
-- Registers the element in `window.__manulElements` for later action dispatch.
+- Assigns the element a numeric ID via `window.__manulIdCounter`.
+- Stores the live DOM node in `window.__manulReg[id]` for later action dispatch
+  and debugging of targeting/dispatch.
 - Returns **all of this in one JSON payload** — the engine never goes back to the
   DOM to "check one more thing."
 
