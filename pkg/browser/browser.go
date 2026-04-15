@@ -10,7 +10,7 @@
 //   - session lifecycle
 //
 // All DOM intelligence (candidate extraction, heuristics, scoring, target
-// resolution) lives in pkg/core, pkg/heuristics, and pkg/scorer.
+// resolution) lives in pkg/runtime, pkg/heuristics, and pkg/scorer.
 package browser
 
 import (
@@ -19,7 +19,7 @@ import (
 )
 
 // Page is the abstract interface for a single browser tab/page.
-// Implementations must be safe for concurrent use from a single goroutine.
+// Implementations are intended for use from a single goroutine.
 type Page interface {
 	// Navigate loads the given URL and waits for the initial load event.
 	Navigate(ctx context.Context, url string) error

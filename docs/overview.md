@@ -14,7 +14,7 @@
     │  Iterates commands, routes each to its handler
     │  For target-based commands → Targeting.Resolve()
     ▼
-[pkg/core] Targeting.Resolve()        ← ENGINE CORE
+[pkg/runtime] target-resolution pipeline  ← ENGINE CORE
     │
     ├─ 1. CallProbe(SnapshotProbe, [mode, queries])
     │       → [pkg/heuristics] SnapshotProbe() JS runs IN PAGE
@@ -55,12 +55,17 @@
 
 ## Package Responsibilities
 
-### `pkg/dsl`
+### `pkg/runtime`
 
-Pure parser. No browser access. Reads `.hunt` files into `Hunt{Commands[]Command}`.
-Each `Command` carries the raw source text (preserved for explainability), the
-classified `CommandType`, the quoted target, optional element type hint, and the
-fill value or URL.
+The engine core. Owners of the target-resolution pipeline and hunt execution.
+1. Calls the heuristic probe via `Page.CallProbe()`.
+2. Deserializes the probe result into `[]dom.ElementSnapshot`.
+3. Delegates scoring to `pkg/scorer`.
+4. Enforces the scoring threshold.
+5. Performs actions (Click, Fill) via `pkg/browser`.
+6. Preserves execution state (variables, loops).
+
+Nothing in `pkg/browser` returns "the element to click" — that is `pkg/runtime`'s job.
 
 ### `pkg/heuristics`
 
@@ -72,17 +77,12 @@ targeting call, not incrementally.
 The probe is mode-aware (clickable / input / checkbox / select) so that the
 candidate set is already filtered to elements that are relevant for the action.
 
-### `pkg/core`
+### `pkg/dsl`
 
-The engine core. Owns the targeting pipeline:
-
-1. Calls the heuristic probe via `Page.CallProbe()`.
-2. Deserializes the probe result into `[]dom.ElementSnapshot`.
-3. Delegates scoring to `pkg/scorer`.
-4. Enforces the scoring threshold.
-5. Returns a `ResolvedTarget` with full explainability data.
-
-**The browser backend is never consulted for "what element to use."**
+Pure parser. No browser access. Reads `.hunt` files into `Hunt{Commands[]Command}`.
+Each `Command` carries the raw source text (preserved for explainability), the
+classified `CommandType`, the quoted target, optional element type hint, and the
+fill value or URL.
 
 ### `pkg/scorer`
 
@@ -109,7 +109,7 @@ The `Page` interface exposes only:
 - `EvalJS`, `CallProbe` (JS evaluation)
 - `Click`, `FocusByXPath`, `SetInputValue`, `ScrollIntoView` (input dispatch)
 
-Nothing in `Page` returns "the element to click" — that is `pkg/core`'s job.
+Nothing in `Page` returns "the element to click" — that is `pkg/runtime`'s job.
 
 ### `pkg/cdp`
 
@@ -168,8 +168,8 @@ round-trips to the page.
 | Control flow (IF/LOOP) | `pkg/dsl` + `pkg/runtime` |
 | Setup/teardown hooks | `pkg/runtime` — `@before:` / `@after:` headers |
 | Page abstractions | `pkg/dsl` — `@page:` declarations |
-| Custom controls | `pkg/core` — pluggable resolver hooks |
+| Custom controls | `pkg/runtime` — pluggable resolver hooks |
 | Screenshots | `pkg/cdp` — `Page.captureScreenshot` |
 | Scan-page | New subcommand + `pkg/heuristics` scan probe |
-| Contextual qualifiers | `pkg/core` — NEAR/ON HEADER/INSIDE proximity scoring |
-| Semantic cache | `pkg/core` — XPath reuse from previous steps |
+| Contextual qualifiers | `pkg/runtime` — NEAR/ON HEADER/INSIDE proximity scoring |
+| Semantic cache | `pkg/runtime` — XPath reuse from previous steps |

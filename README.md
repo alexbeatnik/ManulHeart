@@ -283,7 +283,7 @@ DONE.
 cmd/manul           CLI entry point (produces `manul` binary)
 pkg/cdp             Low-level CDP WebSocket transport and domain wrappers
 pkg/browser         Abstract browser/page interfaces + CDP backend + Chrome lifecycle
-pkg/core            Targeting pipeline: probe → filter → score → resolve
+pkg/runtime            Targeting pipeline: probe → filter → score → resolve
 pkg/dom             Normalized DOM element model (ElementSnapshot with 27 fields)
 pkg/heuristics      In-page JS probes (SnapshotProbe, VisibleTextProbe, ExtractDataProbe)
 pkg/scorer          Deterministic 4-channel [0.0–1.0] scoring and ranking

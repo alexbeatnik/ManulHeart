@@ -19,7 +19,7 @@ type Rect struct {
 
 // ElementSnapshot is the normalized representation of a single page element.
 // It is populated by the JS probe in pkg/heuristics and enriched by the
-// engine-side normalization step in pkg/core.
+// engine-side normalization step in pkg/runtime.
 type ElementSnapshot struct {
 	// -- Identity -------------------------------------------------------
 
