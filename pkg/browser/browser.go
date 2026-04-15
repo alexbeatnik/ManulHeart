@@ -54,6 +54,30 @@ type Page interface {
 	// DoubleClick performs a double-click at the given viewport coordinates.
 	DoubleClick(ctx context.Context, x, y float64) error
 
+	// RightClick performs a right-click (context menu) at the given viewport coordinates.
+	RightClick(ctx context.Context, x, y float64) error
+
+	// Hover moves the mouse to the given viewport coordinates without clicking.
+	Hover(ctx context.Context, x, y float64) error
+
+	// DragAndDrop simulates a drag from (fromX, fromY) to (toX, toY).
+	DragAndDrop(ctx context.Context, fromX, fromY, toX, toY float64) error
+
+	// SetFileInput sets file paths on a file input element at the given XPath.
+	SetFileInput(ctx context.Context, xpath string, filePaths []string) error
+
+	// Screenshot captures a PNG screenshot of the current page.
+	Screenshot(ctx context.Context) ([]byte, error)
+
+	// WaitForResponse waits for a network response matching the URL pattern.
+	WaitForResponse(ctx context.Context, urlPattern string, timeout time.Duration) error
+
+	// HighlightElement injects a temporary border highlight for debugging.
+	HighlightElement(ctx context.Context, xpath string, durationMS int) error
+
+	// GetElementCenter returns the center viewport coordinates of an element.
+	GetElementCenter(ctx context.Context, xpath string) (float64, float64, error)
+
 	// DispatchKey dispatches a keyboard event. key is the key name (e.g. "Enter").
 	// modifiers is a bitmask: 1=Alt, 2=Ctrl, 4=Meta, 8=Shift.
 	DispatchKey(ctx context.Context, key string, modifiers int) error

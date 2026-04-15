@@ -8,6 +8,7 @@ package cdp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -437,7 +438,7 @@ func ScrollIntoView(ctx context.Context, conn *Conn, xpath string) error {
 	expr := fmt.Sprintf(`(() => {
 		const r = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
 		const el = r.singleNodeValue;
-		if (el) { el.scrollIntoView({behavior:'smooth', block:'center'}); return true; }
+		if (el) { el.scrollIntoView({behavior:'instant', block:'center'}); return true; }
 		return false;
 	})()`, xpath)
 	_, err := Evaluate(ctx, conn, expr)
@@ -454,15 +455,36 @@ func ScrollPage(ctx context.Context, conn *Conn, direction string, container str
 	var expr string
 	if container != "" {
 		expr = fmt.Sprintf(`(() => {
-			const el = document.querySelector(%q) ||
-				Array.from(document.querySelectorAll('*')).find(e =>
+			// Try CSS selector first, then text-based search for scrollable container
+			let el = document.querySelector(%q);
+			if (!el) {
+				const query = %q;
+				// Find scrollable elements containing the text
+				const candidates = Array.from(document.querySelectorAll('*')).filter(e => {
+					const st = getComputedStyle(e);
+					const scrollable = e.scrollHeight > e.clientHeight && 
+						(st.overflow === 'auto' || st.overflow === 'scroll' || 
+						 st.overflowY === 'auto' || st.overflowY === 'scroll');
+					return scrollable && e.textContent.toLowerCase().includes(query);
+				});
+				// Prefer the innermost scrollable container
+				el = candidates.length > 0 ? candidates[candidates.length - 1] : null;
+			}
+			if (!el) {
+				// Last resort: find any element matching text
+				el = Array.from(document.querySelectorAll('*')).find(e =>
 					e.textContent.toLowerCase().includes(%q));
+			}
 			if (el) {
-				el.scrollBy(0, %d * el.clientHeight);
+				if (%d > 0) {
+					el.scrollTop = el.scrollHeight;
+				} else {
+					el.scrollTop = 0;
+				}
 				return true;
 			}
 			return false;
-		})()`, container, strings.ToLower(container), sign)
+		})()`, container, strings.ToLower(container), strings.ToLower(container), sign)
 	} else {
 		expr = fmt.Sprintf(`(() => {
 			window.scrollBy(0, %d * window.innerHeight);
@@ -503,4 +525,249 @@ func DoubleClick(ctx context.Context, conn *Conn, x, y float64) error {
 	params["type"] = "mouseReleased"
 	_, err := conn.Call(ctx, "Input.dispatchMouseEvent", params)
 	return err
+}
+
+// RightClick synthesizes a right-click (context menu) at viewport coordinates (x, y).
+func RightClick(ctx context.Context, conn *Conn, x, y float64) error {
+	if _, err := conn.Call(ctx, "Input.dispatchMouseEvent", map[string]any{
+		"type":       "mousePressed",
+		"x":          x,
+		"y":          y,
+		"button":     "right",
+		"clickCount": 1,
+	}); err != nil {
+		return err
+	}
+	_, err := conn.Call(ctx, "Input.dispatchMouseEvent", map[string]any{
+		"type":       "mouseReleased",
+		"x":          x,
+		"y":          y,
+		"button":     "right",
+		"clickCount": 1,
+	})
+	return err
+}
+
+// Hover moves the mouse to viewport coordinates (x, y) without clicking.
+func Hover(ctx context.Context, conn *Conn, x, y float64) error {
+	_, err := conn.Call(ctx, "Input.dispatchMouseEvent", map[string]any{
+		"type": "mouseMoved",
+		"x":    x,
+		"y":    y,
+	})
+	return err
+}
+
+// DragAndDrop synthesizes a drag from (fromX, fromY) to (toX, toY).
+// Uses Input.dispatchMouseEvent with proper timing and button state
+// to work with jQuery UI draggable, HTML5 drag, and other frameworks.
+func DragAndDrop(ctx context.Context, conn *Conn, fromX, fromY, toX, toY float64) error {
+	// Move to source first (establishes hover state)
+	if _, err := conn.Call(ctx, "Input.dispatchMouseEvent", map[string]any{
+		"type": "mouseMoved", "x": fromX, "y": fromY,
+		"pointerType": "mouse",
+	}); err != nil {
+		return err
+	}
+	time.Sleep(80 * time.Millisecond)
+
+	// Press at source
+	if _, err := conn.Call(ctx, "Input.dispatchMouseEvent", map[string]any{
+		"type": "mousePressed", "x": fromX, "y": fromY,
+		"button": "left", "buttons": 1, "clickCount": 1,
+		"pointerType": "mouse",
+	}); err != nil {
+		return err
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	// Move 2px to exceed default distance threshold
+	if _, err := conn.Call(ctx, "Input.dispatchMouseEvent", map[string]any{
+		"type": "mouseMoved", "x": fromX + 2, "y": fromY,
+		"button": "left", "buttons": 1,
+		"pointerType": "mouse",
+	}); err != nil {
+		return err
+	}
+	time.Sleep(60 * time.Millisecond)
+
+	// Move to target with intermediate steps
+	steps := 15
+	for i := 1; i <= steps; i++ {
+		ratio := float64(i) / float64(steps)
+		mx := fromX + (toX-fromX)*ratio
+		my := fromY + (toY-fromY)*ratio
+		if _, err := conn.Call(ctx, "Input.dispatchMouseEvent", map[string]any{
+			"type": "mouseMoved", "x": mx, "y": my,
+			"button": "left", "buttons": 1,
+			"pointerType": "mouse",
+		}); err != nil {
+			return err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	time.Sleep(80 * time.Millisecond)
+
+	// Release at target
+	_, err := conn.Call(ctx, "Input.dispatchMouseEvent", map[string]any{
+		"type": "mouseReleased", "x": toX, "y": toY,
+		"button": "left", "buttons": 0, "clickCount": 1,
+		"pointerType": "mouse",
+	})
+	return err
+}
+
+// SetFileInput sets file paths on a file input element via DOM.setFileInputFiles.
+func SetFileInput(ctx context.Context, conn *Conn, xpath string, filePaths []string) error {
+	// First resolve the XPath to a DOM nodeId.
+	docResult, err := conn.Call(ctx, "DOM.getDocument", map[string]any{"depth": 0})
+	if err != nil {
+		return fmt.Errorf("cdp: DOM.getDocument: %w", err)
+	}
+	var doc struct {
+		Root struct {
+			NodeID int `json:"nodeId"`
+		} `json:"root"`
+	}
+	if err := json.Unmarshal(docResult, &doc); err != nil {
+		return fmt.Errorf("cdp: parse document: %w", err)
+	}
+
+	// Evaluate XPath to get the remote object
+	expr := fmt.Sprintf(`document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue`, xpath)
+	result, evalErr := conn.Call(ctx, "Runtime.evaluate", map[string]any{
+		"expression": expr,
+	})
+	if evalErr != nil {
+		return fmt.Errorf("cdp: eval xpath: %w", evalErr)
+	}
+	var evalEnvelope struct {
+		Result struct {
+			ObjectID string `json:"objectId"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(result, &evalEnvelope); err != nil || evalEnvelope.Result.ObjectID == "" {
+		return fmt.Errorf("cdp: file input element not found at %q", xpath)
+	}
+
+	// Resolve the object to a DOM node
+	descResult, err := conn.Call(ctx, "DOM.describeNode", map[string]any{
+		"objectId": evalEnvelope.Result.ObjectID,
+	})
+	if err != nil {
+		return fmt.Errorf("cdp: DOM.describeNode: %w", err)
+	}
+	var descEnvelope struct {
+		Node struct {
+			BackendNodeID int `json:"backendNodeId"`
+		} `json:"node"`
+	}
+	if err := json.Unmarshal(descResult, &descEnvelope); err != nil {
+		return fmt.Errorf("cdp: parse node description: %w", err)
+	}
+
+	// Set the files
+	_, err = conn.Call(ctx, "DOM.setFileInputFiles", map[string]any{
+		"files":         filePaths,
+		"backendNodeId": descEnvelope.Node.BackendNodeID,
+	})
+	return err
+}
+
+// Screenshot captures a PNG screenshot of the current page.
+// Returns the raw PNG bytes.
+func Screenshot(ctx context.Context, conn *Conn) ([]byte, error) {
+	result, err := conn.Call(ctx, "Page.captureScreenshot", map[string]any{
+		"format": "png",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cdp: screenshot: %w", err)
+	}
+	var envelope struct {
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(result, &envelope); err != nil {
+		return nil, fmt.Errorf("cdp: parse screenshot: %w", err)
+	}
+	// CDP returns base64-encoded data
+	decoded, err := base64.StdEncoding.DecodeString(envelope.Data)
+	if err != nil {
+		return nil, fmt.Errorf("cdp: decode screenshot: %w", err)
+	}
+	return decoded, nil
+}
+
+// WaitForResponse waits for a network response matching the URL pattern.
+func WaitForResponse(ctx context.Context, conn *Conn, urlPattern string, timeout time.Duration) error {
+	// Enable Network domain
+	if _, err := conn.Call(ctx, "Network.enable", nil); err != nil {
+		return fmt.Errorf("cdp: Network.enable: %w", err)
+	}
+
+	matched := make(chan struct{}, 1)
+	conn.OnEvent("Network.responseReceived", func(params json.RawMessage) {
+		var resp struct {
+			Response struct {
+				URL string `json:"url"`
+			} `json:"response"`
+		}
+		if err := json.Unmarshal(params, &resp); err == nil {
+			if strings.Contains(resp.Response.URL, urlPattern) {
+				select {
+				case matched <- struct{}{}:
+				default:
+				}
+			}
+		}
+	})
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	select {
+	case <-matched:
+		return nil
+	case <-timeoutCtx.Done():
+		return fmt.Errorf("cdp: wait for response %q: timed out", urlPattern)
+	}
+}
+
+// HighlightElement injects a temporary border highlight around the given XPath.
+func HighlightElement(ctx context.Context, conn *Conn, xpath string, durationMS int) error {
+	expr := fmt.Sprintf(`(() => {
+		const r = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+		const el = r.singleNodeValue;
+		if (!el) return false;
+		const prev = el.style.outline;
+		el.style.outline = '3px solid magenta';
+		el.scrollIntoView({behavior:'smooth', block:'center'});
+		setTimeout(() => { el.style.outline = prev; }, %d);
+		return true;
+	})()`, xpath, durationMS)
+	_, err := Evaluate(ctx, conn, expr)
+	return err
+}
+
+// GetElementCenter returns the center viewport coordinates for the element at xpath.
+func GetElementCenter(ctx context.Context, conn *Conn, xpath string) (float64, float64, error) {
+	expr := fmt.Sprintf(`(() => {
+		const r = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+		const el = r.singleNodeValue;
+		if (!el) return null;
+		const rect = el.getBoundingClientRect();
+		return {x: rect.left + rect.width/2, y: rect.top + rect.height/2};
+	})()`, xpath)
+	raw, err := Evaluate(ctx, conn, expr)
+	if err != nil {
+		return 0, 0, err
+	}
+	var pos struct {
+		X float64 `json:"x"`
+		Y float64 `json:"y"`
+	}
+	if err := json.Unmarshal(raw, &pos); err != nil {
+		return 0, 0, fmt.Errorf("cdp: cannot get center for %q", xpath)
+	}
+	return pos.X, pos.Y, nil
 }

@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -118,6 +119,14 @@ func (r *Runtime) executeBlock(ctx context.Context, cmds []dsl.Command, fileVars
 			}
 			i++
 
+		case dsl.CmdForEach:
+			blockResults, stop := r.executeForEach(ctx, cmd, fileVars)
+			results = append(results, blockResults...)
+			if stop {
+				return results, true
+			}
+			i++
+
 		// ELIF/ELSE at top level should not happen (they're nested inside IF).
 		case dsl.CmdElIf, dsl.CmdElse:
 			i++
@@ -164,6 +173,21 @@ func (r *Runtime) executeCommand(ctx context.Context, cmd dsl.Command, idx int) 
 	}
 
 	r.logger.Info("[%d] %s", idx+1, cmd.Raw)
+
+	// ── Debug mode: pause before execution ──
+	if r.cfg.DebugMode {
+		shouldBreak := len(r.cfg.BreakLines) == 0 // break on every step if no breakpoints set
+		for _, bl := range r.cfg.BreakLines {
+			if bl == cmd.LineNumber {
+				shouldBreak = true
+				break
+			}
+		}
+		if shouldBreak {
+			r.logger.Info("  ⏸  DEBUG: about to execute [line %d] — press Enter to continue", cmd.LineNumber)
+			fmt.Scanln()
+		}
+	}
 
 	var execErr error
 
@@ -258,6 +282,51 @@ func (r *Runtime) executeCommand(ctx context.Context, cmd dsl.Command, idx int) 
 		result.ActionPerformed = "set"
 		execErr = r.doSet(ctx, cmd, &result)
 
+	case dsl.CmdHover:
+		result.TargetRequired = true
+		result.TargetQuery = cmd.Target
+		result.TypeHint = cmd.TypeHint
+		result.ActionPerformed = "hover"
+		execErr = r.doHover(ctx, cmd, &result)
+
+	case dsl.CmdRightClick:
+		result.TargetRequired = true
+		result.TargetQuery = cmd.Target
+		result.TypeHint = cmd.TypeHint
+		result.ActionPerformed = "right_click"
+		execErr = r.doRightClick(ctx, cmd, &result)
+
+	case dsl.CmdDrag:
+		result.TargetRequired = false
+		result.ActionPerformed = "drag"
+		execErr = r.doDrag(ctx, cmd, &result)
+
+	case dsl.CmdUpload:
+		result.TargetRequired = true
+		result.TargetQuery = cmd.Target
+		result.ActionPerformed = "upload"
+		execErr = r.doUpload(ctx, cmd, &result)
+
+	case dsl.CmdPrint:
+		result.TargetRequired = false
+		result.ActionPerformed = "print"
+		execErr = r.doPrint(ctx, cmd, &result)
+
+	case dsl.CmdWaitForResponse:
+		result.TargetRequired = false
+		result.ActionPerformed = "wait_for_response"
+		execErr = r.doWaitForResponse(ctx, cmd, &result)
+
+	case dsl.CmdPause:
+		result.TargetRequired = false
+		result.ActionPerformed = "pause"
+		execErr = r.doPause(ctx, cmd, &result)
+
+	case dsl.CmdDebugVars:
+		result.TargetRequired = false
+		result.ActionPerformed = "debug_vars"
+		execErr = r.doDebugVars(ctx, cmd, &result)
+
 	default:
 		execErr = fmt.Errorf("unknown command type: %s", cmd.Raw)
 	}
@@ -268,9 +337,42 @@ func (r *Runtime) executeCommand(ctx context.Context, cmd dsl.Command, idx int) 
 		result.Success = false
 		result.Error = execErr.Error()
 		r.logger.Warn("  ✗ %s", execErr)
+
+		// Screenshot on failure
+		if r.cfg.Screenshot == "on-fail" || r.cfg.Screenshot == "always" {
+			r.captureScreenshot(ctx, &result, idx)
+		}
 	} else {
 		result.Success = true
 		r.logger.Info("  ✓ done (%.0fms)", float64(result.Duration.Milliseconds()))
+
+		// Screenshot on every step
+		if r.cfg.Screenshot == "always" {
+			r.captureScreenshot(ctx, &result, idx)
+		}
+
+		// Debug mode: highlight the resolved element
+		if r.cfg.DebugMode && result.WinnerXPath != "" {
+			_ = r.page.HighlightElement(ctx, result.WinnerXPath, 800)
+		}
+	}
+
+	// Explain mode: output candidate ranking details
+	if r.cfg.ExplainMode && len(result.RankedCandidates) > 0 {
+		r.logger.Info("  ╭── EXPLAIN: %d candidates considered", result.CandidatesConsidered)
+		limit := 5
+		if len(result.RankedCandidates) < limit {
+			limit = len(result.RankedCandidates)
+		}
+		for ci := 0; ci < limit; ci++ {
+			c := result.RankedCandidates[ci]
+			marker := "  │"
+			if ci == 0 {
+				marker = "  │ ★"
+			}
+			r.logger.Info("%s  [%.2f] %s  tag=%s text=%q", marker, c.Score.Total, c.XPath, c.Tag, c.VisibleText)
+		}
+		r.logger.Info("  ╰──")
 	}
 
 	return result
@@ -630,6 +732,203 @@ func (r *Runtime) doSet(_ context.Context, cmd dsl.Command, _ *explain.Execution
 	return nil
 }
 
+func (r *Runtime) doHover(ctx context.Context, cmd dsl.Command, res *explain.ExecutionResult) error {
+	resolved, err := r.resolveTarget(ctx, cmd, res)
+	if err != nil {
+		return err
+	}
+
+	el := resolved.Element
+	timeoutCtx, cancel := context.WithTimeout(ctx, r.cfg.DefaultTimeout)
+	defer cancel()
+
+	if err := r.page.ScrollIntoView(timeoutCtx, el.XPath); err != nil {
+		r.logger.Debug("scroll into view failed (non-fatal): %v", err)
+	}
+
+	cx, cy, err := r.page.GetElementCenter(timeoutCtx, el.XPath)
+	if err != nil {
+		return &utils.ActionError{Action: "hover", Target: cmd.Target, Cause: err}
+	}
+	if err := r.page.Hover(timeoutCtx, cx, cy); err != nil {
+		return &utils.ActionError{Action: "hover", Target: cmd.Target, Cause: err}
+	}
+
+	res.WinnerXPath = el.XPath
+	res.WinnerScore = resolved.Score
+	return nil
+}
+
+func (r *Runtime) doRightClick(ctx context.Context, cmd dsl.Command, res *explain.ExecutionResult) error {
+	resolved, err := r.resolveTarget(ctx, cmd, res)
+	if err != nil {
+		return err
+	}
+
+	el := resolved.Element
+	timeoutCtx, cancel := context.WithTimeout(ctx, r.cfg.DefaultTimeout)
+	defer cancel()
+
+	if err := r.page.ScrollIntoView(timeoutCtx, el.XPath); err != nil {
+		r.logger.Debug("scroll into view failed (non-fatal): %v", err)
+	}
+
+	cx, cy, err := r.page.GetElementCenter(timeoutCtx, el.XPath)
+	if err != nil {
+		return &utils.ActionError{Action: "right_click", Target: cmd.Target, Cause: err}
+	}
+	if err := r.page.RightClick(timeoutCtx, cx, cy); err != nil {
+		return &utils.ActionError{Action: "right_click", Target: cmd.Target, Cause: err}
+	}
+
+	res.WinnerXPath = el.XPath
+	res.WinnerScore = resolved.Score
+	return nil
+}
+
+func (r *Runtime) doDrag(ctx context.Context, cmd dsl.Command, res *explain.ExecutionResult) error {
+	// Resolve source element
+	srcCmd := dsl.Command{
+		Target:          cmd.DragSource,
+		InteractionMode: dsl.ModeClickable,
+	}
+	srcResolved, err := r.resolveTarget(ctx, srcCmd, res)
+	if err != nil {
+		return fmt.Errorf("DRAG source %q: %w", cmd.DragSource, err)
+	}
+
+	// Resolve target element
+	dstCmd := dsl.Command{
+		Target:          cmd.DragTarget,
+		InteractionMode: dsl.ModeClickable,
+	}
+	dstResolved, err := r.resolveTarget(ctx, dstCmd, res)
+	if err != nil {
+		return fmt.Errorf("DRAG target %q: %w", cmd.DragTarget, err)
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, r.cfg.DefaultTimeout)
+	defer cancel()
+
+	// Scroll source into view (both elements should be visible for drag)
+	if err := r.page.ScrollIntoView(timeoutCtx, srcResolved.Element.XPath); err != nil {
+		r.logger.Debug("scroll source into view failed (non-fatal): %v", err)
+	}
+	// Also scroll target into view if it's a different element
+	if err := r.page.ScrollIntoView(timeoutCtx, dstResolved.Element.XPath); err != nil {
+		r.logger.Debug("scroll target into view failed (non-fatal): %v", err)
+	}
+	// Scroll source once more so both are approximately in viewport
+	if err := r.page.ScrollIntoView(timeoutCtx, srcResolved.Element.XPath); err != nil {
+		r.logger.Debug("scroll source into view (2nd) failed (non-fatal): %v", err)
+	}
+	time.Sleep(50 * time.Millisecond) // let viewport settle
+
+	fromX, fromY, err := r.page.GetElementCenter(timeoutCtx, srcResolved.Element.XPath)
+	if err != nil {
+		return fmt.Errorf("DRAG: get source centre: %w", err)
+	}
+	toX, toY, err := r.page.GetElementCenter(timeoutCtx, dstResolved.Element.XPath)
+	if err != nil {
+		return fmt.Errorf("DRAG: get target centre: %w", err)
+	}
+
+	r.logger.Debug("DRAG: src=(%v,%v) → dst=(%v,%v)", fromX, fromY, toX, toY)
+
+	// Use CDP mouse events — works for jQuery UI and native HTML5 drag
+	if err := r.page.DragAndDrop(timeoutCtx, fromX, fromY, toX, toY); err != nil {
+		return fmt.Errorf("DRAG %q → %q: %w", cmd.DragSource, cmd.DragTarget, err)
+	}
+
+	time.Sleep(300 * time.Millisecond) // settle time for DOM update
+
+	// If CDP drag didn't trigger the drop (e.g. native HTML5 droppable),
+	// try firing HTML5 DragEvent as a fallback
+	checkDropped := fmt.Sprintf(`(() => {
+		function xp(p) {
+			return document.evaluate(p, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+		}
+		const dst = xp(%q);
+		if (!dst) return 'no_target';
+		
+		// Check if drop already happened by looking for state change
+		const text = (dst.innerText || dst.textContent || '').trim();
+		if (text !== 'Drop here') return 'already_dropped';
+		
+		// Not dropped yet — try HTML5 DragEvent fallback
+		const src = xp(%q);
+		if (!src) return 'no_source';
+		const dt = new DataTransfer();
+		src.dispatchEvent(new DragEvent('dragstart', {bubbles:true, cancelable:true, dataTransfer:dt}));
+		dst.dispatchEvent(new DragEvent('dragenter', {bubbles:true, cancelable:true, dataTransfer:dt}));
+		dst.dispatchEvent(new DragEvent('dragover',  {bubbles:true, cancelable:true, dataTransfer:dt}));
+		dst.dispatchEvent(new DragEvent('drop',      {bubbles:true, cancelable:true, dataTransfer:dt}));
+		src.dispatchEvent(new DragEvent('dragend',   {bubbles:true, cancelable:true, dataTransfer:dt}));
+		return 'html5_fallback';
+	})()`, dstResolved.Element.XPath, srcResolved.Element.XPath)
+
+	raw, _ := r.page.EvalJS(timeoutCtx, checkDropped)
+	var dropResult string
+	json.Unmarshal(raw, &dropResult)
+	r.logger.Debug("DRAG: drop status: %s", dropResult)
+
+	res.WinnerXPath = srcResolved.Element.XPath
+	res.WinnerScore = srcResolved.Score
+	return nil
+}
+
+func (r *Runtime) doUpload(ctx context.Context, cmd dsl.Command, res *explain.ExecutionResult) error {
+	resolved, err := r.resolveTarget(ctx, cmd, res)
+	if err != nil {
+		return err
+	}
+
+	el := resolved.Element
+	timeoutCtx, cancel := context.WithTimeout(ctx, r.cfg.DefaultTimeout)
+	defer cancel()
+
+	if err := r.page.SetFileInput(timeoutCtx, el.XPath, []string{cmd.UploadFile}); err != nil {
+		return &utils.ActionError{Action: "upload", Target: cmd.Target, Cause: err}
+	}
+
+	res.WinnerXPath = el.XPath
+	res.WinnerScore = resolved.Score
+	return nil
+}
+
+func (r *Runtime) doPrint(_ context.Context, cmd dsl.Command, _ *explain.ExecutionResult) error {
+	r.logger.Info("  PRINT: %s", cmd.PrintText)
+	return nil
+}
+
+func (r *Runtime) doWaitForResponse(ctx context.Context, cmd dsl.Command, _ *explain.ExecutionResult) error {
+	timeout := r.cfg.DefaultTimeout
+	if err := r.page.WaitForResponse(ctx, cmd.WaitResponseURL, timeout); err != nil {
+		return fmt.Errorf("WAIT FOR RESPONSE %q: %w", cmd.WaitResponseURL, err)
+	}
+	return nil
+}
+
+func (r *Runtime) doPause(_ context.Context, _ dsl.Command, _ *explain.ExecutionResult) error {
+	if r.cfg.DebugMode {
+		r.logger.Info("  ⏸  PAUSED — press Enter to continue")
+		fmt.Scanln()
+	}
+	return nil
+}
+
+func (r *Runtime) doDebugVars(_ context.Context, _ dsl.Command, _ *explain.ExecutionResult) error {
+	r.logger.Info("  ── Runtime Variables ──")
+	if len(r.vars) == 0 {
+		r.logger.Info("    (none)")
+		return nil
+	}
+	for k, v := range r.vars {
+		r.logger.Info("    {%s} = %q", k, v)
+	}
+	return nil
+}
+
 func (r *Runtime) doVerifySoft(ctx context.Context, cmd dsl.Command, res *explain.ExecutionResult) error {
 	err := r.doVerify(ctx, cmd, res)
 	if err != nil {
@@ -781,6 +1080,47 @@ func (r *Runtime) executeRepeat(ctx context.Context, cmd dsl.Command, fileVars m
 	return allResults, false
 }
 
+// executeForEach handles FOR EACH {var} IN {collection} loops using pre-nested Body.
+// The collection variable is split by comma, pipe, or newline.
+func (r *Runtime) executeForEach(ctx context.Context, cmd dsl.Command, fileVars map[string]string) ([]explain.ExecutionResult, bool) {
+	loopVar := cmd.ForEachVar
+	collection := cmd.ForEachCollection
+
+	// Resolve the collection — could be a variable reference like {items}
+	items := r.splitCollection(collection)
+
+	var allResults []explain.ExecutionResult
+	for idx, item := range items {
+		r.vars[loopVar] = strings.TrimSpace(item)
+		r.vars["i"] = strconv.Itoa(idx + 1)
+		r.logger.Debug("  [FOR EACH] {%s} = %q  (iteration %d/%d)", loopVar, item, idx+1, len(items))
+		results, stop := r.executeBlock(ctx, cmd.Body, fileVars)
+		allResults = append(allResults, results...)
+		if stop {
+			return allResults, true
+		}
+	}
+	return allResults, false
+}
+
+// splitCollection splits a collection string by comma, pipe, or newline.
+func (r *Runtime) splitCollection(collection string) []string {
+	// Try comma-separated first
+	if strings.Contains(collection, ",") {
+		return strings.Split(collection, ",")
+	}
+	// Pipe-separated
+	if strings.Contains(collection, "|") {
+		return strings.Split(collection, "|")
+	}
+	// Newline-separated
+	if strings.Contains(collection, "\n") {
+		return strings.Split(collection, "\n")
+	}
+	// Single item
+	return []string{collection}
+}
+
 // evaluateCondition checks a condition string against runtime state.
 // Supports:
 //   - button/element/link/field 'X' exists / not exists
@@ -920,6 +1260,12 @@ func (r *Runtime) applyRuntimeVars(cmd *dsl.Command) {
 	cmd.InsideRowText = sub(cmd.InsideRowText)
 	cmd.SetValue = sub(cmd.SetValue)
 	cmd.Condition = sub(cmd.Condition)
+	cmd.DragSource = sub(cmd.DragSource)
+	cmd.DragTarget = sub(cmd.DragTarget)
+	cmd.PrintText = sub(cmd.PrintText)
+	cmd.UploadFile = sub(cmd.UploadFile)
+	cmd.WaitResponseURL = sub(cmd.WaitResponseURL)
+	cmd.ForEachCollection = sub(cmd.ForEachCollection)
 }
 
 // parseKeyCombo parses "Control+A" or "Enter" into key name and modifier bitmask.
@@ -969,6 +1315,30 @@ func (r *Runtime) resolveTarget(ctx context.Context, cmd dsl.Command, res *expla
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// captureScreenshot takes a screenshot and saves it to disk.
+func (r *Runtime) captureScreenshot(ctx context.Context, res *explain.ExecutionResult, idx int) {
+	pngData, err := r.page.Screenshot(ctx)
+	if err != nil {
+		r.logger.Debug("screenshot failed (non-fatal): %v", err)
+		return
+	}
+
+	dir := "reports/screenshots"
+	if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+		r.logger.Debug("screenshot mkdir failed: %v", mkErr)
+		return
+	}
+
+	filename := fmt.Sprintf("%s/step_%03d_%s.png", dir, idx+1, strings.ReplaceAll(res.ActionPerformed, " ", "_"))
+	if err := os.WriteFile(filename, pngData, 0o644); err != nil {
+		r.logger.Debug("screenshot write failed: %v", err)
+		return
+	}
+
+	res.ScreenshotPath = filename
+	r.logger.Info("  📸 screenshot saved: %s", filename)
+}
 
 func parseSingleCommand(raw string) (dsl.Command, error) {
 	hunt, err := dsl.Parse(strings.NewReader(raw))

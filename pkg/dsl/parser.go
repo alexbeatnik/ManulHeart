@@ -52,13 +52,23 @@ const (
 	CmdScroll      CommandType = "scroll"
 	CmdPress       CommandType = "press"
 	CmdExtract     CommandType = "extract"
-	CmdSet         CommandType = "set"
-	CmdIf          CommandType = "if"
-	CmdElIf        CommandType = "elif"
-	CmdElse        CommandType = "else"
-	CmdWhile       CommandType = "while"
-	CmdRepeat      CommandType = "repeat"
-	CmdUnknown     CommandType = "unknown"
+	CmdSet             CommandType = "set"
+	CmdHover           CommandType = "hover"
+	CmdRightClick      CommandType = "right_click"
+	CmdDrag            CommandType = "drag"
+	CmdUpload          CommandType = "upload"
+	CmdPrint           CommandType = "print"
+	CmdWaitForResponse CommandType = "wait_for_response"
+	CmdForEach         CommandType = "for_each"
+	CmdEndForEach      CommandType = "end_for_each"
+	CmdPause           CommandType = "pause"
+	CmdDebugVars       CommandType = "debug_vars"
+	CmdIf              CommandType = "if"
+	CmdElIf            CommandType = "elif"
+	CmdElse            CommandType = "else"
+	CmdWhile           CommandType = "while"
+	CmdRepeat          CommandType = "repeat"
+	CmdUnknown         CommandType = "unknown"
 )
 
 // InteractionMode describes the expected interaction surface for element resolution.
@@ -69,6 +79,9 @@ const (
 	ModeInput     InteractionMode = "input"
 	ModeSelect    InteractionMode = "select"
 	ModeCheckbox  InteractionMode = "checkbox"
+	ModeHover     InteractionMode = "hover"
+	ModeDrag      InteractionMode = "drag"
+	ModeLocate    InteractionMode = "locate"
 	ModeNone      InteractionMode = "none"
 )
 
@@ -132,6 +145,20 @@ type Command struct {
 	RepeatVar string
 	// WaitForState is "visible", "hidden", or "disappear" for WAIT FOR.
 	WaitForState string
+	// WaitResponseURL is the URL pattern for WAIT FOR RESPONSE.
+	WaitResponseURL string
+	// DragSource is the source element for DRAG AND DROP.
+	DragSource string
+	// DragTarget is the target element for DRAG AND DROP.
+	DragTarget string
+	// UploadFile is the file path for UPLOAD commands.
+	UploadFile string
+	// PrintText is the message for PRINT commands.
+	PrintText string
+	// ForEachVar is the loop variable name for FOR EACH.
+	ForEachVar string
+	// ForEachCollection is the collection variable for FOR EACH.
+	ForEachCollection string
 
 	// Indent is the indentation level (in characters) of the raw source line.
 	Indent int
@@ -160,8 +187,28 @@ type Hunt struct {
 	Context string
 	// Vars holds file-level @var: declarations.
 	Vars map[string]string
+	// Tags holds file-level @tags: values.
+	Tags []string
+	// DataFile is the @data: path to a CSV/JSON file for parameterized runs.
+	DataFile string
+	// Schedule is the @schedule: expression for daemon mode.
+	Schedule string
+	// Exports holds the @export: block names.
+	Exports []string
+	// Imports holds @import: directives.
+	Imports []ImportDirective
+	// Blueprints holds imported step blocks available for USE directives.
+	// Key is the block name (or alias), value is the list of commands.
+	Blueprints map[string][]Command
 	// Commands is the ordered list of parsed commands.
 	Commands []Command
+}
+
+// ImportDirective describes a single @import: line.
+type ImportDirective struct {
+	Names   []string          // imported block names (or ["*"] for wildcard)
+	Aliases map[string]string // optional aliases (original -> alias)
+	Source  string            // source file path
 }
 
 // ── regex patterns (compiled once) ─────────────────────────────────────────
@@ -169,7 +216,7 @@ type Hunt struct {
 var (
 	reQuoted    = regexp.MustCompile(`"([^"]*)"|'([^']*)'`)
 	reStep      = regexp.MustCompile(`(?i)^STEP\s+\d+\s*:`)
-	reNear      = regexp.MustCompile(`(?i)\bNEAR\s+(?:"([^"]*)"|'([^']*)')`)
+	reNear      = regexp.MustCompile(`(?i)\bNEAR\s+(?:"([^"]*)"|'([^')*]*)')`)
 	reOnRegion  = regexp.MustCompile(`(?i)\bON\s+(HEADER|FOOTER)\b`)
 	reInside    = regexp.MustCompile(`(?i)\bINSIDE\s+(?:"([^"]*)"|'([^']*)')`)
 	reInsideRow = regexp.MustCompile(`(?i)\brow\s+with\s+(?:"([^"]*)"|'([^']*)')`)
@@ -204,6 +251,25 @@ var (
 	reRepeatVar = regexp.MustCompile(`(?i)\bas\s+\{?(\w+)\}?`)
 	reHeader    = regexp.MustCompile(`(?i)^@(\w+):\s*(.*)`)
 	reVar       = regexp.MustCompile(`(?i)^@var:\s*\{(\w+)\}\s*=\s*(.*)`)
+
+	// New command patterns
+	reHover        = regexp.MustCompile(`(?i)\bHOVER\b`)
+	reRightClick   = regexp.MustCompile(`(?i)\bRIGHT\s+CLICK\b`)
+	reDrag         = regexp.MustCompile(`(?i)\bDRAG\b`)
+	reDragDrop     = regexp.MustCompile(`(?i)\bdrop\s+(?:it\s+)?(?:into|on|onto)\s+(?:"([^"]*)"|'([^')']*)')`)
+	reUpload       = regexp.MustCompile(`(?i)^UPLOAD\b`)
+	rePrint        = regexp.MustCompile(`(?i)^PRINT\b`)
+	reWaitResp     = regexp.MustCompile(`(?i)^WAIT\s+FOR\s+RESPONSE\b`)
+	reWaitRespURL  = regexp.MustCompile(`(?:"([^"]*)"|'([^']*)')`) // reuse reQuoted for URL pattern
+	reForEach      = regexp.MustCompile(`(?i)^FOR\s+EACH\s+\{?(\w+)\}?\s+IN\s+\{?(\w+)\}?\s*:\s*$`)
+	reEndForEach   = regexp.MustCompile(`(?i)^END\s+FOR\s+EACH\s*$`)
+	rePause        = regexp.MustCompile(`(?i)^PAUSE\s*$`)
+	reDebugVars    = regexp.MustCompile(`(?i)^DEBUG\s+VARS\s*$`)
+	reImport       = regexp.MustCompile(`(?i)^@import:\s*(.+)\s+from\s+(.+)$`)
+	reTags         = regexp.MustCompile(`(?i)^@tags:\s*(.+)$`)
+	reData         = regexp.MustCompile(`(?i)^@data:\s*(.+)$`)
+	reSchedule     = regexp.MustCompile(`(?i)^@schedule:\s*(.+)$`)
+	reExport       = regexp.MustCompile(`(?i)^@export:\s*(.+)$`)
 
 	// element type hints recognized after the quoted target
 	typeHints = map[string]bool{
@@ -242,7 +308,8 @@ func ParseFile(path string) (*Hunt, error) {
 // Parse reads and parses .hunt content from an io.Reader.
 func Parse(r io.Reader) (*Hunt, error) {
 	hunt := &Hunt{
-		Vars: make(map[string]string),
+		Vars:    make(map[string]string),
+		Imports: nil,
 	}
 
 	scanner := bufio.NewScanner(r)
@@ -273,12 +340,53 @@ func Parse(r io.Reader) (*Hunt, error) {
 			continue
 		}
 
+		// @tags: declarations
+		if m := reTags.FindStringSubmatch(trimmed); m != nil {
+			for _, t := range strings.Split(m[1], ",") {
+				t = strings.TrimSpace(t)
+				if t != "" {
+					hunt.Tags = append(hunt.Tags, t)
+				}
+			}
+			continue
+		}
+
+		// @data: declaration
+		if m := reData.FindStringSubmatch(trimmed); m != nil {
+			hunt.DataFile = strings.TrimSpace(m[1])
+			continue
+		}
+
+		// @schedule: declaration
+		if m := reSchedule.FindStringSubmatch(trimmed); m != nil {
+			hunt.Schedule = strings.TrimSpace(m[1])
+			continue
+		}
+
+		// @export: declaration
+		if m := reExport.FindStringSubmatch(trimmed); m != nil {
+			for _, e := range strings.Split(m[1], ",") {
+				e = strings.TrimSpace(e)
+				if e != "" {
+					hunt.Exports = append(hunt.Exports, e)
+				}
+			}
+			continue
+		}
+
+		// @import: declaration
+		if m := reImport.FindStringSubmatch(trimmed); m != nil {
+			directive := parseImportDirective(m[1], strings.TrimSpace(m[2]))
+			hunt.Imports = append(hunt.Imports, directive)
+			continue
+		}
+
 		// @header: declarations
 		if m := reHeader.FindStringSubmatch(trimmed); m != nil {
 			key := strings.ToLower(m[1])
 			val := strings.TrimSpace(m[2])
 			switch key {
-			case "title":
+			case "title", "blueprint":
 				hunt.Title = val
 			case "context":
 				hunt.Context = val
@@ -354,7 +462,7 @@ func nestBlocksFrom(cmds []rawCmd, start int, parentIndent int) ([]Command, int)
 			result = append(result, ifCmd)
 			i = nextIdx
 
-		case CmdWhile, CmdRepeat:
+		case CmdWhile, CmdRepeat, CmdForEach:
 			// Collect loop body: all lines indented deeper than the header.
 			headerIndent := rc.indent
 			loopCmd := rc.cmd
@@ -503,6 +611,36 @@ func parseCommand(line string, lineNum int) (Command, error) {
 		return cmd, nil
 	}
 
+	// FOR EACH {item} IN {collection}:
+	if m := reForEach.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+		cmd.Type = CmdForEach
+		cmd.InteractionMode = ModeNone
+		cmd.ForEachVar = m[1]
+		cmd.ForEachCollection = m[2]
+		return cmd, nil
+	}
+
+	// END FOR EACH
+	if reEndForEach.MatchString(strings.TrimSpace(line)) {
+		cmd.Type = CmdEndForEach
+		cmd.InteractionMode = ModeNone
+		return cmd, nil
+	}
+
+	// PAUSE
+	if rePause.MatchString(strings.TrimSpace(line)) {
+		cmd.Type = CmdPause
+		cmd.InteractionMode = ModeNone
+		return cmd, nil
+	}
+
+	// DEBUG VARS
+	if reDebugVars.MatchString(strings.TrimSpace(line)) {
+		cmd.Type = CmdDebugVars
+		cmd.InteractionMode = ModeNone
+		return cmd, nil
+	}
+
 	// ── SET {var} = value ─────────────────────────────────────────────
 
 	if m := reSet.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
@@ -537,6 +675,14 @@ func parseCommand(line string, lineNum int) (Command, error) {
 			}
 		}
 
+	// WAIT FOR RESPONSE "url_pattern" (before other WAIT variants)
+	case reWaitResp.MatchString(strings.TrimSpace(line)):
+		cmd.Type = CmdWaitForResponse
+		cmd.InteractionMode = ModeNone
+		if m := reQuoted.FindStringSubmatch(line); m != nil {
+			cmd.WaitResponseURL = quotedMatch(m, 1)
+		}
+
 	// SCROLL [DOWN|UP] [inside 'container']
 	case reScroll.MatchString(upper):
 		cmd.Type = CmdScroll
@@ -567,6 +713,29 @@ func parseCommand(line string, lineNum int) (Command, error) {
 			}
 		}
 		cmd.PressKey = strings.TrimSpace(pressText)
+
+	// PRINT 'message'
+	case rePrint.MatchString(strings.TrimSpace(line)):
+		cmd.Type = CmdPrint
+		cmd.InteractionMode = ModeNone
+		if m := reQuoted.FindStringSubmatch(line); m != nil {
+			cmd.PrintText = quotedMatch(m, 1)
+		} else {
+			// bare text after PRINT
+			cmd.PrintText = strings.TrimSpace(strings.TrimSpace(line)[5:])
+		}
+
+	// UPLOAD 'file.pdf' to 'Target'
+	case reUpload.MatchString(strings.TrimSpace(line)):
+		cmd.Type = CmdUpload
+		cmd.InteractionMode = ModeLocate
+		quotes := reQuoted.FindAllStringSubmatch(line, -1)
+		if len(quotes) >= 2 {
+			cmd.UploadFile = quotedMatch(quotes[0], 1)
+			cmd.Target = quotedMatch(quotes[1], 1)
+		} else if len(quotes) == 1 {
+			cmd.UploadFile = quotedMatch(quotes[0], 1)
+		}
 
 	// EXTRACT the 'Target' into {var}
 	case reExtract.MatchString(upper):
@@ -651,10 +820,35 @@ func parseCommand(line string, lineNum int) (Command, error) {
 		cmd.InteractionMode = ModeCheckbox
 		cmd.Target, cmd.TypeHint = extractTargetAndHint(line)
 
+	// RIGHT CLICK (before CLICK to avoid substring match)
+	case reRightClick.MatchString(upper):
+		cmd.Type = CmdRightClick
+		cmd.InteractionMode = ModeClickable
+		cmd.Target, cmd.TypeHint = extractTargetAndHint(line)
+
 	// DOUBLE CLICK (before CLICK)
 	case reDoubleClk.MatchString(upper):
 		cmd.Type = CmdDoubleClick
 		cmd.InteractionMode = ModeClickable
+		cmd.Target, cmd.TypeHint = extractTargetAndHint(line)
+
+	// DRAG 'Source' and drop [it] on|into|onto 'Target'
+	case reDrag.MatchString(upper):
+		cmd.Type = CmdDrag
+		cmd.InteractionMode = ModeDrag
+		// First quoted = source
+		if m := reQuoted.FindStringSubmatch(line); m != nil {
+			cmd.DragSource = quotedMatch(m, 1)
+		}
+		// Drop target
+		if m := reDragDrop.FindStringSubmatch(line); m != nil {
+			cmd.DragTarget = quotedMatch(m, 1)
+		}
+
+	// HOVER over 'Target'
+	case reHover.MatchString(upper):
+		cmd.Type = CmdHover
+		cmd.InteractionMode = ModeHover
 		cmd.Target, cmd.TypeHint = extractTargetAndHint(line)
 
 	// SELECT 'option' from 'target' dropdown
@@ -784,4 +978,43 @@ func applyVars(cmd *Command, vars map[string]string) {
 	cmd.InsideRowText = sub(cmd.InsideRowText)
 	cmd.SetValue = sub(cmd.SetValue)
 	cmd.Condition = sub(cmd.Condition)
+	cmd.PrintText = sub(cmd.PrintText)
+	cmd.UploadFile = sub(cmd.UploadFile)
+	cmd.DragSource = sub(cmd.DragSource)
+	cmd.DragTarget = sub(cmd.DragTarget)
+	cmd.WaitResponseURL = sub(cmd.WaitResponseURL)
+}
+
+// parseImportDirective parses the names and source from an @import line.
+// namesStr: "Login, Logout" or "Login as AuthLogin" or "*"
+// source: path to source file
+func parseImportDirective(namesStr, source string) ImportDirective {
+	d := ImportDirective{
+		Source:  source,
+		Aliases: make(map[string]string),
+	}
+
+	// Strip surrounding quotes from source if present.
+	if len(source) >= 2 {
+		if (source[0] == '\'' && source[len(source)-1] == '\'') ||
+			(source[0] == '"' && source[len(source)-1] == '"') {
+			d.Source = source[1 : len(source)-1]
+		}
+	}
+
+	parts := strings.Split(namesStr, ",")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		// Check for "Name as Alias" syntax.
+		asParts := regexp.MustCompile(`(?i)\s+as\s+`).Split(p, 2)
+		name := strings.TrimSpace(asParts[0])
+		d.Names = append(d.Names, name)
+		if len(asParts) == 2 {
+			d.Aliases[name] = strings.TrimSpace(asParts[1])
+		}
+	}
+	return d
 }

@@ -103,6 +103,38 @@ func (p *CDPPage) DoubleClick(ctx context.Context, x, y float64) error {
 	return cdp.DoubleClick(ctx, p.conn, x, y)
 }
 
+func (p *CDPPage) RightClick(ctx context.Context, x, y float64) error {
+	return cdp.RightClick(ctx, p.conn, x, y)
+}
+
+func (p *CDPPage) Hover(ctx context.Context, x, y float64) error {
+	return cdp.Hover(ctx, p.conn, x, y)
+}
+
+func (p *CDPPage) DragAndDrop(ctx context.Context, fromX, fromY, toX, toY float64) error {
+	return cdp.DragAndDrop(ctx, p.conn, fromX, fromY, toX, toY)
+}
+
+func (p *CDPPage) SetFileInput(ctx context.Context, xpath string, filePaths []string) error {
+	return cdp.SetFileInput(ctx, p.conn, xpath, filePaths)
+}
+
+func (p *CDPPage) Screenshot(ctx context.Context) ([]byte, error) {
+	return cdp.Screenshot(ctx, p.conn)
+}
+
+func (p *CDPPage) WaitForResponse(ctx context.Context, urlPattern string, timeout time.Duration) error {
+	return cdp.WaitForResponse(ctx, p.conn, urlPattern, timeout)
+}
+
+func (p *CDPPage) HighlightElement(ctx context.Context, xpath string, durationMS int) error {
+	return cdp.HighlightElement(ctx, p.conn, xpath, durationMS)
+}
+
+func (p *CDPPage) GetElementCenter(ctx context.Context, xpath string) (float64, float64, error) {
+	return cdp.GetElementCenter(ctx, p.conn, xpath)
+}
+
 func (p *CDPPage) DispatchKey(ctx context.Context, key string, modifiers int) error {
 	params := map[string]any{
 		"key":                  key,

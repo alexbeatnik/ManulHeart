@@ -30,18 +30,52 @@ type Config struct {
 
 	// ExplainAll forces full explainability output even for successful resolutions.
 	ExplainAll bool
+
+	// DebugMode enables interactive step-by-step execution with terminal prompts.
+	DebugMode bool
+
+	// BreakLines is a list of source line numbers to pause at in debug mode.
+	BreakLines []int
+
+	// ExplainMode prints heuristic score breakdowns for every resolved element.
+	ExplainMode bool
+
+	// Screenshot controls screenshot capture: "none", "on-fail", "always".
+	Screenshot string
+
+	// HTMLReport enables HTML report generation at the end of the run.
+	HTMLReport bool
+
+	// Tags filter: only run hunt files whose @tags match any of these.
+	Tags []string
+
+	// Retries is the number of times to retry a failed hunt file.
+	Retries int
+
+	// Workers is the number of parallel hunt file execution workers.
+	Workers int
+
+	// DisableCache disables the persistent controls cache.
+	DisableCache bool
 }
 
 // Default returns a Config with sensible defaults.
 func Default() Config {
 	return Config{
-		CDPEndpoint:      "http://127.0.0.1:9222",
-		DefaultTimeout:   30 * time.Second,
+		CDPEndpoint:       "http://127.0.0.1:9222",
+		DefaultTimeout:    30 * time.Second,
 		NavigationTimeout: 15 * time.Second,
-		VerifyTimeout:    10 * time.Second,
-		ScoringThreshold: 0.15,
-		MaxCandidates:    200,
-		Verbose:          false,
-		ExplainAll:       false,
+		VerifyTimeout:     10 * time.Second,
+		ScoringThreshold:  0.15,
+		MaxCandidates:     200,
+		Verbose:           false,
+		ExplainAll:        false,
+		DebugMode:         false,
+		ExplainMode:       false,
+		Screenshot:        "none",
+		HTMLReport:        false,
+		Retries:           0,
+		Workers:           1,
+		DisableCache:      false,
 	}
 }

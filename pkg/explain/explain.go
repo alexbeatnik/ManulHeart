@@ -119,6 +119,8 @@ type ExecutionResult struct {
 	DurationMS int64 `json:"duration_ms"`
 	// Duration is the original time.Duration (not serialized).
 	Duration time.Duration `json:"-"`
+	// ScreenshotPath is the path to a screenshot taken during/after this step.
+	ScreenshotPath string `json:"screenshot_path,omitempty"`
 	// ProbeMetadata contains optional debug metadata from the in-page JS probe.
 	ProbeMetadata map[string]any `json:"probe_metadata,omitempty"`
 }
