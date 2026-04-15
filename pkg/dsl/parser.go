@@ -220,7 +220,7 @@ var (
 	reOnRegion  = regexp.MustCompile(`(?i)\bON\s+(HEADER|FOOTER)\b`)
 	reInside    = regexp.MustCompile(`(?i)\bINSIDE\s+(?:"([^"]*)"|'([^']*)')`)
 	reInsideRow = regexp.MustCompile(`(?i)\brow\s+with\s+(?:"([^"]*)"|'([^']*)')`)
-	reNavigate  = regexp.MustCompile(`(?i)\bNAVIGATE\b`)
+	reNavigate  = regexp.MustCompile(`(?i)^NAVIGATE\b`)
 	reClick     = regexp.MustCompile(`(?i)\bCLICK\b`)
 	reDoubleClk = regexp.MustCompile(`(?i)\bDOUBLE\s+CLICK\b`)
 	reFill      = regexp.MustCompile(`(?i)\bFILL\b`)
