@@ -3,12 +3,14 @@ package browser
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	neturl "net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -51,10 +53,31 @@ func LaunchChrome(ctx context.Context, opts ChromeOptions) (*ChromeProcess, erro
 		return nil, err
 	}
 
+	// Write Chrome preferences to disable password manager at profile level.
+	if err := writeAutomationPrefs(opts.UserDataDir); err != nil {
+		return nil, fmt.Errorf("write chrome prefs: %w", err)
+	}
+
 	args := []string{
 		fmt.Sprintf("--remote-debugging-port=%d", opts.Port),
 		"--no-first-run",
 		"--no-default-browser-check",
+		"--disable-background-networking",
+		"--disable-client-side-phishing-detection",
+		"--disable-default-apps",
+		"--disable-extensions",
+		"--disable-hang-monitor",
+		"--disable-popup-blocking",
+		"--disable-prompt-on-repost",
+		"--disable-sync",
+		"--disable-translate",
+		"--disable-search-engine-choice-screen",
+		"--disable-features=PasswordLeakDetection,PasswordManagerOnboarding,PasswordCheck,ChromePasswordManagerUI,CredentialManager,AutofillServerCommunication,IdentityStatusDialog,GlobalMediaControls,MediaRouter,Translate,OptimizationHints",
+		"--no-service-autorun",
+		"--password-store=basic",
+		"--disable-save-password-bubble",
+		"--disable-component-update",
+		"--disable-infobars",
 		fmt.Sprintf("--user-data-dir=%s", opts.UserDataDir),
 	}
 	if opts.DisableGPU {
@@ -176,4 +199,47 @@ func waitForCDP(ctx context.Context, endpoint string, timeout time.Duration) err
 	}
 
 	return fmt.Errorf("timeout waiting for CDP at %s", endpoint)
+}
+
+// writeAutomationPrefs writes a Chrome Preferences file that disables the
+// password manager, autofill, credential prompts, and other dialogs that
+// interfere with automation. This is necessary because CLI flags alone do not
+// suppress all Chrome-managed modals (e.g. password breach warnings).
+func writeAutomationPrefs(userDataDir string) error {
+	defaultDir := filepath.Join(userDataDir, "Default")
+	if err := os.MkdirAll(defaultDir, 0o755); err != nil {
+		return err
+	}
+
+	prefs := map[string]any{
+		"credentials_enable_service":                  false,
+		"credentials_enable_autosignin":               false,
+		"profile": map[string]any{
+			"password_manager_enabled":              false,
+			"password_manager_leak_detection":       false,
+			"default_content_setting_values": map[string]any{
+				"notifications": 2, // block
+			},
+		},
+		"autofill": map[string]any{
+			"profile_enabled":    false,
+			"credit_card_enabled": false,
+		},
+		"savefile": map[string]any{
+			"default_directory": "/tmp",
+		},
+		"download": map[string]any{
+			"prompt_for_download": false,
+		},
+		"password_manager": map[string]any{
+			"enabled": false,
+		},
+	}
+
+	data, err := json.MarshalIndent(prefs, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(filepath.Join(defaultDir, "Preferences"), data, 0o644)
 }

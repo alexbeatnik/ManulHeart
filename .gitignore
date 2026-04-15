@@ -1,4 +1,5 @@
 # Build output
+manul
 driver
 *.exe
 
@@ -17,3 +18,11 @@ Thumbs.db
 *.test
 *.out
 coverage.html
+
+# Chrome automation profile
+/tmp/manulheart-chrome/
+
+# Runtime data
+cache/
+pages.json
+reports/

@@ -24,50 +24,67 @@ It connects to system-installed Chrome via the Chrome DevTools Protocol (CDP).
 
 ## Quick Start
 
-### 1. Build ManulHeart
+### 1. Build
 
 ```bash
 cd ManulHeart
-go build -o driver ./cmd/driver
+go build -o manul ./cmd/manul
 ```
 
-### 2. Run a hunt file (auto-launches Chrome)
+### 2. Run a hunt file
 
 ```bash
-./driver run examples/saucedemo.hunt
+manul examples/saucedemo.hunt
 ```
 
 Chrome is launched automatically with remote debugging, the hunt is executed,
 and Chrome is closed when done. No manual browser setup required.
 
-### 3. Run headless
+### 3. Run all hunt files in a directory
 
 ```bash
-./driver run examples/saucedemo.hunt --headless
+manul examples/
+manul .
 ```
 
-### 4. Connect to existing Chrome
+### 4. Run headless
+
+```bash
+manul examples/saucedemo.hunt --headless
+```
+
+### 5. Connect to existing Chrome
 
 If you already have Chrome running with `--remote-debugging-port=9222`:
 
 ```bash
-./driver run examples/saucedemo.hunt --cdp http://127.0.0.1:9222
+manul examples/saucedemo.hunt --cdp http://127.0.0.1:9222
 ```
 
 When `--cdp` is set, the driver skips auto-launch and connects to the running instance.
 
-### 5. Run a single step (requires running Chrome)
+### 6. Run a single step (requires running Chrome)
 
 ```bash
-./driver run-step "Click the 'Login' button" --cdp http://127.0.0.1:9222
+manul run-step "Click the 'Login' button" --cdp http://127.0.0.1:9222
 ```
 
-### 6. Verbose / JSON output
+### 7. Verbose / JSON output
 
 ```bash
-./driver run examples/saucedemo.hunt --verbose
-./driver run examples/saucedemo.hunt --json 2>/dev/null | jq .
+manul examples/saucedemo.hunt --verbose
+manul examples/saucedemo.hunt --json 2>/dev/null | jq .
 ```
+
+### Install globally
+
+```bash
+go build -o manul ./cmd/manul
+cp manul ~/.local/bin/manul
+```
+
+> **Note:** The `manul` command name is shared with the Python ManulEngine.
+> Whichever you install last takes priority. To switch back to Python: `pipx install manul-engine`.
 
 ### CLI Flags
 
@@ -163,7 +180,7 @@ DONE.
 ## Architecture
 
 ```
-cmd/driver          CLI entry point
+cmd/manul           CLI entry point (produces `manul` binary)
 pkg/cdp             Low-level CDP WebSocket transport and domain wrappers
 pkg/browser         Abstract browser/page interfaces + CDP backend
 pkg/core            Engine-core targeting pipeline (owns all DOM intelligence)
@@ -194,6 +211,13 @@ LLM-based fallback, ON HEADER/ON FOOTER/INSIDE qualifiers, scan/record subcomman
 
 ## What's New
 
+- **`manul` CLI** — run hunt files directly: `manul test.hunt`, `manul examples/`, `manul .`.
+  Replaces the old `driver run` subcommand. The `run` subcommand still works for backward compat.
+- **Directory execution** — `manul <dir>` collects and runs all `.hunt` files in the directory.
+- **Browser cleanup** — Chrome is always killed on exit, including SIGINT/SIGTERM.
+  No more orphaned browser processes.
+- **Automation-safe Chrome profile** — password manager, autofill, credential prompts,
+  and breach detection dialogs are all suppressed via flags and profile preferences.
 - **NEAR qualifier** — `CLICK 'Add to cart' NEAR 'Product Name'` resolves the
   anchor text first, then ranks candidates by spatial proximity blended with
   DOM ancestry affinity and anchor entity affinity in dev attributes.
