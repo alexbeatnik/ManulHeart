@@ -95,6 +95,47 @@ func (p *CDPPage) ScrollIntoView(ctx context.Context, xpath string) error {
 	return cdp.ScrollIntoView(ctx, p.conn, xpath)
 }
 
+func (p *CDPPage) ScrollPage(ctx context.Context, direction, container string) error {
+	return cdp.ScrollPage(ctx, p.conn, direction, container)
+}
+
+func (p *CDPPage) DoubleClick(ctx context.Context, x, y float64) error {
+	return cdp.DoubleClick(ctx, p.conn, x, y)
+}
+
+func (p *CDPPage) DispatchKey(ctx context.Context, key string, modifiers int) error {
+	params := map[string]any{
+		"key":                  key,
+		"windowsVirtualKeyCode": keyToVirtualCode(key),
+		"modifiers":            modifiers,
+	}
+	if err := cdp.DispatchKeyEvent(ctx, p.conn, "keyDown", params); err != nil {
+		return err
+	}
+	return cdp.DispatchKeyEvent(ctx, p.conn, "keyUp", params)
+}
+
+// keyToVirtualCode maps common key names to Windows virtual key codes.
+func keyToVirtualCode(key string) int {
+	codes := map[string]int{
+		"Enter": 13, "Tab": 9, "Escape": 27, "Backspace": 8,
+		"Delete": 46, "ArrowUp": 38, "ArrowDown": 40,
+		"ArrowLeft": 37, "ArrowRight": 39, "Home": 36, "End": 35,
+		"PageUp": 33, "PageDown": 34, "Space": 32, "F1": 112,
+		"F2": 113, "F3": 114, "F4": 115, "F5": 116, "F6": 117,
+		"F7": 118, "F8": 119, "F9": 120, "F10": 121, "F11": 122, "F12": 123,
+		"a": 65, "b": 66, "c": 67, "v": 86, "x": 88, "z": 90,
+	}
+	if code, ok := codes[key]; ok {
+		return code
+	}
+	// Default: try first character as uppercase ASCII
+	if len(key) == 1 && key[0] >= 'a' && key[0] <= 'z' {
+		return int(key[0]) - 32
+	}
+	return 0
+}
+
 func (p *CDPPage) CurrentURL(ctx context.Context) (string, error) {
 	return cdp.GetCurrentURL(ctx, p.conn)
 }

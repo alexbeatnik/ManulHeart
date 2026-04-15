@@ -145,4 +145,6 @@ type HuntResult struct {
 	TotalDuration time.Duration `json:"-"`
 	// Success reports true if all commands passed.
 	Success bool `json:"success"`
+	// SoftErrors holds accumulated VERIFY SOFTLY failure messages.
+	SoftErrors []string `json:"soft_errors,omitempty"`
 }

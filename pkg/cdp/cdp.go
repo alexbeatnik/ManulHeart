@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -439,5 +440,66 @@ func ScrollIntoView(ctx context.Context, conn *Conn, xpath string) error {
 		return false;
 	})()`, xpath)
 	_, err := Evaluate(ctx, conn, expr)
+	return err
+}
+
+// ScrollPage scrolls the page or a container element by the viewport height.
+// direction is "down" (+1) or "up" (-1). container is a CSS selector or empty for window.
+func ScrollPage(ctx context.Context, conn *Conn, direction string, container string) error {
+	sign := 1
+	if direction == "up" {
+		sign = -1
+	}
+	var expr string
+	if container != "" {
+		expr = fmt.Sprintf(`(() => {
+			const el = document.querySelector(%q) ||
+				Array.from(document.querySelectorAll('*')).find(e =>
+					e.textContent.toLowerCase().includes(%q));
+			if (el) {
+				el.scrollBy(0, %d * el.clientHeight);
+				return true;
+			}
+			return false;
+		})()`, container, strings.ToLower(container), sign)
+	} else {
+		expr = fmt.Sprintf(`(() => {
+			window.scrollBy(0, %d * window.innerHeight);
+			return true;
+		})()`, sign)
+	}
+	_, err := Evaluate(ctx, conn, expr)
+	return err
+}
+
+// DispatchKeyEvent dispatches a single CDP Input.dispatchKeyEvent.
+func DispatchKeyEvent(ctx context.Context, conn *Conn, eventType string, params map[string]any) error {
+	p := map[string]any{"type": eventType}
+	for k, v := range params {
+		p[k] = v
+	}
+	_, err := conn.Call(ctx, "Input.dispatchKeyEvent", p)
+	return err
+}
+
+// DoubleClick synthesizes a double-click at viewport coordinates (x, y).
+func DoubleClick(ctx context.Context, conn *Conn, x, y float64) error {
+	// First click
+	if err := Click(ctx, conn, x, y); err != nil {
+		return err
+	}
+	// Second click with clickCount: 2
+	params := map[string]any{
+		"type":       "mousePressed",
+		"x":          x,
+		"y":          y,
+		"button":     "left",
+		"clickCount": 2,
+	}
+	if _, err := conn.Call(ctx, "Input.dispatchMouseEvent", params); err != nil {
+		return err
+	}
+	params["type"] = "mouseReleased"
+	_, err := conn.Call(ctx, "Input.dispatchMouseEvent", params)
 	return err
 }

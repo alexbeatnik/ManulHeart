@@ -36,16 +36,32 @@ import (
 type CommandType string
 
 const (
-	CmdNavigate CommandType = "navigate"
-	CmdClick    CommandType = "click"
-	CmdFill     CommandType = "fill"
-	CmdType     CommandType = "type"
-	CmdSelect   CommandType = "select"
-	CmdCheck    CommandType = "check"
-	CmdUncheck  CommandType = "uncheck"
-	CmdVerify   CommandType = "verify"
-	CmdWait     CommandType = "wait"
-	CmdUnknown  CommandType = "unknown"
+	CmdNavigate    CommandType = "navigate"
+	CmdClick       CommandType = "click"
+	CmdDoubleClick CommandType = "double_click"
+	CmdFill        CommandType = "fill"
+	CmdType        CommandType = "type"
+	CmdSelect      CommandType = "select"
+	CmdCheck       CommandType = "check"
+	CmdUncheck     CommandType = "uncheck"
+	CmdVerify      CommandType = "verify"
+	CmdVerifySoft  CommandType = "verify_softly"
+	CmdVerifyField CommandType = "verify_field"
+	CmdWait        CommandType = "wait"
+	CmdWaitFor     CommandType = "wait_for"
+	CmdScroll      CommandType = "scroll"
+	CmdPress       CommandType = "press"
+	CmdExtract     CommandType = "extract"
+	CmdSet         CommandType = "set"
+	CmdIf          CommandType = "if"
+	CmdElIf        CommandType = "elif"
+	CmdElse        CommandType = "else"
+	CmdEndIf       CommandType = "endif"
+	CmdWhile       CommandType = "while"
+	CmdEndWhile    CommandType = "endwhile"
+	CmdRepeat      CommandType = "repeat"
+	CmdEndRepeat   CommandType = "endrepeat"
+	CmdUnknown     CommandType = "unknown"
 )
 
 // InteractionMode describes the expected interaction surface for element resolution.
@@ -83,10 +99,42 @@ type Command struct {
 	VerifyText string
 	// VerifyNegated is true for "VERIFY that 'X' is NOT present".
 	VerifyNegated bool
+	// VerifySoft is true for VERIFY SOFTLY — non-fatal, continues on failure.
+	VerifySoft bool
+	// VerifyFieldKind is "text", "value", or "placeholder" for VERIFY HAS TEXT/VALUE.
+	VerifyFieldKind string
 	// StepBlock is the STEP N label this command belongs to.
 	StepBlock string
 	// NearAnchor is the plain-English anchor text for NEAR contextual qualifier.
 	NearAnchor string
+	// OnRegion is the region qualifier: "header" or "footer".
+	OnRegion string
+	// InsideContainer is the INSIDE 'Container' qualifier target.
+	InsideContainer string
+	// InsideRowText is the optional row text for INSIDE 'Container' row with 'Text'.
+	InsideRowText string
+	// ScrollContainer is the target container for SCROLL DOWN inside 'container'.
+	ScrollContainer string
+	// ScrollDirection is "down" or "up" for SCROLL commands.
+	ScrollDirection string
+	// PressKey is the key or combo for PRESS commands (e.g. "Enter", "Control+A").
+	PressKey string
+	// PressTarget is the optional element for PRESS Key ON 'Target'.
+	PressTarget string
+	// ExtractVar is the variable name for EXTRACT into {var}.
+	ExtractVar string
+	// SetVar is the variable name for SET {var} = value.
+	SetVar string
+	// SetValue is the value for SET assignment.
+	SetValue string
+	// Condition is the raw condition text for IF/ELIF/WHILE.
+	Condition string
+	// RepeatCount is the iteration count for REPEAT N TIMES.
+	RepeatCount int
+	// RepeatVar is the loop variable name for REPEAT (default "i").
+	RepeatVar string
+	// WaitForState is "visible", "hidden", or "disappear" for WAIT FOR.
+	WaitForState string
 }
 
 // Hunt is the parsed representation of a complete .hunt file.
@@ -109,6 +157,9 @@ var (
 	reQuoted    = regexp.MustCompile(`"([^"]*)"|'([^']*)'`)
 	reStep      = regexp.MustCompile(`(?i)^STEP\s+\d+\s*:`)
 	reNear      = regexp.MustCompile(`(?i)\bNEAR\s+(?:"([^"]*)"|'([^']*)')`)
+	reOnRegion  = regexp.MustCompile(`(?i)\bON\s+(HEADER|FOOTER)\b`)
+	reInside    = regexp.MustCompile(`(?i)\bINSIDE\s+(?:"([^"]*)"|'([^']*)')`)
+	reInsideRow = regexp.MustCompile(`(?i)\brow\s+with\s+(?:"([^"]*)"|'([^']*)')`)
 	reNavigate  = regexp.MustCompile(`(?i)\bNAVIGATE\b`)
 	reClick     = regexp.MustCompile(`(?i)\bCLICK\b`)
 	reDoubleClk = regexp.MustCompile(`(?i)\bDOUBLE\s+CLICK\b`)
@@ -118,8 +169,29 @@ var (
 	reCheck     = regexp.MustCompile(`(?i)\bCHECK\b`)
 	reUncheck   = regexp.MustCompile(`(?i)\bUNCHECK\b`)
 	reVerify    = regexp.MustCompile(`(?i)\bVERIFY\b`)
+	reVerifySoft = regexp.MustCompile(`(?i)\bVERIFY\s+SOFTLY\b`)
+	reVerifyHas = regexp.MustCompile(`(?i)\bHAS\s+(TEXT|VALUE|PLACEHOLDER)\b`)
 	reWait      = regexp.MustCompile(`(?i)^WAIT\s+(\d+(?:\.\d+)?)`)
+	reWaitFor   = regexp.MustCompile(`(?i)^WAIT\s+FOR\b`)
+	reWaitState = regexp.MustCompile(`(?i)\bTO\s+BE\s+(VISIBLE|HIDDEN)\b|\bTO\s+(DISAPPEAR)\b`)
 	reNotPres   = regexp.MustCompile(`(?i)\bNOT\s+PRESENT\b`)
+	reScroll    = regexp.MustCompile(`(?i)^SCROLL\b`)
+	reScrollDir = regexp.MustCompile(`(?i)\b(DOWN|UP)\b`)
+	reScrollIn  = regexp.MustCompile(`(?i)\binside\s+(?:the\s+)?(?:"([^"]*)"|'([^']*)')`)
+	rePress     = regexp.MustCompile(`(?i)^PRESS\b`)
+	rePressOn   = regexp.MustCompile(`(?i)\bON\s+(?:"([^"]*)"|'([^']*)')`)
+	reExtract   = regexp.MustCompile(`(?i)^EXTRACT\b`)
+	reExtractVar = regexp.MustCompile(`(?i)\binto\s+\{(\w+)\}`)
+	reSet       = regexp.MustCompile(`(?i)^SET\s+\{?(\w+)\}?\s*=\s*(.+)`)
+	reIf        = regexp.MustCompile(`(?i)^IF\s+(.+):\s*$`)
+	reElIf      = regexp.MustCompile(`(?i)^ELIF\s+(.+):\s*$`)
+	reElse      = regexp.MustCompile(`(?i)^ELSE\s*:\s*$`)
+	reEndIf     = regexp.MustCompile(`(?i)^ENDIF\s*$`)
+	reWhile     = regexp.MustCompile(`(?i)^WHILE\s+(.+):\s*$`)
+	reEndWhile  = regexp.MustCompile(`(?i)^ENDWHILE\s*$`)
+	reRepeat    = regexp.MustCompile(`(?i)^REPEAT\s+(\d+)\s+TIMES?\b`)
+	reRepeatVar = regexp.MustCompile(`(?i)\bas\s+\{?(\w+)\}?`)
+	reEndRepeat = regexp.MustCompile(`(?i)^ENDREPEAT\s*$`)
 	reHeader    = regexp.MustCompile(`(?i)^@(\w+):\s*(.*)`)
 	reVar       = regexp.MustCompile(`(?i)^@var:\s*\{(\w+)\}\s*=\s*(.*)`)
 
@@ -234,6 +306,73 @@ func parseCommand(line string, lineNum int) (Command, error) {
 
 	upper := strings.ToUpper(line)
 
+	// ── Control flow (check before action commands) ───────────────────
+
+	if m := reIf.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+		cmd.Type = CmdIf
+		cmd.InteractionMode = ModeNone
+		cmd.Condition = strings.TrimSpace(m[1])
+		return cmd, nil
+	}
+	if m := reElIf.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+		cmd.Type = CmdElIf
+		cmd.InteractionMode = ModeNone
+		cmd.Condition = strings.TrimSpace(m[1])
+		return cmd, nil
+	}
+	if reElse.MatchString(strings.TrimSpace(line)) {
+		cmd.Type = CmdElse
+		cmd.InteractionMode = ModeNone
+		return cmd, nil
+	}
+	if reEndIf.MatchString(strings.TrimSpace(line)) {
+		cmd.Type = CmdEndIf
+		cmd.InteractionMode = ModeNone
+		return cmd, nil
+	}
+	if m := reWhile.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+		cmd.Type = CmdWhile
+		cmd.InteractionMode = ModeNone
+		cmd.Condition = strings.TrimSpace(m[1])
+		return cmd, nil
+	}
+	if reEndWhile.MatchString(strings.TrimSpace(line)) {
+		cmd.Type = CmdEndWhile
+		cmd.InteractionMode = ModeNone
+		return cmd, nil
+	}
+	if m := reRepeat.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+		cmd.Type = CmdRepeat
+		cmd.InteractionMode = ModeNone
+		cmd.RepeatCount, _ = strconv.Atoi(m[1])
+		cmd.RepeatVar = "i"
+		if rv := reRepeatVar.FindStringSubmatch(line); rv != nil {
+			cmd.RepeatVar = rv[1]
+		}
+		return cmd, nil
+	}
+	if reEndRepeat.MatchString(strings.TrimSpace(line)) {
+		cmd.Type = CmdEndRepeat
+		cmd.InteractionMode = ModeNone
+		return cmd, nil
+	}
+
+	// ── SET {var} = value ─────────────────────────────────────────────
+
+	if m := reSet.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+		cmd.Type = CmdSet
+		cmd.InteractionMode = ModeNone
+		cmd.SetVar = m[1]
+		val := strings.TrimSpace(m[2])
+		// Strip wrapping quotes from the value if present.
+		if (strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'")) ||
+			(strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"")) {
+			val = val[1 : len(val)-1]
+		}
+		cmd.SetValue = val
+		return cmd, nil
+	}
+
 	switch {
 	// NAVIGATE to 'url'  OR  NAVIGATE to https://...
 	case reNavigate.MatchString(upper):
@@ -252,23 +391,107 @@ func parseCommand(line string, lineNum int) (Command, error) {
 			}
 		}
 
+	// SCROLL [DOWN|UP] [inside 'container']
+	case reScroll.MatchString(upper):
+		cmd.Type = CmdScroll
+		cmd.InteractionMode = ModeNone
+		cmd.ScrollDirection = "down" // default
+		if m := reScrollDir.FindStringSubmatch(line); m != nil {
+			cmd.ScrollDirection = strings.ToLower(m[1])
+		}
+		if m := reScrollIn.FindStringSubmatch(line); m != nil {
+			cmd.ScrollContainer = quotedMatch(m, 1)
+		}
+
+	// PRESS Key [ON 'Target']
+	case rePress.MatchString(upper):
+		cmd.Type = CmdPress
+		cmd.InteractionMode = ModeNone
+		// Extract key: everything between PRESS and (optional) ON 'target' or end
+		pressText := strings.TrimSpace(line)
+		// Remove "PRESS " prefix (case-insensitive)
+		pressText = pressText[6:] // len("PRESS ") = 6
+		pressText = strings.TrimSpace(pressText)
+		if m := rePressOn.FindStringSubmatch(line); m != nil {
+			cmd.PressTarget = quotedMatch(m, 1)
+			// Remove the ON 'target' part from pressText
+			onIdx := rePressOn.FindStringIndex(line)
+			if onIdx != nil {
+				pressText = strings.TrimSpace(line[6:onIdx[0]])
+			}
+		}
+		cmd.PressKey = strings.TrimSpace(pressText)
+
+	// EXTRACT the 'Target' into {var}
+	case reExtract.MatchString(upper):
+		cmd.Type = CmdExtract
+		cmd.InteractionMode = ModeNone
+		if m := reQuoted.FindStringSubmatch(line); m != nil {
+			cmd.Target = quotedMatch(m, 1)
+		}
+		if m := reExtractVar.FindStringSubmatch(line); m != nil {
+			cmd.ExtractVar = m[1]
+		}
+
+	// WAIT FOR 'element' TO BE VISIBLE|HIDDEN|DISAPPEAR (before plain WAIT)
+	case reWaitFor.MatchString(strings.TrimSpace(line)):
+		cmd.Type = CmdWaitFor
+		cmd.InteractionMode = ModeNone
+		if m := reQuoted.FindStringSubmatch(line); m != nil {
+			cmd.Target = quotedMatch(m, 1)
+		}
+		cmd.WaitForState = "visible" // default
+		if m := reWaitState.FindStringSubmatch(line); m != nil {
+			if m[1] != "" {
+				cmd.WaitForState = strings.ToLower(m[1])
+			} else if m[2] != "" {
+				cmd.WaitForState = "disappear"
+			}
+		}
+
 	// WAIT N
-	case reWait.MatchString(upper):
+	case reWait.MatchString(strings.TrimSpace(line)):
 		cmd.Type = CmdWait
 		cmd.InteractionMode = ModeNone
-		m := reWait.FindStringSubmatch(line)
+		m := reWait.FindStringSubmatch(strings.TrimSpace(line))
 		if m != nil {
 			cmd.WaitSeconds, _ = strconv.ParseFloat(m[1], 64)
 		}
 
-	// VERIFY that 'text' is [NOT] present
-	case reVerify.MatchString(upper):
-		cmd.Type = CmdVerify
+	// VERIFY SOFTLY that 'text' is [NOT] present (before plain VERIFY)
+	case reVerifySoft.MatchString(upper):
+		cmd.Type = CmdVerifySoft
 		cmd.InteractionMode = ModeNone
 		if m := reQuoted.FindStringSubmatch(line); m != nil {
 			cmd.VerifyText = quotedMatch(m, 1)
 		}
 		cmd.VerifyNegated = reNotPres.MatchString(upper)
+		cmd.VerifySoft = true
+
+	// VERIFY 'Target' field HAS TEXT|VALUE|PLACEHOLDER 'expected'
+	// VERIFY that 'text' is [NOT] present
+	case reVerify.MatchString(upper):
+		if reVerifyHas.MatchString(upper) {
+			cmd.Type = CmdVerifyField
+			cmd.InteractionMode = ModeNone
+			quotes := reQuoted.FindAllStringSubmatch(line, -1)
+			if len(quotes) >= 2 {
+				cmd.Target = quotedMatch(quotes[0], 1)
+				cmd.Value = quotedMatch(quotes[1], 1)
+			} else if len(quotes) == 1 {
+				cmd.Target = quotedMatch(quotes[0], 1)
+			}
+			if m := reVerifyHas.FindStringSubmatch(upper); m != nil {
+				cmd.VerifyFieldKind = strings.ToLower(m[1])
+			}
+		} else {
+			cmd.Type = CmdVerify
+			cmd.InteractionMode = ModeNone
+			if m := reQuoted.FindStringSubmatch(line); m != nil {
+				cmd.VerifyText = quotedMatch(m, 1)
+			}
+			cmd.VerifyNegated = reNotPres.MatchString(upper)
+		}
 
 	// UNCHECK (before CHECK to avoid substring match)
 	case reUncheck.MatchString(upper):
@@ -284,7 +507,7 @@ func parseCommand(line string, lineNum int) (Command, error) {
 
 	// DOUBLE CLICK (before CLICK)
 	case reDoubleClk.MatchString(upper):
-		cmd.Type = CmdClick
+		cmd.Type = CmdDoubleClick
 		cmd.InteractionMode = ModeClickable
 		cmd.Target, cmd.TypeHint = extractTargetAndHint(line)
 
@@ -330,17 +553,29 @@ func parseCommand(line string, lineNum int) (Command, error) {
 		}
 		cmd.TypeHint = "field"
 
-	// CLICK the 'target' [hint] [NEAR 'anchor']
+	// CLICK the 'target' [hint] [NEAR 'anchor'] [ON HEADER|FOOTER] [INSIDE 'container']
 	case reClick.MatchString(upper):
 		cmd.Type = CmdClick
 		cmd.InteractionMode = ModeClickable
 		cmd.Target, cmd.TypeHint = extractTargetAndHint(line)
-		if m := reNear.FindStringSubmatch(line); m != nil {
-			cmd.NearAnchor = quotedMatch(m, 1)
-		}
 
 	default:
 		cmd.Type = CmdUnknown
+	}
+
+	// ── Contextual qualifiers (apply to any target command) ───────────
+
+	if m := reNear.FindStringSubmatch(line); m != nil {
+		cmd.NearAnchor = quotedMatch(m, 1)
+	}
+	if m := reOnRegion.FindStringSubmatch(line); m != nil {
+		cmd.OnRegion = strings.ToLower(m[1])
+	}
+	if m := reInside.FindStringSubmatch(line); m != nil {
+		cmd.InsideContainer = quotedMatch(m, 1)
+		if m2 := reInsideRow.FindStringSubmatch(line); m2 != nil {
+			cmd.InsideRowText = quotedMatch(m2, 1)
+		}
 	}
 
 	return cmd, nil
@@ -397,4 +632,10 @@ func applyVars(cmd *Command, vars map[string]string) {
 	cmd.VerifyText = sub(cmd.VerifyText)
 	cmd.NearAnchor = sub(cmd.NearAnchor)
 	cmd.TypeHint = sub(cmd.TypeHint)
+	cmd.PressTarget = sub(cmd.PressTarget)
+	cmd.ScrollContainer = sub(cmd.ScrollContainer)
+	cmd.InsideContainer = sub(cmd.InsideContainer)
+	cmd.InsideRowText = sub(cmd.InsideRowText)
+	cmd.SetValue = sub(cmd.SetValue)
+	cmd.Condition = sub(cmd.Condition)
 }

@@ -87,6 +87,23 @@ func (t *Targeting) ResolveWithContext(
 	page browser.Page,
 	query, typeHint, mode, nearAnchor string,
 ) (*ResolvedTarget, error) {
+	return t.ResolveWithQualifiers(ctx, page, query, typeHint, mode, nearAnchor, "", "", "")
+}
+
+// RegionQualifiers holds optional ON HEADER/FOOTER and INSIDE qualifiers.
+type RegionQualifiers struct {
+	OnRegion        string // "header" or "footer"
+	InsideContainer string // INSIDE 'Container' target text
+	InsideRowText   string // optional row text for INSIDE 'Container' row with 'Text'
+}
+
+// ResolveWithQualifiers is the full-featured resolution entry point.
+func (t *Targeting) ResolveWithQualifiers(
+	ctx context.Context,
+	page browser.Page,
+	query, typeHint, mode, nearAnchor string,
+	onRegion, insideContainer, insideRowText string,
+) (*ResolvedTarget, error) {
 	// Step 1: Execute in-page JS heuristic probe.
 	// This is the first and primary DOM query — heuristics run here, not later.
 	t.logger.Debug("targeting: probing page for %q (mode=%s, hint=%s, near=%q)", query, mode, typeHint, nearAnchor)
@@ -135,6 +152,17 @@ func (t *Targeting) ResolveWithContext(
 	}
 
 	t.logger.Debug("targeting: %d candidates found for %q", len(snapshot.Elements), query)
+
+	// Step 2b: Region filtering — ON HEADER/FOOTER or INSIDE 'Container'.
+	if onRegion != "" || insideContainer != "" {
+		filtered := t.filterByRegion(ctx, page, snapshot.Elements, onRegion, insideContainer, insideRowText)
+		if len(filtered) > 0 {
+			t.logger.Debug("targeting: region filter reduced %d → %d candidates", len(snapshot.Elements), len(filtered))
+			snapshot.Elements = filtered
+		} else {
+			t.logger.Warn("targeting: region filter matched 0 elements, using full set")
+		}
+	}
 
 	// Step 3: Score and rank all candidates.
 	// Normalization (el.Normalize()) is called inside scorer.Rank().
@@ -389,4 +417,101 @@ func buildAnchorContext(el *dom.ElementSnapshot, anchorText string) *scorer.Anch
 		XPath: el.XPath,
 		Words: words,
 	}
+}
+
+// filterByRegion filters candidate elements by ON HEADER/FOOTER or INSIDE qualifiers.
+//   - ON HEADER: keep elements in the top 15% of viewport height, or inside nav/header tags.
+//   - ON FOOTER: keep elements in the bottom 15% of viewport height, or inside footer tags.
+//   - INSIDE: keep elements whose XPath is a descendant of a container matching the text.
+func (t *Targeting) filterByRegion(
+	ctx context.Context,
+	page browser.Page,
+	elements []dom.ElementSnapshot,
+	onRegion, insideContainer, insideRowText string,
+) []dom.ElementSnapshot {
+
+	// ON HEADER / ON FOOTER — viewport-based region filtering.
+	if onRegion != "" {
+		// Query viewport height via JS.
+		raw, err := page.EvalJS(ctx, "window.innerHeight || document.documentElement.clientHeight || 900")
+		vpHeight := 900.0
+		if err == nil {
+			var h float64
+			if json.Unmarshal(raw, &h) == nil && h > 0 {
+				vpHeight = h
+			}
+		}
+
+		threshold := vpHeight * 0.15
+		var filtered []dom.ElementSnapshot
+		for _, el := range elements {
+			var keep bool
+			switch onRegion {
+			case "header":
+				// Top 15% of viewport, or inside <header>/<nav> by tag or XPath.
+				keep = el.Rect.Top < threshold ||
+					el.Tag == "header" || el.Tag == "nav" ||
+					strings.Contains(strings.ToLower(el.XPath), "/header") ||
+					strings.Contains(strings.ToLower(el.XPath), "/nav")
+			case "footer":
+				keep = el.Rect.Top > vpHeight-threshold ||
+					el.Tag == "footer" ||
+					strings.Contains(strings.ToLower(el.XPath), "/footer")
+			default:
+				keep = true
+			}
+			if keep {
+				filtered = append(filtered, el)
+			}
+		}
+		return filtered
+	}
+
+	// INSIDE 'Container' [row with 'Text'] — XPath prefix filtering.
+	if insideContainer != "" {
+		needle := strings.ToLower(strings.TrimSpace(insideContainer))
+
+		// First find the container element by matching its text/aria against the target.
+		var containerXPath string
+		for _, el := range elements {
+			el.Normalize()
+			for _, sig := range el.AllTextSignals() {
+				if strings.Contains(sig, needle) || sig == needle {
+					containerXPath = el.XPath
+					break
+				}
+			}
+			if containerXPath != "" {
+				break
+			}
+		}
+
+		if containerXPath == "" {
+			return nil // container not found
+		}
+
+		// Walk up to a table row / container boundary if row text is specified.
+		if insideRowText != "" {
+			rowNeedle := strings.ToLower(strings.TrimSpace(insideRowText))
+			for _, el := range elements {
+				el.Normalize()
+				if strings.Contains(el.NormText, rowNeedle) &&
+					(el.Tag == "tr" || el.Tag == "li" || el.Tag == "div") {
+					containerXPath = el.XPath
+					break
+				}
+			}
+		}
+
+		// Filter: keep elements whose XPath starts with the container XPath.
+		var filtered []dom.ElementSnapshot
+		for _, el := range elements {
+			if strings.HasPrefix(el.XPath, containerXPath+"/") || el.XPath == containerXPath {
+				filtered = append(filtered, el)
+			}
+		}
+		return filtered
+	}
+
+	return elements
 }

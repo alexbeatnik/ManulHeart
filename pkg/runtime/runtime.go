@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,12 +22,17 @@ import (
 	"github.com/manulengineer/manulheart/pkg/utils"
 )
 
+// maxLoopIterations caps WHILE loops to prevent infinite execution.
+const maxLoopIterations = 100
+
 // Runtime executes Hunt commands against a browser page.
 type Runtime struct {
-	cfg       config.Config
-	page      browser.Page
-	targeting *core.Targeting
-	logger    *utils.Logger
+	cfg        config.Config
+	page       browser.Page
+	targeting  *core.Targeting
+	logger     *utils.Logger
+	vars       map[string]string   // runtime variables (SET, EXTRACT)
+	softErrors []string            // accumulated VERIFY SOFTLY failures
 }
 
 // New constructs a Runtime for the given page and config.
@@ -35,6 +42,7 @@ func New(cfg config.Config, page browser.Page, logger *utils.Logger) *Runtime {
 		page:      page,
 		targeting: core.NewTargeting(cfg, logger),
 		logger:    logger,
+		vars:      make(map[string]string),
 	}
 }
 
@@ -48,23 +56,84 @@ func (r *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRes
 		TotalSteps: len(hunt.Commands),
 	}
 
-	for i, cmd := range hunt.Commands {
-		execResult := r.executeCommand(ctx, cmd, i)
-		result.Results = append(result.Results, execResult)
-		if execResult.Success {
+	// Seed runtime vars from @var: declarations.
+	for k, v := range hunt.Vars {
+		r.vars[k] = v
+	}
+
+	results, stop := r.executeBlock(ctx, hunt.Commands, hunt.Vars)
+	result.Results = results
+	for _, er := range results {
+		if er.Success {
 			result.Passed++
 		} else {
 			result.Failed++
-			// Stop execution on first failure (fail-fast)
-			r.logger.Error("FAILED [%d] %s → %s", i+1, cmd.Raw, execResult.Error)
-			break
 		}
 	}
+	_ = stop
 
 	result.TotalDuration = time.Since(start)
 	result.TotalDurationMS = result.TotalDuration.Milliseconds()
 	result.Success = result.Failed == 0
+	if len(r.softErrors) > 0 {
+		result.SoftErrors = r.softErrors
+	}
 	return result, nil
+}
+
+// executeBlock runs a slice of commands, handling IF/WHILE/REPEAT blocks.
+// Returns accumulated results and whether to stop (fail-fast).
+func (r *Runtime) executeBlock(ctx context.Context, cmds []dsl.Command, fileVars map[string]string) ([]explain.ExecutionResult, bool) {
+	var results []explain.ExecutionResult
+	i := 0
+
+	for i < len(cmds) {
+		cmd := cmds[i]
+
+		// Substitute runtime variables into command fields before execution.
+		r.applyRuntimeVars(&cmd)
+
+		switch cmd.Type {
+		case dsl.CmdIf:
+			blockResults, endIdx, stop := r.executeIf(ctx, cmds, i, fileVars)
+			results = append(results, blockResults...)
+			if stop {
+				return results, true
+			}
+			i = endIdx + 1
+
+		case dsl.CmdWhile:
+			blockResults, endIdx, stop := r.executeWhile(ctx, cmds, i, fileVars)
+			results = append(results, blockResults...)
+			if stop {
+				return results, true
+			}
+			i = endIdx + 1
+
+		case dsl.CmdRepeat:
+			blockResults, endIdx, stop := r.executeRepeat(ctx, cmds, i, fileVars)
+			results = append(results, blockResults...)
+			if stop {
+				return results, true
+			}
+			i = endIdx + 1
+
+		// Block terminators — should not appear outside their blocks.
+		case dsl.CmdEndIf, dsl.CmdElIf, dsl.CmdElse, dsl.CmdEndWhile, dsl.CmdEndRepeat:
+			i++
+
+		default:
+			idx := len(results)
+			execResult := r.executeCommand(ctx, cmd, idx)
+			results = append(results, execResult)
+			if !execResult.Success {
+				r.logger.Error("FAILED [%d] %s → %s", idx+1, cmd.Raw, execResult.Error)
+				return results, true
+			}
+			i++
+		}
+	}
+	return results, false
 }
 
 // RunStep executes a single raw DSL command string and returns the result.
@@ -109,10 +178,27 @@ func (r *Runtime) executeCommand(ctx context.Context, cmd dsl.Command, idx int) 
 		result.ActionPerformed = "wait"
 		execErr = r.doWait(ctx, cmd, &result)
 
+	case dsl.CmdWaitFor:
+		result.TargetRequired = true
+		result.TargetQuery = cmd.Target
+		result.ActionPerformed = "wait_for"
+		execErr = r.doWaitFor(ctx, cmd, &result)
+
 	case dsl.CmdVerify:
 		result.TargetRequired = false
 		result.ActionPerformed = "verify"
 		execErr = r.doVerify(ctx, cmd, &result)
+
+	case dsl.CmdVerifySoft:
+		result.TargetRequired = false
+		result.ActionPerformed = "verify_softly"
+		execErr = r.doVerifySoft(ctx, cmd, &result)
+
+	case dsl.CmdVerifyField:
+		result.TargetRequired = true
+		result.TargetQuery = cmd.Target
+		result.ActionPerformed = "verify_field"
+		execErr = r.doVerifyField(ctx, cmd, &result)
 
 	case dsl.CmdClick:
 		result.TargetRequired = true
@@ -120,6 +206,13 @@ func (r *Runtime) executeCommand(ctx context.Context, cmd dsl.Command, idx int) 
 		result.TypeHint = cmd.TypeHint
 		result.ActionPerformed = "click"
 		execErr = r.doClick(ctx, cmd, &result)
+
+	case dsl.CmdDoubleClick:
+		result.TargetRequired = true
+		result.TargetQuery = cmd.Target
+		result.TypeHint = cmd.TypeHint
+		result.ActionPerformed = "double_click"
+		execErr = r.doDoubleClick(ctx, cmd, &result)
 
 	case dsl.CmdFill, dsl.CmdType:
 		result.TargetRequired = true
@@ -143,6 +236,27 @@ func (r *Runtime) executeCommand(ctx context.Context, cmd dsl.Command, idx int) 
 		result.TypeHint = cmd.TypeHint
 		result.ActionPerformed = string(cmd.Type)
 		execErr = r.doCheck(ctx, cmd, &result)
+
+	case dsl.CmdScroll:
+		result.TargetRequired = false
+		result.ActionPerformed = "scroll"
+		execErr = r.doScroll(ctx, cmd, &result)
+
+	case dsl.CmdPress:
+		result.TargetRequired = false
+		result.ActionPerformed = "press"
+		execErr = r.doPress(ctx, cmd, &result)
+
+	case dsl.CmdExtract:
+		result.TargetRequired = true
+		result.TargetQuery = cmd.Target
+		result.ActionPerformed = "extract"
+		execErr = r.doExtract(ctx, cmd, &result)
+
+	case dsl.CmdSet:
+		result.TargetRequired = false
+		result.ActionPerformed = "set"
+		execErr = r.doSet(ctx, cmd, &result)
 
 	default:
 		execErr = fmt.Errorf("unknown command type: %s", cmd.Raw)
@@ -405,7 +519,471 @@ func (r *Runtime) doCheck(ctx context.Context, cmd dsl.Command, res *explain.Exe
 	return nil
 }
 
-// ── Shared targeting helper ───────────────────────────────────────────────────
+// ── New command handlers ──────────────────────────────────────────────────────
+
+func (r *Runtime) doScroll(ctx context.Context, cmd dsl.Command, _ *explain.ExecutionResult) error {
+	timeoutCtx, cancel := context.WithTimeout(ctx, r.cfg.DefaultTimeout)
+	defer cancel()
+
+	if err := r.page.ScrollPage(timeoutCtx, cmd.ScrollDirection, cmd.ScrollContainer); err != nil {
+		return fmt.Errorf("SCROLL: %w", err)
+	}
+	// Wait for content to settle after scroll (matches ManulEngine's SCROLL_WAIT).
+	time.Sleep(500 * time.Millisecond)
+	return nil
+}
+
+func (r *Runtime) doPress(ctx context.Context, cmd dsl.Command, res *explain.ExecutionResult) error {
+	timeoutCtx, cancel := context.WithTimeout(ctx, r.cfg.DefaultTimeout)
+	defer cancel()
+
+	// If PRESS Key ON 'Target', focus the target first.
+	if cmd.PressTarget != "" {
+		resolved, err := r.resolveTarget(ctx, dsl.Command{
+			Target:          cmd.PressTarget,
+			InteractionMode: dsl.ModeClickable,
+		}, res)
+		if err != nil {
+			return fmt.Errorf("PRESS: resolve target %q: %w", cmd.PressTarget, err)
+		}
+		if err := r.page.FocusByXPath(timeoutCtx, resolved.Element.XPath); err != nil {
+			r.logger.Debug("PRESS: focus failed (non-fatal): %v", err)
+		}
+	}
+
+	key, modifiers := parseKeyCombo(cmd.PressKey)
+	if err := r.page.DispatchKey(timeoutCtx, key, modifiers); err != nil {
+		return fmt.Errorf("PRESS %q: %w", cmd.PressKey, err)
+	}
+	return nil
+}
+
+func (r *Runtime) doDoubleClick(ctx context.Context, cmd dsl.Command, res *explain.ExecutionResult) error {
+	resolved, err := r.resolveTarget(ctx, cmd, res)
+	if err != nil {
+		return err
+	}
+
+	el := resolved.Element
+	timeoutCtx, cancel := context.WithTimeout(ctx, r.cfg.DefaultTimeout)
+	defer cancel()
+
+	if err := r.page.ScrollIntoView(timeoutCtx, el.XPath); err != nil {
+		r.logger.Debug("scroll into view failed (non-fatal): %v", err)
+	}
+
+	cx := el.Rect.Left + el.Rect.Width/2
+	cy := el.Rect.Top + el.Rect.Height/2
+	if err := r.page.DoubleClick(timeoutCtx, cx, cy); err != nil {
+		return &utils.ActionError{Action: "double_click", Target: cmd.Target, Cause: err}
+	}
+
+	res.WinnerXPath = el.XPath
+	res.WinnerScore = resolved.Score
+	return nil
+}
+
+func (r *Runtime) doExtract(ctx context.Context, cmd dsl.Command, res *explain.ExecutionResult) error {
+	if cmd.ExtractVar == "" {
+		return fmt.Errorf("EXTRACT: no variable name specified (use 'into {var}')")
+	}
+
+	resolved, err := r.resolveTarget(ctx, cmd, res)
+	if err != nil {
+		return err
+	}
+
+	el := resolved.Element
+	timeoutCtx, cancel := context.WithTimeout(ctx, r.cfg.DefaultTimeout)
+	defer cancel()
+
+	// Extract element text via JS.
+	expr := fmt.Sprintf(`(() => {
+		const r = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+		const el = r.singleNodeValue;
+		if (!el) return "";
+		if (el.value !== undefined && el.value !== "") return el.value;
+		return (el.innerText || el.textContent || "").trim();
+	})()`, el.XPath)
+
+	raw, err := r.page.EvalJS(timeoutCtx, expr)
+	if err != nil {
+		return fmt.Errorf("EXTRACT: JS eval failed: %w", err)
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return fmt.Errorf("EXTRACT: unmarshal result: %w", err)
+	}
+
+	r.vars[cmd.ExtractVar] = text
+	r.logger.Info("  → {%s} = %q", cmd.ExtractVar, text)
+
+	res.WinnerXPath = el.XPath
+	res.WinnerScore = resolved.Score
+	return nil
+}
+
+func (r *Runtime) doSet(_ context.Context, cmd dsl.Command, _ *explain.ExecutionResult) error {
+	r.vars[cmd.SetVar] = cmd.SetValue
+	r.logger.Info("  → {%s} = %q", cmd.SetVar, cmd.SetValue)
+	return nil
+}
+
+func (r *Runtime) doVerifySoft(ctx context.Context, cmd dsl.Command, res *explain.ExecutionResult) error {
+	err := r.doVerify(ctx, cmd, res)
+	if err != nil {
+		// Non-fatal: log warning, accumulate, but don't fail.
+		r.softErrors = append(r.softErrors, fmt.Sprintf("line %d: %s", cmd.LineNumber, err.Error()))
+		r.logger.Warn("  ⚠ SOFT VERIFY failed: %s (continuing)", err)
+		res.Success = true // Override — soft verify doesn't fail the run.
+		res.Error = fmt.Sprintf("SOFT: %s", err.Error())
+		return nil
+	}
+	return nil
+}
+
+func (r *Runtime) doVerifyField(ctx context.Context, cmd dsl.Command, res *explain.ExecutionResult) error {
+	resolved, err := r.resolveTarget(ctx, cmd, res)
+	if err != nil {
+		return err
+	}
+
+	el := resolved.Element
+	timeoutCtx, cancel := context.WithTimeout(ctx, r.cfg.VerifyTimeout)
+	defer cancel()
+
+	var jsField string
+	switch cmd.VerifyFieldKind {
+	case "value":
+		jsField = `el.value || el.getAttribute("value") || ""`
+	case "placeholder":
+		jsField = `el.getAttribute("placeholder") || ""`
+	default: // "text"
+		jsField = `(el.innerText || el.textContent || "").trim()`
+	}
+
+	expr := fmt.Sprintf(`(() => {
+		const r = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+		const el = r.singleNodeValue;
+		if (!el) return null;
+		return %s;
+	})()`, el.XPath, jsField)
+
+	raw, jsErr := r.page.EvalJS(timeoutCtx, expr)
+	if jsErr != nil {
+		return fmt.Errorf("VERIFY field: JS eval failed: %w", jsErr)
+	}
+
+	var actual string
+	if err := json.Unmarshal(raw, &actual); err != nil {
+		return fmt.Errorf("VERIFY field: expected %q, but element not found", cmd.Value)
+	}
+
+	expected := strings.ToLower(strings.TrimSpace(cmd.Value))
+	got := strings.ToLower(strings.TrimSpace(actual))
+	if got != expected {
+		return fmt.Errorf("VERIFY: %q field HAS %s — expected %q, got %q",
+			cmd.Target, strings.ToUpper(cmd.VerifyFieldKind), cmd.Value, actual)
+	}
+
+	res.WinnerXPath = el.XPath
+	res.WinnerScore = resolved.Score
+	return nil
+}
+
+func (r *Runtime) doWaitFor(ctx context.Context, cmd dsl.Command, res *explain.ExecutionResult) error {
+	if cmd.Target == "" {
+		return fmt.Errorf("WAIT FOR: no target specified in %q", cmd.Raw)
+	}
+
+	deadline := time.Now().Add(r.cfg.VerifyTimeout)
+	pollInterval := 500 * time.Millisecond
+
+	for {
+		_, pageText, err := r.targeting.ProbeVisibleText(ctx, r.page)
+		if err != nil {
+			return fmt.Errorf("WAIT FOR: probe failed: %w", err)
+		}
+		needle := strings.ToLower(strings.TrimSpace(cmd.Target))
+		found := strings.Contains(pageText, needle)
+
+		switch cmd.WaitForState {
+		case "visible":
+			if found {
+				return nil
+			}
+		case "hidden", "disappear":
+			if !found {
+				return nil
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("WAIT FOR %q to be %s: timed out after %v",
+				cmd.Target, cmd.WaitForState, r.cfg.VerifyTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// ── Control flow ──────────────────────────────────────────────────────────────
+
+// findBlockEnd finds the matching end delimiter for a block starting at startIdx.
+// For IF: finds ENDIF, tracking nested IF/ENDIF pairs.
+// For WHILE: finds ENDWHILE. For REPEAT: finds ENDREPEAT.
+func findBlockEnd(cmds []dsl.Command, startIdx int, startType, endType dsl.CommandType) int {
+	depth := 0
+	for i := startIdx; i < len(cmds); i++ {
+		if cmds[i].Type == startType {
+			depth++
+		} else if cmds[i].Type == endType {
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return len(cmds) - 1 // fallback: end of commands
+}
+
+// executeIf handles IF/ELIF/ELSE/ENDIF blocks.
+func (r *Runtime) executeIf(ctx context.Context, cmds []dsl.Command, startIdx int, fileVars map[string]string) ([]explain.ExecutionResult, int, bool) {
+	endIdx := findBlockEnd(cmds, startIdx, dsl.CmdIf, dsl.CmdEndIf)
+
+	// Collect branches: [{condition, bodyStart, bodyEnd}]
+	type branch struct {
+		condition string
+		start     int
+		end       int
+	}
+	var branches []branch
+	currentStart := startIdx + 1
+
+	for i := startIdx + 1; i <= endIdx; i++ {
+		switch cmds[i].Type {
+		case dsl.CmdElIf:
+			branches = append(branches, branch{
+				condition: cmds[startIdx].Condition,
+				start:     currentStart,
+				end:       i,
+			})
+			// Update the condition for the next branch to this ELIF's condition.
+			startIdx = i
+			currentStart = i + 1
+		case dsl.CmdElse:
+			branches = append(branches, branch{
+				condition: cmds[startIdx].Condition,
+				start:     currentStart,
+				end:       i,
+			})
+			// ELSE is unconditional (empty condition = always true)
+			startIdx = i
+			currentStart = i + 1
+			branches = append(branches, branch{
+				condition: "", // always true
+				start:     currentStart,
+				end:       endIdx,
+			})
+			goto evaluate
+		case dsl.CmdEndIf:
+			branches = append(branches, branch{
+				condition: cmds[startIdx].Condition,
+				start:     currentStart,
+				end:       i,
+			})
+			goto evaluate
+		}
+	}
+
+evaluate:
+	// Evaluate each branch's condition; execute the first truthy one.
+	for _, br := range branches {
+		if br.condition == "" || r.evaluateCondition(ctx, br.condition) {
+			body := cmds[br.start:br.end]
+			results, stop := r.executeBlock(ctx, body, fileVars)
+			return results, endIdx, stop
+		}
+	}
+
+	return nil, endIdx, false
+}
+
+// executeWhile handles WHILE condition: / ENDWHILE blocks.
+func (r *Runtime) executeWhile(ctx context.Context, cmds []dsl.Command, startIdx int, fileVars map[string]string) ([]explain.ExecutionResult, int, bool) {
+	endIdx := findBlockEnd(cmds, startIdx, dsl.CmdWhile, dsl.CmdEndWhile)
+	body := cmds[startIdx+1 : endIdx]
+	condition := cmds[startIdx].Condition
+
+	var allResults []explain.ExecutionResult
+	for iteration := 1; iteration <= maxLoopIterations; iteration++ {
+		if !r.evaluateCondition(ctx, condition) {
+			break
+		}
+		r.vars["i"] = strconv.Itoa(iteration)
+		results, stop := r.executeBlock(ctx, body, fileVars)
+		allResults = append(allResults, results...)
+		if stop {
+			return allResults, endIdx, true
+		}
+	}
+	return allResults, endIdx, false
+}
+
+// executeRepeat handles REPEAT N TIMES / ENDREPEAT blocks.
+func (r *Runtime) executeRepeat(ctx context.Context, cmds []dsl.Command, startIdx int, fileVars map[string]string) ([]explain.ExecutionResult, int, bool) {
+	endIdx := findBlockEnd(cmds, startIdx, dsl.CmdRepeat, dsl.CmdEndRepeat)
+	body := cmds[startIdx+1 : endIdx]
+	count := cmds[startIdx].RepeatCount
+	loopVar := cmds[startIdx].RepeatVar
+
+	var allResults []explain.ExecutionResult
+	for iteration := 1; iteration <= count; iteration++ {
+		r.vars[loopVar] = strconv.Itoa(iteration)
+		r.vars["i"] = strconv.Itoa(iteration)
+		results, stop := r.executeBlock(ctx, body, fileVars)
+		allResults = append(allResults, results...)
+		if stop {
+			return allResults, endIdx, true
+		}
+	}
+	return allResults, endIdx, false
+}
+
+// evaluateCondition checks a condition string against runtime state.
+// Supports: text 'X' is present, text 'X' is not present,
+// {var} == 'value', {var} != 'value', {var} contains 'substring', {var} (truthy).
+func (r *Runtime) evaluateCondition(ctx context.Context, cond string) bool {
+	condLower := strings.ToLower(strings.TrimSpace(cond))
+
+	// text 'X' is present / text 'X' is not present
+	if strings.HasPrefix(condLower, "text ") || strings.Contains(condLower, "is present") || strings.Contains(condLower, "is not present") {
+		m := reQuotedSimple.FindStringSubmatch(cond)
+		if m == nil {
+			return false
+		}
+		needle := strings.ToLower(strings.TrimSpace(m[1]))
+		_, pageText, err := r.targeting.ProbeVisibleText(ctx, r.page)
+		if err != nil {
+			return false
+		}
+		found := strings.Contains(pageText, needle)
+		if strings.Contains(condLower, "not present") {
+			return !found
+		}
+		return found
+	}
+
+	// {var} == 'value' / {var} != 'value'
+	if strings.Contains(cond, "==") || strings.Contains(cond, "!=") {
+		var parts []string
+		var isNeg bool
+		if strings.Contains(cond, "!=") {
+			parts = strings.SplitN(cond, "!=", 2)
+			isNeg = true
+		} else {
+			parts = strings.SplitN(cond, "==", 2)
+		}
+		if len(parts) == 2 {
+			varVal := r.resolveVar(strings.TrimSpace(parts[0]))
+			expected := unquote(strings.TrimSpace(parts[1]))
+			if isNeg {
+				return !strings.EqualFold(varVal, expected)
+			}
+			return strings.EqualFold(varVal, expected)
+		}
+	}
+
+	// {var} contains 'substring'
+	if strings.Contains(condLower, " contains ") {
+		parts := strings.SplitN(condLower, " contains ", 2)
+		if len(parts) == 2 {
+			varVal := strings.ToLower(r.resolveVar(strings.TrimSpace(parts[0])))
+			sub := unquote(strings.TrimSpace(parts[1]))
+			return strings.Contains(varVal, strings.ToLower(sub))
+		}
+	}
+
+	// {var} — truthy check (non-empty and not 'false'/'0'/'none')
+	v := r.resolveVar(strings.TrimSpace(cond))
+	return v != "" && v != "false" && v != "0" && v != "none"
+}
+
+// reQuotedSimple is a simple single+double quote extractor for conditions.
+var reQuotedSimple = regexp.MustCompile(`(?:"([^"]*)"|'([^']*)')`)
+
+// resolveVar resolves a {varName} reference or returns the string as-is.
+func (r *Runtime) resolveVar(s string) string {
+	s = strings.TrimPrefix(s, "{")
+	s = strings.TrimSuffix(s, "}")
+	if v, ok := r.vars[s]; ok {
+		return v
+	}
+	return s
+}
+
+// unquote strips surrounding single or double quotes from a string.
+func unquote(s string) string {
+	if len(s) >= 2 {
+		if (s[0] == '\'' && s[len(s)-1] == '\'') || (s[0] == '"' && s[len(s)-1] == '"') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
+}
+
+// applyRuntimeVars substitutes {varName} from runtime vars into command fields.
+func (r *Runtime) applyRuntimeVars(cmd *dsl.Command) {
+	if len(r.vars) == 0 {
+		return
+	}
+	sub := func(s string) string {
+		for k, v := range r.vars {
+			s = strings.ReplaceAll(s, "{"+k+"}", v)
+		}
+		return s
+	}
+	cmd.URL = sub(cmd.URL)
+	cmd.Target = sub(cmd.Target)
+	cmd.Value = sub(cmd.Value)
+	cmd.VerifyText = sub(cmd.VerifyText)
+	cmd.NearAnchor = sub(cmd.NearAnchor)
+	cmd.TypeHint = sub(cmd.TypeHint)
+	cmd.PressTarget = sub(cmd.PressTarget)
+	cmd.ScrollContainer = sub(cmd.ScrollContainer)
+	cmd.InsideContainer = sub(cmd.InsideContainer)
+	cmd.InsideRowText = sub(cmd.InsideRowText)
+	cmd.SetValue = sub(cmd.SetValue)
+	cmd.Condition = sub(cmd.Condition)
+}
+
+// parseKeyCombo parses "Control+A" or "Enter" into key name and modifier bitmask.
+func parseKeyCombo(combo string) (key string, modifiers int) {
+	parts := strings.Split(combo, "+")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		switch strings.ToLower(p) {
+		case "control", "ctrl":
+			modifiers |= 2
+		case "alt":
+			modifiers |= 1
+		case "meta", "command", "cmd":
+			modifiers |= 4
+		case "shift":
+			modifiers |= 8
+		default:
+			key = p
+		}
+	}
+	if key == "" {
+		key = combo
+	}
+	return
+}
 
 func (r *Runtime) resolveTarget(ctx context.Context, cmd dsl.Command, res *explain.ExecutionResult) (*core.ResolvedTarget, error) {
 	if cmd.Target == "" {
@@ -416,7 +994,10 @@ func (r *Runtime) resolveTarget(ctx context.Context, cmd dsl.Command, res *expla
 	defer cancel()
 
 	mode := string(cmd.InteractionMode)
-	resolved, err := r.targeting.ResolveWithContext(timeoutCtx, r.page, cmd.Target, cmd.TypeHint, mode, cmd.NearAnchor)
+	resolved, err := r.targeting.ResolveWithQualifiers(
+		timeoutCtx, r.page, cmd.Target, cmd.TypeHint, mode, cmd.NearAnchor,
+		cmd.OnRegion, cmd.InsideContainer, cmd.InsideRowText,
+	)
 	if err != nil {
 		return nil, err
 	}

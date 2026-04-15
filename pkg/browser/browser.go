@@ -47,6 +47,17 @@ type Page interface {
 	// ScrollIntoView scrolls the element at the given XPath into the viewport.
 	ScrollIntoView(ctx context.Context, xpath string) error
 
+	// ScrollPage scrolls the page or a container by the viewport height.
+	// direction is "down" or "up". container is a CSS selector (empty = window).
+	ScrollPage(ctx context.Context, direction, container string) error
+
+	// DoubleClick performs a double-click at the given viewport coordinates.
+	DoubleClick(ctx context.Context, x, y float64) error
+
+	// DispatchKey dispatches a keyboard event. key is the key name (e.g. "Enter").
+	// modifiers is a bitmask: 1=Alt, 2=Ctrl, 4=Meta, 8=Shift.
+	DispatchKey(ctx context.Context, key string, modifiers int) error
+
 	// CurrentURL returns the current page URL.
 	CurrentURL(ctx context.Context) (string, error)
 
