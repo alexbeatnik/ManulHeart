@@ -3,6 +3,7 @@
 package browser
 
 import (
+	"os"
 	"os/exec"
 	"time"
 )
@@ -13,7 +14,7 @@ func setProcGroup(cmd *exec.Cmd) {
 	// Chrome child processes will be terminated via Process.Kill().
 }
 
-// Close terminates the Chrome process on Windows.
+// Close terminates the Chrome process on Windows and cleans up the profile directory.
 func (cp *ChromeProcess) Close() error {
 	if cp.cmd == nil || cp.cmd.Process == nil {
 		return nil
@@ -27,6 +28,11 @@ func (cp *ChromeProcess) Close() error {
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
+	}
+
+	// Clean up owned temp directory
+	if cp.ownsDataDir && cp.userDataDir != "" {
+		_ = os.RemoveAll(cp.userDataDir)
 	}
 	return nil
 }

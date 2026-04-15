@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Go 1.22+ (module requires Go 1.26)
+- Go 1.26+ (required by module)
 - Google Chrome (or Chromium) installed
 - A terminal
 

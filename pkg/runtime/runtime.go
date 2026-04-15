@@ -244,25 +244,33 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 		}
 
 	case dsl.CmdExtract:
-		raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
+		// Use dedicated extraction probe which handles tables/text nodes
+		target := rt.resolveVariables(cmd.Target)
+		hint := "" // we could extract hint from cmd if needed
+		params := []string{target, hint}
+		
+		val, errProbe := rt.page.CallProbe(ctx, heuristics.BuildExtractProbe(), params)
 		if errProbe != nil {
 			err = errProbe
 			break
 		}
-		elements, _ := heuristics.ParseProbeResult(raw)
-		target := rt.resolveVariables(cmd.Target)
-		ranked := scorer.Rank(target, "", "none", elements, 1, nil)
-		if len(ranked) == 0 {
-			err = fmt.Errorf("extract target not found: %q", target)
+		
+		extracted := ""
+		if s, ok := val.(string); ok {
+			extracted = s
+		} else if b, ok := val.([]byte); ok {
+			extracted = string(b)
+		} else {
+			// fallback/numeric
+			extracted = fmt.Sprintf("%v", val)
+		}
+
+		if extracted == "" || extracted == "null" {
+			err = fmt.Errorf("extract target not found or empty: %q", target)
 			break
 		}
-		val := ranked[0].Element.Value
-		if val == "" {
-			val = ranked[0].Element.VisibleText
-		}
-		rt.vars.Set(cmd.ExtractVar, val, LevelRow)
-		rt.logger.Info("Extracted '%s' into {%s}", val, cmd.ExtractVar)
-
+		rt.vars.Set(cmd.ExtractVar, extracted, LevelRow)
+		rt.logger.Info("Extracted '%s' into {%s}", extracted, cmd.ExtractVar)
 
 	case dsl.CmdScroll:
 		if scroller, ok := rt.page.(interface {
