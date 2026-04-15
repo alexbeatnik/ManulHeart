@@ -242,11 +242,19 @@ func FocusByXPath(ctx context.Context, c *Conn, xpath string) error {
 }
 
 // SetInputValue sets the value of an input element resolved by XPath.
+// Uses the native HTMLInputElement/HTMLTextAreaElement value setter to
+// bypass framework-level overrides (React, Vue, etc.) that intercept
+// the value property on individual elements.
 func SetInputValue(ctx context.Context, c *Conn, xpath, value string) error {
 	js := fmt.Sprintf(`
 		var el = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
 		if (el) {
-			el.value = %q;
+			// Use the native value setter so React/Vue/Angular state updates fire.
+			var proto = el instanceof HTMLTextAreaElement
+				? HTMLTextAreaElement.prototype
+				: HTMLInputElement.prototype;
+			var nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+			nativeSetter.call(el, %q);
 			el.dispatchEvent(new Event('input', { bubbles: true }));
 			el.dispatchEvent(new Event('change', { bubbles: true }));
 		}

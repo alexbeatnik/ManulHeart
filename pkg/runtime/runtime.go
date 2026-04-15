@@ -12,6 +12,7 @@ import (
 
 	"github.com/manulengineer/manulheart/pkg/browser"
 	"github.com/manulengineer/manulheart/pkg/config"
+	"github.com/manulengineer/manulheart/pkg/dom"
 	"github.com/manulengineer/manulheart/pkg/dsl"
 	"github.com/manulengineer/manulheart/pkg/explain"
 	"github.com/manulengineer/manulheart/pkg/heuristics"
@@ -116,6 +117,24 @@ func (rt *Runtime) RunStep(ctx context.Context, rawStep string) (*StepResult, er
 	}, execErr
 }
 
+func (rt *Runtime) resolveAnchor(ctx context.Context, label string, elements []dom.ElementSnapshot) (*scorer.AnchorContext, error) {
+	if label == "" {
+		return nil, nil
+	}
+	label = rt.resolveVariables(label)
+	// Anchor resolution uses "none" mode to allow matching any structural element (div, span, etc.)
+	ranked := scorer.Rank(label, "", string(dsl.ModeNone), elements, 1, nil)
+	if len(ranked) == 0 {
+		return nil, fmt.Errorf("near anchor not found: %q", label)
+	}
+	winner := ranked[0].Element
+	return &scorer.AnchorContext{
+		Rect:  winner.Rect,
+		XPath: winner.XPath,
+		Words: scorer.SignificantWords(winner.VisibleText),
+	}, nil
+}
+
 // executeCommand runs a single DSL command and returns its execution result.
 func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain.ExecutionResult, error) {
 	res := explain.ExecutionResult{
@@ -170,7 +189,13 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 			targetPath = rt.resolveVariables(cmd.SetVar)
 		}
 
-		ranked := scorer.Rank(targetPath, cmd.TypeHint, string(mode), elements, 5, nil)
+		anchor, errAnchor := rt.resolveAnchor(ctx, cmd.NearAnchor, elements)
+		if errAnchor != nil {
+			err = errAnchor
+			break
+		}
+
+		ranked := scorer.Rank(targetPath, cmd.TypeHint, string(mode), elements, 5, anchor)
 		if len(ranked) == 0 {
 			err = fmt.Errorf("target not found: %q", targetPath)
 			break
@@ -198,6 +223,13 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 				err = fmt.Errorf("center calc: %w", e)
 			} else {
 				err = rt.page.Click(ctx, x, y)
+				if err == nil {
+					// A click may trigger navigation (e.g. Login button).
+					// Brief pause lets the browser begin the navigation so
+					// WaitForLoad does not see stale readyState=="complete".
+					time.Sleep(300 * time.Millisecond)
+					_ = rt.page.WaitForLoad(ctx)
+				}
 			}
 		case dsl.CmdDoubleClick:
 			x, y, e := rt.page.GetElementCenter(ctx, winner.XPath)
@@ -279,17 +311,24 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 		}
 
 	case dsl.CmdVerify:
-		// Lightweight text presence check via dedicated probe
+		// Lightweight text presence check via dedicated probe with a small retry loop
 		target := rt.resolveVariables(cmd.VerifyText)
-		raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildVisibleTextProbe(), nil)
-		if errProbe != nil {
-			err = errProbe
-			break
+		var present bool
+		var pageText string
+		deadline := time.Now().Add(2 * time.Second)
+
+		for {
+			raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildVisibleTextProbe(), nil)
+			if errProbe == nil {
+				pageText = strings.ToLower(string(raw))
+				present = strings.Contains(pageText, strings.ToLower(target))
+			}
+			if present || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
 		}
-		
-		pageText := strings.ToLower(string(raw))
-		present := strings.Contains(pageText, strings.ToLower(target))
-		
+
 		if cmd.VerifyNegated {
 			if present {
 				err = fmt.Errorf("verification failed: '%s' is present, but expected NOT to be", target)

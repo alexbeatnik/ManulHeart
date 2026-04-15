@@ -57,9 +57,31 @@ func (p *CDPPage) Navigate(ctx context.Context, url string) error {
 	if err := cdp.Navigate(ctx, p.conn, url); err != nil {
 		return err
 	}
-	// Use JS-polling WaitForLoad instead of the event-based cdp.WaitForLoad.
-	// The event-based approach misses Page.loadEventFired when the page loads
-	// from cache (very fast) before the handler is registered.
+
+	// Two-phase wait to avoid the "stale readyState" race condition:
+	// Phase 1 — wait for readyState to leave "complete", indicating
+	//   the browser has begun the new navigation. We cap this at 500ms
+	//   so same-page navigations (anchors, cached pages) don't hang.
+	phase1Deadline := time.Now().Add(500 * time.Millisecond)
+	const poll = 50 * time.Millisecond
+	for time.Now().Before(phase1Deadline) {
+		raw, err := cdp.Evaluate(ctx, p.conn, "document.readyState")
+		if err != nil {
+			// JS eval can fail briefly during navigation — that itself
+			// means the navigation has started.
+			break
+		}
+		if stateStr, ok := raw.(string); ok && stateStr != "complete" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(poll):
+		}
+	}
+
+	// Phase 2 — wait for the new page to reach readyState=="complete".
 	return p.WaitForLoad(ctx)
 }
 
