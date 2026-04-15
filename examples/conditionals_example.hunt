@@ -57,4 +57,4 @@ STEP 5: Variable-based conditional
     IF {count} != '0':
         CLICK the 'Notifications' button
         VERIFY that 'Notifications Panel' is present
-    DONE.
+DONE.

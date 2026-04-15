@@ -394,9 +394,10 @@ func SetInputValue(ctx context.Context, conn *Conn, xpath, value string) error {
 		if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
 			el.innerText = %q;
 		} else {
-			const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-				window.HTMLInputElement.prototype, 'value') ||
-				Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+			const proto = el.tagName === 'TEXTAREA'
+				? window.HTMLTextAreaElement.prototype
+				: window.HTMLInputElement.prototype;
+			const nativeInputValueSetter = Object.getOwnPropertyDescriptor(proto, 'value');
 			if (nativeInputValueSetter && nativeInputValueSetter.set) {
 				nativeInputValueSetter.set.call(el, %q);
 			} else {
