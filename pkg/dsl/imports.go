@@ -14,7 +14,21 @@ import (
 //
 // Blueprint blocks are stored in hunt.Blueprints keyed by their STEP name.
 // If aliases are specified, the alias name is used as the key.
+//
+// Circular imports are detected and reported as an error.
 func ResolveImports(hunt *Hunt) error {
+	visited := map[string]bool{}
+	if hunt.SourcePath != "" {
+		resolved, err := filepath.Abs(hunt.SourcePath)
+		if err == nil {
+			visited[resolved] = true
+		}
+	}
+	return resolveImports(hunt, visited)
+}
+
+// resolveImports is the internal recursive implementation with cycle detection.
+func resolveImports(hunt *Hunt, visited map[string]bool) error {
 	if len(hunt.Imports) == 0 {
 		return nil
 	}
@@ -30,12 +44,34 @@ func ResolveImports(hunt *Hunt) error {
 
 	for _, imp := range hunt.Imports {
 		importPath := filepath.Join(baseDir, imp.Source)
+
+		// Resolve to absolute path for reliable cycle detection.
+		absImportPath, err := filepath.Abs(importPath)
+		if err != nil {
+			absImportPath = importPath
+		}
+
+		if visited[absImportPath] {
+			return fmt.Errorf("circular import detected: %s imports %s which creates a cycle",
+				hunt.SourcePath, imp.Source)
+		}
+
 		if _, err := os.Stat(importPath); err != nil {
 			return fmt.Errorf("import %q: file not found: %s", imp.Source, importPath)
 		}
 
 		imported, err := ParseFile(importPath)
 		if err != nil {
+			return fmt.Errorf("import %q: %w", imp.Source, err)
+		}
+
+		// Recurse with the visited set extended by the newly imported path.
+		visitedChild := make(map[string]bool, len(visited)+1)
+		for k, v := range visited {
+			visitedChild[k] = v
+		}
+		visitedChild[absImportPath] = true
+		if err := resolveImports(imported, visitedChild); err != nil {
 			return fmt.Errorf("import %q: %w", imp.Source, err)
 		}
 

@@ -7,6 +7,27 @@ package explain
 
 import "time"
 
+// SignalBreakdown is a named map of signal name → score value used by the
+// legacy scorer API. New code should use ScoreBreakdown instead.
+type SignalBreakdown map[string]float64
+
+// CandidateResult is the legacy scoring result type kept for backward compatibility.
+// New code should use scorer.RankedCandidate instead.
+type CandidateResult struct {
+	// NodeID is the engine-assigned element identifier.
+	NodeID string `json:"node_id,omitempty"`
+	// TagName is the HTML tag name.
+	TagName string `json:"tag_name,omitempty"`
+	// TextContent is the visible text of the element.
+	TextContent string `json:"text_content,omitempty"`
+	// RawScore is the raw weighted signal sum.
+	RawScore float64 `json:"raw_score"`
+	// Score is the normalized score in [0.0, 1.0].
+	Score float64 `json:"score"`
+	// Signals holds the per-signal contribution values.
+	Signals SignalBreakdown `json:"signals,omitempty"`
+}
+
 // ScoreBreakdown records the contribution of each scoring signal to the final score.
 type ScoreBreakdown struct {
 	// ExactTextMatch is the score contribution from exact visible-text matching.

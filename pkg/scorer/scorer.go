@@ -1,18 +1,11 @@
-// Package scorer implements the deterministic, normalized scoring engine
-// for ManulHeart candidate ranking.
+// Package scorer implements ManulHeart's deterministic multi-signal element scoring.
 //
-// The scorer assigns a score in [0.0, 1.0] to each DOM candidate element
-// relative to a target query. Multiple scoring channels are computed
-// independently and combined with channel weights. The final score is
-// normalized to [0.0, 1.0].
+// The primary entry points are:
+//   - Score(query, typeHint, mode, el, anchor) → explain.ScoreBreakdown
+//   - Rank(query, typeHint, mode, elements, topN, anchor) → []RankedCandidate
 //
-// Scoring channels (matching ManulEngine's architecture):
-//
-//	Text     (weight 0.45) — exact/normalized text, aria-label, placeholder, data-qa, name
-//	ID       (weight 0.25) — html id, data-testid variants
-//	Semantic (weight 0.60) — tag/role alignment with interaction mode, type-hint match
-//	Penalty  (multiplier ) — disabled ×0.0, hidden ×0.1, normal ×1.0
-//	Proximity(weight 0.10) — DOM depth / contextual proximity
+// Scoring is pure, stateless, and deterministic: same inputs always produce the
+// same output. No randomness, no LLM calls.
 package scorer
 
 import (
@@ -24,194 +17,181 @@ import (
 	"github.com/manulengineer/manulheart/pkg/explain"
 )
 
-// Weights define the relative contribution of each scoring channel.
-var Weights = struct {
-	Text      float64
-	ID        float64
-	Semantic  float64
-	Proximity float64
-}{
-	Text:      0.45,
-	ID:        0.25,
-	Semantic:  0.60,
-	Proximity: 0.10,
-}
+// ── Public types ──────────────────────────────────────────────────────────────
 
-// AnchorContext holds the fully-resolved context for a NEAR qualifier.
-// It matches ManulEngine's approach: Euclidean pixel distance is blended
-// with DOM ancestry affinity, and anchor word tokens enable entity-level
-// dev-attribute matching (e.g. add-to-cart-sauce-labs-fleece-jacket).
+// AnchorContext holds the resolved context for a NEAR qualifier.
+// When non-nil, proximity and attribute-affinity signals are activated.
 type AnchorContext struct {
-	// Rect is the bounding box of the resolved anchor element.
+	// Rect is the bounding box of the anchor element.
 	Rect dom.Rect
-	// XPath is the deterministic XPath of the anchor element.
-	// Used to compute DOM ancestry affinity.
+	// XPath is the XPath of the anchor element (for DOM ancestry affinity).
 	XPath string
-	// Words are lower-case ≥3-char tokens from the anchor text.
-	// Used for entity-level dev-attribute affinity scoring.
+	// Words are the significant words extracted from the anchor's visible text,
+	// used to match candidate attributes like id/class/data-qa.
 	Words []string
 }
 
-// Score computes the normalized score breakdown for a single candidate element
-// against a normalized target query string and mode.
-//
-//   - query   — lowercase target text extracted from the DSL command
-//   - typeHint — optional element-type hint (button, link, field, …)
-//   - mode    — interaction mode (clickable, input, checkbox, select)
-//   - el      — the candidate element snapshot
-//   - anchor  — optional resolved NEAR anchor context (nil = no NEAR)
+// RankedCandidate is a scored element with its full explain breakdown.
+type RankedCandidate struct {
+	// Element is the DOM snapshot of this candidate.
+	Element dom.ElementSnapshot
+	// Explain holds the full scoring breakdown (scores, signals, rank, chosen).
+	Explain explain.Candidate
+}
+
+// ── Primary API ───────────────────────────────────────────────────────────────
+
+// Score computes the full scoring breakdown for a single element.
+// query is the normalized lowercased target text from the DSL.
+// typeHint is the element type keyword from the DSL (button, link, field, …).
+// mode is the interaction mode: "clickable", "input", "checkbox", "select", "none".
+// anchor is optional; when non-nil, proximity and attribute-affinity are scored.
 func Score(query, typeHint, mode string, el *dom.ElementSnapshot, anchor *AnchorContext) explain.ScoreBreakdown {
-	q := strings.ToLower(strings.TrimSpace(query))
+	if el.IsDisabled {
+		return explain.ScoreBreakdown{Total: 0.0}
+	}
 
-	bd := explain.ScoreBreakdown{}
+	q := norm(query)
 
-	// ── Text channel ──────────────────────────────────────────────────
-	bd.ExactTextMatch = scoreExactText(q, el)
-	bd.NormalizedTextMatch = scoreNormText(q, el)
-	bd.LabelMatch = scoreLabelText(q, el)
-	bd.PlaceholderMatch = scorePlaceholder(q, el)
-	bd.AriaMatch = scoreAria(q, el)
-	bd.DataQAMatch = scoreDataQA(q, el)
+	// ── Text signals ──────────────────────────────────────────────────────────
+	exactText := scoreExactText(q, el)
+	normText := scoreNormText(q, el)
+	labelMatch := scoreLabel(q, el)
+	placeholder := scorePlaceholder(q, el)
+	aria := scoreAria(q, el)
+	dataQA := scoreDataQA(q, el)
+	htmlID := scoreID(q, el)
 
-	textRaw := bd.ExactTextMatch + bd.NormalizedTextMatch + bd.LabelMatch +
-		bd.PlaceholderMatch + bd.AriaMatch + bd.DataQAMatch
+	// ── Structural signals ────────────────────────────────────────────────────
+	tagSem := scoreTagSemantics(mode, el)
+	typeHintScore := scoreTypeHint(typeHint, el)
+	depth := scoreDepth(el)
+	className := scoreClassName(q, el)
 
-	// ── ID channel ────────────────────────────────────────────────────
-	bd.IDMatch = scoreID(q, el)
+	// ── Visibility / interactability ─────────────────────────────────────────
+	vis := 1.0
+	if !el.IsVisible || el.IsHidden {
+		vis = 0.1
+	}
+	interact := 1.0
+	if el.IsDisabled {
+		interact = 0.0
+	}
+
+	// ── Proximity (NEAR qualifier) ────────────────────────────────────────────
+	proximity := 0.0
 	anchorAttr := 0.0
 	if anchor != nil {
+		proximity = scoreNear(el, anchor)
 		anchorAttr = scoreAnchorAttrAffinity(anchor, el)
 	}
-	idRaw := bd.IDMatch + scoreClassName(q, el)
 
-	// ── Semantic channel ──────────────────────────────────────────────
-	bd.TagSemantics = scoreTagSemantics(mode, el)
-	bd.TypeHintAlignment = scoreTypeHint(typeHint, el)
-	semanticRaw := bd.TagSemantics + bd.TypeHintAlignment
+	// ── Weighted total ────────────────────────────────────────────────────────
+	// Weights are calibrated to match ManulEngine's scoring behavior.
+	// Text signals dominate; structural signals break ties.
+	raw := exactText*1.0 +
+		normText*0.7 +
+		labelMatch*0.85 +
+		placeholder*0.6 +
+		aria*0.7 +
+		dataQA*0.8 +
+		htmlID*0.5 +
+		tagSem*0.6 +
+		typeHintScore*0.5 +
+		depth*0.05 +
+		className*0.15 +
+		proximity*0.4 +
+		anchorAttr*0.35
 
-	// ── Visibility & interactability ──────────────────────────────────
-	if el.IsVisible {
-		bd.VisibilityScore = 1.0
-	} else {
-		bd.VisibilityScore = 0.1
+	// Normalize to [0, 1] using the sum of max possible weights.
+	const maxRaw = 1.0 + 0.7 + 0.85 + 0.6 + 0.7 + 0.8 + 0.5 + 0.6 + 0.5 + 0.05 + 0.4 + 0.35 + 0.15
+	total := clamp(raw/maxRaw, 0, 1)
+
+	// Apply visibility penalty (hidden elements can still score but rank low).
+	total = total * vis * interact
+
+	bd := explain.ScoreBreakdown{
+		ExactTextMatch:       exactText,
+		NormalizedTextMatch:  normText,
+		LabelMatch:           labelMatch,
+		PlaceholderMatch:     placeholder,
+		AriaMatch:            aria,
+		DataQAMatch:          dataQA,
+		IDMatch:              htmlID,
+		TagSemantics:         tagSem,
+		TypeHintAlignment:    typeHintScore,
+		VisibilityScore:      vis,
+		InteractabilityScore: interact,
+		ProximityScore:       proximity,
+		RawScore:             raw,
+		Total:                total,
 	}
-	if !el.IsDisabled {
-		bd.InteractabilityScore = 1.0
-	} else {
-		bd.InteractabilityScore = 0.0
-	}
-
-	// ── Proximity ─────────────────────────────────────────────────────
-	// NEAR: linear decay to 500 px hard cutoff, blended with DOM ancestry
-	// affinity (spatial*0.45 + domAffinity*0.55) — matching ManulEngine.
-	// Anchor attr affinity is added into the proximity score (capped at 1.0)
-	// so it competes directly with spatial distance with the full 1.5 weight
-	// boost — this prevents physically-adjacent cards from beating the correct
-	// in-card button when the card is tall.
-	// Weight is boosted to 1.5 when contextual hint is active.
-	proximityWeight := Weights.Proximity
-	if anchor != nil {
-		near := scoreNear(el, anchor)
-		bd.ProximityScore = math.Min(1.0, near+anchorAttr)
-		proximityWeight = 1.5
-	} else {
-		bd.ProximityScore = scoreDepth(el)
-	}
-
-	// ── Penalty multiplier ────────────────────────────────────────────
-	penalty := 1.0
-	if el.IsDisabled {
-		penalty = 0.0
-	} else if el.IsHidden {
-		penalty = 0.1
-	}
-
-	// ── Combine channels ──────────────────────────────────────────────
-	weighted := textRaw*Weights.Text +
-		idRaw*Weights.ID +
-		semanticRaw*Weights.Semantic +
-		bd.ProximityScore*proximityWeight
-
-	// Apply penalty: raw for sorting, clamped for display.
-	raw := weighted * penalty
-	bd.RawScore = raw
-	bd.Total = clamp(raw, 0.0, 1.0)
-
 	return bd
 }
 
-// RankedCandidate pairs a scored element with its explain.Candidate.
-type RankedCandidate struct {
-	Element  *dom.ElementSnapshot
-	Explain  explain.Candidate
-}
-
-// Rank scores all elements against the query and returns them sorted by score descending.
-// At most topN candidates are returned in the result (all are scored regardless).
-// anchor is the fully-resolved NEAR anchor context (nil = no contextual proximity).
+// Rank scores all elements and returns up to topN candidates sorted by total
+// score descending. The first element in the returned slice has Chosen=true.
+// anchor is optional; pass nil when no NEAR qualifier is active.
 func Rank(query, typeHint, mode string, elements []dom.ElementSnapshot, topN int, anchor *AnchorContext) []RankedCandidate {
+	q := norm(query)
+
 	type scored struct {
-		el    *dom.ElementSnapshot
-		score explain.ScoreBreakdown
+		elem  dom.ElementSnapshot
+		bd    explain.ScoreBreakdown
+		idx   int // original DOM position for stable tie-breaking
 	}
 
-	all := make([]scored, len(elements))
+	all := make([]scored, 0, len(elements))
 	for i := range elements {
 		el := &elements[i]
-		el.Normalize()
-		all[i] = scored{el: el, score: Score(query, typeHint, mode, el, anchor)}
+		bd := Score(q, typeHint, mode, el, anchor)
+		all = append(all, scored{elem: *el, bd: bd, idx: i})
 	}
 
-	// Sort by unclipped RawScore so that NEAR/attr differentiation survives
-	// when all candidates saturate the [0,1] clamped Total.
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].score.RawScore > all[j].score.RawScore
+	// Sort: highest total first; DOM order as deterministic tie-breaker.
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].bd.Total != all[j].bd.Total {
+			return all[i].bd.Total > all[j].bd.Total
+		}
+		return all[i].idx < all[j].idx // earlier in DOM wins on tie
 	})
 
-	limit := len(all)
-	if topN > 0 && topN < limit {
-		limit = topN
+	if topN > 0 && len(all) > topN {
+		all = all[:topN]
 	}
 
-	result := make([]RankedCandidate, limit)
-	for i := 0; i < limit; i++ {
-		s := all[i]
-		signals := buildSignals(s.score)
-		result[i] = RankedCandidate{
-			Element: s.el,
-			Explain: explain.Candidate{
-				Rank:        i + 1,
-				XPath:       s.el.XPath,
-				Tag:         s.el.Tag,
-				Role:        s.el.Role,
-				VisibleText: s.el.VisibleText,
-				AriaLabel:   s.el.AriaLabel,
-				Placeholder: s.el.Placeholder,
-				DataQA:      s.el.DataQA,
-				ID:          s.el.HTMLId,
-				IsVisible:   s.el.IsVisible,
-				IsEnabled:   !s.el.IsDisabled,
-				IsEditable:  s.el.IsEditable,
-				Score:       s.score,
-				Signals:     signals,
-				Chosen:      i == 0,
-			},
+	result := make([]RankedCandidate, 0, len(all))
+	for rank, s := range all {
+		sigs := buildSignals(s.bd)
+		c := explain.Candidate{
+			Rank:        rank + 1,
+			XPath:       s.elem.XPath,
+			Tag:         s.elem.Tag,
+			Role:        s.elem.Role,
+			VisibleText: s.elem.VisibleText,
+			AriaLabel:   s.elem.AriaLabel,
+			Placeholder: s.elem.Placeholder,
+			DataQA:      s.elem.DataQA,
+			ID:          s.elem.HTMLId,
+			IsVisible:   s.elem.IsVisible,
+			IsEnabled:   !s.elem.IsDisabled,
+			IsEditable:  s.elem.IsEditable,
+			Score:       s.bd,
+			Signals:     sigs,
+			Chosen:      rank == 0,
 		}
+		result = append(result, RankedCandidate{Element: s.elem, Explain: c})
 	}
-
-	// Only the top candidate is "chosen"
-	if len(result) > 1 {
-		for i := 1; i < len(result); i++ {
-			result[i].Explain.Chosen = false
-		}
-	}
-
 	return result
 }
 
-// ── Individual scoring functions ──────────────────────────────────────────────
+// ── Scoring signal functions ──────────────────────────────────────────────────
 
+// scoreExactText returns 1.0 for an exact normalized text match, 0 otherwise.
 func scoreExactText(q string, el *dom.ElementSnapshot) float64 {
+	if q == "" {
+		return 0.0
+	}
 	for _, s := range el.AllTextSignals() {
 		if s == q {
 			return 1.0
@@ -220,43 +200,27 @@ func scoreExactText(q string, el *dom.ElementSnapshot) float64 {
 	return 0.0
 }
 
+// scoreNormText returns a partial score for substring or word-overlap matches
+// across all text signals of the element.
 func scoreNormText(q string, el *dom.ElementSnapshot) float64 {
+	if q == "" {
+		return 0.0
+	}
 	best := 0.0
 	for _, s := range el.AllTextSignals() {
-		// Substring containment
-		if strings.Contains(s, q) || strings.Contains(q, s) {
-			sc := substringScore(q, s)
-			if sc > best {
-				best = sc
-			}
+		if s == "" {
+			continue
 		}
-	}
-	// Word-overlap for multi-word queries: check significant query words
-	// against the combined text of all signals. This handles queries like
-	// "CPU of Chrome" matching a table cell whose label is "CPU Chrome".
-	if sigWords := significantWords(q); len(sigWords) >= 2 {
-		all := strings.Join(el.AllTextSignals(), " ")
-		hits := 0
-		for _, w := range sigWords {
-			if strings.Contains(all, w) {
-				hits++
-			}
-		}
-		coverage := float64(hits) / float64(len(sigWords))
-		if coverage >= 1.0 {
-			if sc := 0.7; sc > best {
-				best = sc
-			}
-		} else if coverage > 0.5 {
-			if sc := 0.3; sc > best {
-				best = sc
-			}
+		sc := partialMatch(q, s)
+		if sc > best {
+			best = sc
 		}
 	}
 	return best
 }
 
-func scoreLabelText(q string, el *dom.ElementSnapshot) float64 {
+// scoreLabel returns how well the element's associated <label> text matches.
+func scoreLabel(q string, el *dom.ElementSnapshot) float64 {
 	if el.NormLabelText == "" {
 		return 0.0
 	}
@@ -266,8 +230,7 @@ func scoreLabelText(q string, el *dom.ElementSnapshot) float64 {
 	if strings.Contains(el.NormLabelText, q) {
 		return 0.5
 	}
-	// Word-overlap: for multi-word queries like "CPU of Chrome",
-	// check if all significant words appear in the label.
+	// Word-overlap for multi-word queries like "CPU of Chrome".
 	if sigWords := significantWords(q); len(sigWords) >= 2 {
 		hits := 0
 		for _, w := range sigWords {
@@ -286,6 +249,7 @@ func scoreLabelText(q string, el *dom.ElementSnapshot) float64 {
 	return 0.0
 }
 
+// scorePlaceholder returns how well the element's placeholder attribute matches.
 func scorePlaceholder(q string, el *dom.ElementSnapshot) float64 {
 	if el.NormPlaceholder == "" {
 		return 0.0
@@ -299,6 +263,7 @@ func scorePlaceholder(q string, el *dom.ElementSnapshot) float64 {
 	return 0.0
 }
 
+// scoreAria returns how well the element's aria-label matches.
 func scoreAria(q string, el *dom.ElementSnapshot) float64 {
 	if el.NormAriaLabel == "" {
 		return 0.0
@@ -312,6 +277,7 @@ func scoreAria(q string, el *dom.ElementSnapshot) float64 {
 	return 0.0
 }
 
+// scoreDataQA returns how well the element's data-qa / data-testid matches.
 func scoreDataQA(q string, el *dom.ElementSnapshot) float64 {
 	if el.NormDataQA == "" {
 		return 0.0
@@ -325,12 +291,12 @@ func scoreDataQA(q string, el *dom.ElementSnapshot) float64 {
 	return 0.0
 }
 
+// scoreID returns how well the element's html id attribute matches.
 func scoreID(q string, el *dom.ElementSnapshot) float64 {
 	if el.NormHTMLId == "" {
 		return 0.0
 	}
 	normalized := el.NormHTMLId
-	// Check exact, with-dashes, with-underscores variants
 	variants := []string{
 		q,
 		strings.ReplaceAll(q, " ", "-"),
@@ -356,8 +322,6 @@ func scoreTagSemantics(mode string, el *dom.ElementSnapshot) float64 {
 
 	switch mode {
 	case "none", "locate":
-		// Locate mode: prefer text-bearing elements, no strong tag preference.
-		// Used by EXTRACT, WAIT FOR, and similar text-finding commands.
 		if tag == "td" || tag == "th" || tag == "li" || tag == "span" ||
 			tag == "p" || tag == "dd" || tag == "dt" || tag == "figcaption" || tag == "caption" {
 			return 0.2
@@ -371,7 +335,6 @@ func scoreTagSemantics(mode string, el *dom.ElementSnapshot) float64 {
 		if tag == "option" {
 			return 0.15
 		}
-		// Clickable elements still valid but no preference
 		if tag == "button" || tag == "a" || tag == "input" || tag == "select" {
 			return 0.1
 		}
@@ -396,7 +359,7 @@ func scoreTagSemantics(mode string, el *dom.ElementSnapshot) float64 {
 		if role == "checkbox" || role == "radio" || role == "switch" {
 			return 0.4
 		}
-		// Penalty for non-checkbox in checkbox mode
+		// Penalty for non-checkbox elements in checkbox mode.
 		if tag == "button" || tag == "a" {
 			return -0.3
 		}
@@ -428,7 +391,8 @@ func scoreTagSemantics(mode string, el *dom.ElementSnapshot) float64 {
 	}
 }
 
-// scoreTypeHint returns a score for how well the element matches the explicit type hint.
+// scoreTypeHint returns a score for how well the element matches the explicit
+// type hint extracted from the DSL command ("button", "link", "field", …).
 func scoreTypeHint(hint string, el *dom.ElementSnapshot) float64 {
 	if hint == "" {
 		return 0.0
@@ -475,24 +439,23 @@ func scoreTypeHint(hint string, el *dom.ElementSnapshot) float64 {
 	return 0.0
 }
 
-// scoreDepth returns a small proximity score based on XPath depth.
-// Shallower elements in the DOM get a slight bonus.
+// scoreDepth returns a small bonus for shallower DOM elements.
+// Score decays gently: depth 3 → 0.9, depth 10 → 0.5, depth 20+ → 0.1.
 func scoreDepth(el *dom.ElementSnapshot) float64 {
 	depth := strings.Count(el.XPath, "/")
 	if depth <= 0 {
 		return 0.5
 	}
-	// Score decays gently: depth 3 → 0.9, depth 10 → 0.5, depth 20+ → 0.1
 	return clamp(1.0-0.04*float64(depth-3), 0.1, 1.0)
 }
 
-// scoreNear returns a [0.0, 1.0] proximity score for a NEAR qualifier,
-// matching ManulEngine's _score_proximity implementation:
-//   - Linear decay: max(0, 1 - dist/500) with hard cutoff at 500 px.
-//   - Blended with DOM ancestry affinity when both XPaths are available:
-//     score = spatial*0.45 + domAffinity*0.55
-//   This helps card/list layouts prefer the button in the same product card
-//   over a slightly closer button in an adjacent card.
+// scoreNear returns a [0.0, 1.0] proximity score for a NEAR qualifier.
+// Uses linear spatial decay blended with DOM ancestry affinity:
+//
+//	score = spatial*0.45 + domAffinity*0.55
+//
+// This helps card/list layouts prefer the button in the same product card
+// over a slightly closer button in an adjacent card.
 func scoreNear(el *dom.ElementSnapshot, anchor *AnchorContext) float64 {
 	const threshold = 500.0
 	cx := el.Rect.Left + el.Rect.Width/2
@@ -509,7 +472,6 @@ func scoreNear(el *dom.ElementSnapshot, anchor *AnchorContext) float64 {
 		return spatialScore
 	}
 
-	// Compute XPath common-prefix depth ratio (DOM ancestry affinity).
 	anchorParts := xpathParts(anchor.XPath)
 	candidateParts := xpathParts(el.XPath)
 	commonDepth := 0
@@ -566,8 +528,7 @@ func scoreAnchorAttrAffinity(anchor *AnchorContext, el *dom.ElementSnapshot) flo
 }
 
 // scoreClassName computes a word-overlap score between the query and the
-// element's CSS class names. Matches ManulEngine's context-word scoring on
-// dev attributes (cls_n variable in _score_attributes), capped at 0.4.
+// element's CSS class names.
 func scoreClassName(q string, el *dom.ElementSnapshot) float64 {
 	if el.ClassName == "" || q == "" {
 		return 0.0
@@ -586,6 +547,46 @@ func scoreClassName(q string, el *dom.ElementSnapshot) float64 {
 	return math.Min(float64(hits)*0.08, 0.4)
 }
 
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
+// partialMatch returns a [0, 1] score for a substring or word-overlap match
+// between query q and candidate text s (both pre-normalized).
+//
+// It does NOT do reverse-containment: only s.contains(q), not q.contains(s).
+// Reverse-containment was removed because it caused short elements (e.g. "Update")
+// to score the same as longer ones (e.g. "Update Profile") for query "Update Profile".
+func partialMatch(q, s string) float64 {
+	if q == "" || s == "" {
+		return 0.0
+	}
+	if s == q {
+		return 1.0
+	}
+	// Forward containment only: element text contains the query.
+	if strings.Contains(s, q) {
+		ratio := float64(len(q)) / float64(len(s))
+		return clamp(ratio, 0.4, 0.95)
+	}
+	// Word-overlap with stop-word filtering and minimum word length.
+	return wordOverlap(q, s)
+}
+
+// wordOverlap returns the fraction of significant query words found in s.
+// Minimum word length ≥ 2 and stop-word filtering prevent single-char false positives.
+func wordOverlap(q, s string) float64 {
+	qWords := significantWords(q)
+	if len(qWords) == 0 {
+		return 0.0
+	}
+	hits := 0
+	for _, w := range qWords {
+		if strings.Contains(s, w) {
+			hits++
+		}
+	}
+	return clamp(float64(hits)/float64(len(qWords)), 0, 1)
+}
+
 // xpathParts splits an XPath string into its non-empty path components.
 func xpathParts(xpath string) []string {
 	var parts []string
@@ -597,10 +598,7 @@ func xpathParts(xpath string) []string {
 	return parts
 }
 
-// ── Utilities ─────────────────────────────────────────────────────────────────
-
-// stopWords are common English function words that carry no targeting signal.
-// They are excluded from word-overlap matching to avoid false positives.
+// stopWords are common English function words excluded from word-overlap matching.
 var stopWords = map[string]bool{
 	"a": true, "an": true, "the": true, "of": true, "in": true,
 	"for": true, "to": true, "is": true, "on": true, "at": true,
@@ -609,8 +607,7 @@ var stopWords = map[string]bool{
 	"as": true, "are": true, "was": true, "were": true, "not": true,
 }
 
-// significantWords returns the query words that carry targeting signal,
-// filtering out common stop words and very short tokens.
+// significantWords returns query words with length ≥ 2 and not a stop word.
 func significantWords(s string) []string {
 	var words []string
 	for _, w := range strings.Fields(s) {
@@ -621,18 +618,12 @@ func significantWords(s string) []string {
 	return words
 }
 
-func substringScore(query, candidate string) float64 {
-	if query == candidate {
-		return 0.9
-	}
-	ql, cl := float64(len(query)), float64(len(candidate))
-	if ql == 0 || cl == 0 {
-		return 0.0
-	}
-	ratio := math.Min(ql, cl) / math.Max(ql, cl)
-	return ratio * 0.5
+// norm lowercases and trims a string (consistent with dom.ElementSnapshot.Normalize).
+func norm(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
+// clamp constrains v to [min, max].
 func clamp(v, min, max float64) float64 {
 	if v < min {
 		return min
@@ -643,6 +634,8 @@ func clamp(v, min, max float64) float64 {
 	return v
 }
 
+// buildSignals converts a ScoreBreakdown into the human-readable signal list
+// used by --explain mode and the JSON output.
 func buildSignals(bd explain.ScoreBreakdown) []explain.CandidateSignal {
 	var signals []explain.CandidateSignal
 	add := func(name string, score float64) {
@@ -659,5 +652,59 @@ func buildSignals(bd explain.ScoreBreakdown) []explain.CandidateSignal {
 	add("html_id", bd.IDMatch)
 	add("tag_semantics", bd.TagSemantics)
 	add("type_hint", bd.TypeHintAlignment)
+	add("proximity", bd.ProximityScore)
 	return signals
 }
+
+// ── Legacy compatibility shims ────────────────────────────────────────────────
+// These keep any callers of the old API compiling.
+
+// ScoreCandidate is the legacy scoring entry point kept for backward compatibility.
+// New code should call Score() directly.
+func ScoreCandidate(elem dom.ElementSnapshot, intent Intent, _ Weights, _ map[string]dom.ElementSnapshot) explain.CandidateResult {
+	bd := Score(intent.Text, intent.Role, "clickable", &elem, nil)
+	return explain.CandidateResult{
+		NodeID:      elem.HTMLId,
+		TagName:     elem.Tag,
+		TextContent: elem.VisibleText,
+		RawScore:    bd.RawScore,
+		Score:       bd.Total,
+		Signals:     nil,
+	}
+}
+
+// RankCandidates is the legacy ranking entry point kept for backward compatibility.
+func RankCandidates(elements []dom.ElementSnapshot, intent Intent, weights Weights) []explain.CandidateResult {
+	ranked := Rank(intent.Text, intent.Role, "clickable", elements, 0, nil)
+	out := make([]explain.CandidateResult, 0, len(ranked))
+	for _, r := range ranked {
+		out = append(out, explain.CandidateResult{
+			NodeID:      r.Element.HTMLId,
+			TagName:     r.Element.Tag,
+			TextContent: r.Element.VisibleText,
+			RawScore:    r.Explain.Score.RawScore,
+			Score:       r.Explain.Score.Total,
+			Signals:     nil,
+		})
+	}
+	return out
+}
+
+// Intent is the legacy targeting intent type.
+type Intent struct {
+	Text             string
+	Role             string
+	NearAnchorNodeID string
+}
+
+// Weights is the legacy signal-weight map.
+type Weights map[Signal]float64
+
+// Signal is a named scoring channel.
+type Signal string
+
+// DefaultWeights returns the default signal weights (legacy API).
+func DefaultWeights() Weights { return Weights{} }
+
+// weight looks up a signal weight (legacy helper).
+func (w Weights) weight(_ Signal) float64 { return 0 }

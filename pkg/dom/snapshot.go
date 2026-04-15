@@ -153,9 +153,11 @@ func (e *ElementSnapshot) AllTextSignals() []string {
 	return out
 }
 
-// norm lowercases and trims a string.
+// norm lowercases and collapses internal whitespace, identical to the scorer's
+// normalize function. Using the same normalization everywhere ensures that
+// "First  Name" (double space) compares equal to query "first name".
 func norm(s string) string {
-	return strings.ToLower(strings.TrimSpace(s))
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(s))), " ")
 }
 
 // PageSnapshot is the result of a full DOM probe: all candidate elements plus

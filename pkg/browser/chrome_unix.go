@@ -3,6 +3,7 @@
 package browser
 
 import (
+	"os"
 	"os/exec"
 	"syscall"
 	"time"
@@ -32,6 +33,10 @@ func (cp *ChromeProcess) Close() error {
 	case <-time.After(3 * time.Second):
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 		<-done
+	}
+	// Remove the temp profile directory if we created it.
+	if cp.ownsDataDir && cp.userDataDir != "" {
+		_ = os.RemoveAll(cp.userDataDir)
 	}
 	return nil
 }

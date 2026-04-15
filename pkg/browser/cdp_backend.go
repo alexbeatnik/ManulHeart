@@ -193,9 +193,13 @@ func (p *CDPPage) WaitForLoad(ctx context.Context) error {
 	}
 }
 
-func (p *CDPPage) Wait(_ context.Context, duration time.Duration) error {
-	time.Sleep(duration)
-	return nil
+func (p *CDPPage) Wait(ctx context.Context, duration time.Duration) error {
+	select {
+	case <-time.After(duration):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (p *CDPPage) Close() error {

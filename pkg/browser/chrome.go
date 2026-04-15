@@ -18,16 +18,18 @@ import (
 
 // ChromeProcess manages a Chrome browser process spawned for automation.
 type ChromeProcess struct {
-	cmd         *exec.Cmd
-	port        int
-	userDataDir string
+	cmd            *exec.Cmd
+	port           int
+	userDataDir    string
+	ownsDataDir    bool // true when we created the dir and should clean it up
 }
 
 // ChromeOptions configures the Chrome process to spawn.
 type ChromeOptions struct {
 	// Port for Chrome's remote debugging protocol. Default: 9222.
 	Port int
-	// UserDataDir is the Chrome profile directory. Default: /tmp/manulheart-chrome.
+	// UserDataDir is the Chrome profile directory.
+	// If empty, a unique temp directory is created per run and cleaned up on Close.
 	UserDataDir string
 	// DisableGPU disables GPU acceleration. Default: true.
 	DisableGPU bool
@@ -36,25 +38,40 @@ type ChromeOptions struct {
 }
 
 // DefaultChromeOptions returns sensible defaults for automation.
+// UserDataDir is left empty so LaunchChrome creates a unique temp directory.
 func DefaultChromeOptions() ChromeOptions {
 	return ChromeOptions{
-		Port:        9222,
-		UserDataDir: "/tmp/manulheart-chrome",
-		DisableGPU:  true,
-		Headless:    false,
+		Port:       9222,
+		DisableGPU: true,
+		Headless:   false,
 	}
 }
 
 // LaunchChrome starts a Chrome process with remote debugging enabled.
 // It blocks until Chrome's CDP endpoint is reachable (or context expires).
+// If opts.UserDataDir is empty, a unique temp directory is created and owned
+// by the returned ChromeProcess (removed when Close is called).
 func LaunchChrome(ctx context.Context, opts ChromeOptions) (*ChromeProcess, error) {
 	chromePath, err := findChrome()
 	if err != nil {
 		return nil, err
 	}
 
+	ownsDir := false
+	if opts.UserDataDir == "" {
+		dir, err := os.MkdirTemp("", "manulheart-chrome-*")
+		if err != nil {
+			return nil, fmt.Errorf("create chrome temp dir: %w", err)
+		}
+		opts.UserDataDir = dir
+		ownsDir = true
+	}
+
 	// Write Chrome preferences to disable password manager at profile level.
 	if err := writeAutomationPrefs(opts.UserDataDir); err != nil {
+		if ownsDir {
+			_ = os.RemoveAll(opts.UserDataDir)
+		}
 		return nil, fmt.Errorf("write chrome prefs: %w", err)
 	}
 
@@ -104,6 +121,7 @@ func LaunchChrome(ctx context.Context, opts ChromeOptions) (*ChromeProcess, erro
 		cmd:         cmd,
 		port:        opts.Port,
 		userDataDir: opts.UserDataDir,
+		ownsDataDir: ownsDir,
 	}
 
 	// Wait for CDP endpoint to become reachable.
@@ -166,15 +184,19 @@ func findChrome() (string, error) {
 }
 
 // waitForCDP polls the CDP /json endpoint until it responds or timeout expires.
+// Uses context.WithTimeout so both the outer context deadline and the
+// internal timeout are respected — whichever fires first wins.
 func waitForCDP(ctx context.Context, endpoint string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	url := endpoint + "/json"
 	client := &http.Client{Timeout: 2 * time.Second}
 
-	for time.Now().Before(deadline) {
+	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("timeout waiting for CDP at %s: %w", endpoint, ctx.Err())
 		default:
 		}
 
@@ -182,7 +204,11 @@ func waitForCDP(ctx context.Context, endpoint string, timeout time.Duration) err
 		u, _ := neturl.Parse(endpoint)
 		conn, err := net.DialTimeout("tcp", u.Host, 500*time.Millisecond)
 		if err != nil {
-			time.Sleep(200 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("timeout waiting for CDP at %s: %w", endpoint, ctx.Err())
+			case <-time.After(200 * time.Millisecond):
+			}
 			continue
 		}
 		conn.Close()
@@ -195,10 +221,12 @@ func waitForCDP(ctx context.Context, endpoint string, timeout time.Duration) err
 				return nil
 			}
 		}
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for CDP at %s: %w", endpoint, ctx.Err())
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
-
-	return fmt.Errorf("timeout waiting for CDP at %s", endpoint)
 }
 
 // writeAutomationPrefs writes a Chrome Preferences file that disables the
