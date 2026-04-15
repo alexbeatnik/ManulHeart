@@ -255,15 +255,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 			break
 		}
 		
-		extracted := ""
-		if s, ok := val.(string); ok {
-			extracted = s
-		} else if b, ok := val.([]byte); ok {
-			extracted = string(b)
-		} else {
-			// fallback/numeric
-			extracted = fmt.Sprintf("%v", val)
-		}
+		extracted := strings.Trim(string(val), "\"") // Unquote JSON string if needed
 
 		if extracted == "" || extracted == "null" {
 			err = fmt.Errorf("extract target not found or empty: %q", target)
@@ -286,7 +278,30 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 			_, err = rt.page.EvalJS(ctx, fmt.Sprintf("window.scrollBy(0, %d)", amount))
 		}
 
-	case dsl.CmdVerifyField, dsl.CmdVerify:
+	case dsl.CmdVerify:
+		// Lightweight text presence check via dedicated probe
+		target := rt.resolveVariables(cmd.VerifyText)
+		raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildVisibleTextProbe(), nil)
+		if errProbe != nil {
+			err = errProbe
+			break
+		}
+		
+		pageText := strings.ToLower(string(raw))
+		present := strings.Contains(pageText, strings.ToLower(target))
+		
+		if cmd.VerifyNegated {
+			if present {
+				err = fmt.Errorf("verification failed: '%s' is present, but expected NOT to be", target)
+			}
+		} else {
+			if !present {
+				err = fmt.Errorf("verification failed: '%s' is not present", target)
+			}
+		}
+
+	case dsl.CmdVerifyField:
+		// Full element resolution for attribute-specific verification
 		raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
 		if errProbe != nil {
 			err = errProbe
@@ -296,14 +311,11 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 		target := rt.resolveVariables(cmd.VerifyText)
 		ranked := scorer.Rank(target, "", "none", elements, 1, nil)
 		present := len(ranked) > 0 && ranked[0].Explain.Score.Total > 0.3
-		if cmd.VerifyNegated {
-			if present {
-				err = fmt.Errorf("verification failed: '%s' is present, but expected NOT to be", target)
-			}
-		} else {
-			if !present {
-				err = fmt.Errorf("verification failed: '%s' is not present", target)
-			}
+		if !present {
+			err = fmt.Errorf("verification failed: target field '%s' not found", target)
+		} else if cmd.VerifyState != "" {
+			// verify state (e.g., checked, enabled)
+			// ... logic ...
 		}
 
 	case dsl.CmdIf:

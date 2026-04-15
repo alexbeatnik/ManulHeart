@@ -103,9 +103,10 @@ func (sv *ScopedVariables) Interpolate(s string) string {
 
 	for _, k := range keys {
 		v := flat[k]
-		s = strings.ReplaceAll(s, "$"+k, v)
+		// Replace braced forms first to avoid partial replacement by bare $k
 		s = strings.ReplaceAll(s, "${"+k+"}", v)
 		s = strings.ReplaceAll(s, "{"+k+"}", v)
+		s = strings.ReplaceAll(s, "$"+k, v)
 	}
 	return s
 }

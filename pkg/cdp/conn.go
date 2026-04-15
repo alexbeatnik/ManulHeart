@@ -134,7 +134,7 @@ func (c *Conn) Subscribe() <-chan *msgResp {
 }
 
 // Unsubscribe removes an event listener channel.
-func (c *Conn) Unsubscribe(ch chan *msgResp) {
+func (c *Conn) Unsubscribe(ch <-chan *msgResp) {
 	c.subsMu.Lock()
 	defer c.subsMu.Unlock()
 	for i, sub := range c.eventSubs {

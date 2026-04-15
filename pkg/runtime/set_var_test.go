@@ -40,7 +40,10 @@ func TestRuntime_SetVar(t *testing.T) {
 		SetVar:   "total",
 		SetValue: "$100",
 	}
-	rt.executeCommand(ctx, cmd2)
+	_, err = rt.executeCommand(ctx, cmd2)
+	if err != nil {
+		t.Fatalf("executeCommand cmd2 failed: %v", err)
+	}
 
 	// Verify interpolation of previous variable
 	sv := dsl.Command{

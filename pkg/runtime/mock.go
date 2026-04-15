@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/manulengineer/manulheart/pkg/dom"
@@ -36,7 +37,25 @@ func (m *MockPage) EvalJS(ctx context.Context, expr string) ([]byte, error) {
 }
 
 func (m *MockPage) CallProbe(ctx context.Context, fn string, arg any) ([]byte, error) {
-	// We ignore the actual JS function and just return our pre-defined snapshots.
+	// If it's a data extraction probe, we simulate the logic:
+	// Find element matching the target text from arg and return its value/text.
+	if strings.Contains(fn, "classified") && strings.Contains(fn, "allTables") { // Simple detection for extract_data.js
+		params, _ := arg.([]string)
+		if len(params) > 0 {
+			target := strings.ToLower(params[0])
+			for _, el := range m.Elements {
+				if strings.Contains(strings.ToLower(el.VisibleText), target) || strings.ToLower(el.Tag) == target {
+					if el.Value != "" {
+						return []byte(el.Value), nil
+					}
+					return []byte(el.VisibleText), nil
+				}
+			}
+		}
+		return []byte("null"), nil
+	}
+
+	// Default: return the all-elements snapshot
 	res := dom.PageSnapshot{
 		URL:         m.URL,
 		VisibleText: "Mock Page Content",
