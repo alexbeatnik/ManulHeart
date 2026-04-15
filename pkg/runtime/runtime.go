@@ -20,6 +20,7 @@ import (
 	"github.com/manulengineer/manulheart/pkg/core"
 	"github.com/manulengineer/manulheart/pkg/dsl"
 	"github.com/manulengineer/manulheart/pkg/explain"
+	"github.com/manulengineer/manulheart/pkg/heuristics"
 	"github.com/manulengineer/manulheart/pkg/utils"
 )
 
@@ -690,27 +691,32 @@ func (r *Runtime) doExtract(ctx context.Context, cmd dsl.Command, res *explain.E
 		return fmt.Errorf("EXTRACT: no variable name specified (use 'into {var}')")
 	}
 
-	resolved, err := r.resolveTarget(ctx, cmd, res)
-	if err != nil {
-		return err
-	}
+	target := strings.ToLower(cmd.Target)
 
-	el := resolved.Element
+	// Build hint: strip stop words from the target to get context keywords.
+	// E.g. "CPU of Chrome" → "cpu chrome", "Price of Master In Selenium" → "price master selenium"
+	stopWords := map[string]bool{
+		"a": true, "an": true, "the": true, "of": true, "in": true,
+		"for": true, "to": true, "is": true, "on": true, "at": true,
+		"by": true, "or": true, "and": true, "with": true, "from": true,
+		"that": true, "this": true, "text": true, "value": true,
+	}
+	var hintWords []string
+	for _, w := range strings.Fields(target) {
+		if !stopWords[w] && len(w) > 1 {
+			hintWords = append(hintWords, w)
+		}
+	}
+	hint := strings.Join(hintWords, " ")
+
 	timeoutCtx, cancel := context.WithTimeout(ctx, r.cfg.DefaultTimeout)
 	defer cancel()
 
-	// Extract element text via JS.
-	expr := fmt.Sprintf(`(() => {
-		const r = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-		const el = r.singleNodeValue;
-		if (!el) return "";
-		if (el.value !== undefined && el.value !== "") return el.value;
-		return (el.innerText || el.textContent || "").trim();
-	})()`, el.XPath)
-
-	raw, err := r.page.EvalJS(timeoutCtx, expr)
+	// Use the dedicated extract probe (matching ManulEngine's EXTRACT_DATA_JS).
+	probeArg := []any{target, hint}
+	raw, err := r.page.CallProbe(timeoutCtx, heuristics.ExtractDataProbe(), probeArg)
 	if err != nil {
-		return fmt.Errorf("EXTRACT: JS eval failed: %w", err)
+		return fmt.Errorf("EXTRACT: probe failed: %w", err)
 	}
 
 	var text string
@@ -718,11 +724,36 @@ func (r *Runtime) doExtract(ctx context.Context, cmd dsl.Command, res *explain.E
 		return fmt.Errorf("EXTRACT: unmarshal result: %w", err)
 	}
 
+	text = strings.TrimSpace(text)
+	if text == "" {
+		// Fallback to DOM scoring pipeline if the dedicated probe found nothing.
+		resolved, err := r.resolveTarget(ctx, cmd, res)
+		if err != nil {
+			return err
+		}
+		el := resolved.Element
+		expr := fmt.Sprintf(`(() => {
+			const r = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+			const el = r.singleNodeValue;
+			if (!el) return "";
+			if (el.value !== undefined && el.value !== "") return el.value;
+			return (el.innerText || el.textContent || "").trim();
+		})()`, el.XPath)
+		raw2, err := r.page.EvalJS(timeoutCtx, expr)
+		if err != nil {
+			return fmt.Errorf("EXTRACT: JS eval failed: %w", err)
+		}
+		if err := json.Unmarshal(raw2, &text); err != nil {
+			return fmt.Errorf("EXTRACT: unmarshal result: %w", err)
+		}
+		text = strings.TrimSpace(text)
+		res.WinnerXPath = el.XPath
+		res.WinnerScore = resolved.Score
+	}
+
 	r.vars[cmd.ExtractVar] = text
 	r.logger.Info("  → {%s} = %q", cmd.ExtractVar, text)
 
-	res.WinnerXPath = el.XPath
-	res.WinnerScore = resolved.Score
 	return nil
 }
 

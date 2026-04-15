@@ -231,6 +231,28 @@ func scoreNormText(q string, el *dom.ElementSnapshot) float64 {
 			}
 		}
 	}
+	// Word-overlap for multi-word queries: check significant query words
+	// against the combined text of all signals. This handles queries like
+	// "CPU of Chrome" matching a table cell whose label is "CPU Chrome".
+	if sigWords := significantWords(q); len(sigWords) >= 2 {
+		all := strings.Join(el.AllTextSignals(), " ")
+		hits := 0
+		for _, w := range sigWords {
+			if strings.Contains(all, w) {
+				hits++
+			}
+		}
+		coverage := float64(hits) / float64(len(sigWords))
+		if coverage >= 1.0 {
+			if sc := 0.7; sc > best {
+				best = sc
+			}
+		} else if coverage > 0.5 {
+			if sc := 0.3; sc > best {
+				best = sc
+			}
+		}
+	}
 	return best
 }
 
@@ -243,6 +265,23 @@ func scoreLabelText(q string, el *dom.ElementSnapshot) float64 {
 	}
 	if strings.Contains(el.NormLabelText, q) {
 		return 0.5
+	}
+	// Word-overlap: for multi-word queries like "CPU of Chrome",
+	// check if all significant words appear in the label.
+	if sigWords := significantWords(q); len(sigWords) >= 2 {
+		hits := 0
+		for _, w := range sigWords {
+			if strings.Contains(el.NormLabelText, w) {
+				hits++
+			}
+		}
+		coverage := float64(hits) / float64(len(sigWords))
+		if coverage >= 1.0 {
+			return 0.6
+		}
+		if coverage > 0.5 {
+			return 0.3
+		}
 	}
 	return 0.0
 }
@@ -316,6 +355,28 @@ func scoreTagSemantics(mode string, el *dom.ElementSnapshot) float64 {
 	role := strings.ToLower(el.Role)
 
 	switch mode {
+	case "none", "locate":
+		// Locate mode: prefer text-bearing elements, no strong tag preference.
+		// Used by EXTRACT, WAIT FOR, and similar text-finding commands.
+		if tag == "td" || tag == "th" || tag == "li" || tag == "span" ||
+			tag == "p" || tag == "dd" || tag == "dt" || tag == "figcaption" || tag == "caption" {
+			return 0.2
+		}
+		if len(tag) == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6' {
+			return 0.25
+		}
+		if tag == "div" || tag == "section" || tag == "article" {
+			return 0.15
+		}
+		if tag == "option" {
+			return 0.15
+		}
+		// Clickable elements still valid but no preference
+		if tag == "button" || tag == "a" || tag == "input" || tag == "select" {
+			return 0.1
+		}
+		return 0.05
+
 	case "input":
 		if tag == "input" || tag == "textarea" {
 			return 0.5
@@ -537,6 +598,28 @@ func xpathParts(xpath string) []string {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
+
+// stopWords are common English function words that carry no targeting signal.
+// They are excluded from word-overlap matching to avoid false positives.
+var stopWords = map[string]bool{
+	"a": true, "an": true, "the": true, "of": true, "in": true,
+	"for": true, "to": true, "is": true, "on": true, "at": true,
+	"by": true, "or": true, "and": true, "with": true, "from": true,
+	"that": true, "this": true, "it": true, "its": true, "be": true,
+	"as": true, "are": true, "was": true, "were": true, "not": true,
+}
+
+// significantWords returns the query words that carry targeting signal,
+// filtering out common stop words and very short tokens.
+func significantWords(s string) []string {
+	var words []string
+	for _, w := range strings.Fields(s) {
+		if len(w) >= 2 && !stopWords[w] {
+			words = append(words, w)
+		}
+	}
+	return words
+}
 
 func substringScore(query, candidate string) float64 {
 	if query == candidate {

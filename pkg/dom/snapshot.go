@@ -113,6 +113,9 @@ func (e *ElementSnapshot) IsInteractive(mode string) bool {
 	}
 	switch mode {
 	case "input":
+		if e.Tag == "input" && e.InputType == "file" {
+			return false
+		}
 		return e.IsEditable || e.Tag == "input" || e.Tag == "textarea" ||
 			e.Role == "textbox" || e.Role == "spinbutton" || e.Role == "slider"
 	case "checkbox":

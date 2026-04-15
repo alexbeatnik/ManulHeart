@@ -225,11 +225,11 @@ var (
 	reDoubleClk = regexp.MustCompile(`(?i)\bDOUBLE\s+CLICK\b`)
 	reFill      = regexp.MustCompile(`(?i)\bFILL\b`)
 	reType      = regexp.MustCompile(`(?i)\bTYPE\b`)
-	reSelect    = regexp.MustCompile(`(?i)\bSELECT\b`)
+	reSelect    = regexp.MustCompile(`(?i)^SELECT\b`)
 	reCheck     = regexp.MustCompile(`(?i)\bCHECK\b`)
 	reUncheck   = regexp.MustCompile(`(?i)\bUNCHECK\b`)
-	reVerify    = regexp.MustCompile(`(?i)\bVERIFY\b`)
-	reVerifySoft = regexp.MustCompile(`(?i)\bVERIFY\s+SOFTLY\b`)
+	reVerify    = regexp.MustCompile(`(?i)^VERIFY\b`)
+	reVerifySoft = regexp.MustCompile(`(?i)^VERIFY\s+SOFTLY\b`)
 	reVerifyHas = regexp.MustCompile(`(?i)\bHAS\s+(TEXT|VALUE|PLACEHOLDER)\b`)
 	reWait      = regexp.MustCompile(`(?i)^WAIT\s+(\d+(?:\.\d+)?)`)
 	reWaitFor   = regexp.MustCompile(`(?i)^WAIT\s+FOR\b`)
@@ -237,7 +237,7 @@ var (
 	reNotPres   = regexp.MustCompile(`(?i)\bNOT\s+PRESENT\b`)
 	reScroll    = regexp.MustCompile(`(?i)^SCROLL\b`)
 	reScrollDir = regexp.MustCompile(`(?i)\b(DOWN|UP)\b`)
-	reScrollIn  = regexp.MustCompile(`(?i)\binside\s+(?:the\s+)?(?:"([^"]*)"|'([^']*)')`)
+	reScrollIn  = regexp.MustCompile(`(?i)\binside\s+(?:the\s+)?(?:"([^"]*)"|'([^']*)'|(\S.*))`)
 	rePress     = regexp.MustCompile(`(?i)^PRESS\b`)
 	rePressOn   = regexp.MustCompile(`(?i)\bON\s+(?:"([^"]*)"|'([^']*)')`)
 	reExtract   = regexp.MustCompile(`(?i)^EXTRACT\b`)
@@ -446,6 +446,7 @@ func nestBlocksFrom(cmds []rawCmd, start int, parentIndent int) ([]Command, int)
 	var result []Command
 	i := start
 
+loop:
 	for i < len(cmds) {
 		rc := cmds[i]
 
@@ -474,8 +475,13 @@ func nestBlocksFrom(cmds []rawCmd, start int, parentIndent int) ([]Command, int)
 
 		case CmdElIf, CmdElse:
 			// These should only appear inside consumeIfBlock. If we hit them
-			// at top level, treat as end of current block.
-			break
+			// at top level, include them as-is (for single-line parsing).
+			// Inside a nested block, treat as end of current block.
+			if parentIndent >= 0 {
+				break loop
+			}
+			result = append(result, rc.cmd)
+			i++
 
 		default:
 			result = append(result, rc.cmd)
@@ -692,7 +698,13 @@ func parseCommand(line string, lineNum int) (Command, error) {
 			cmd.ScrollDirection = strings.ToLower(m[1])
 		}
 		if m := reScrollIn.FindStringSubmatch(line); m != nil {
-			cmd.ScrollContainer = quotedMatch(m, 1)
+			if m[1] != "" {
+				cmd.ScrollContainer = m[1]
+			} else if m[2] != "" {
+				cmd.ScrollContainer = m[2]
+			} else if m[3] != "" {
+				cmd.ScrollContainer = strings.TrimSpace(m[3])
+			}
 		}
 
 	// PRESS Key [ON 'Target']

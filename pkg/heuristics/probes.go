@@ -10,6 +10,8 @@
 // candidate element in a single page evaluation pass.
 package heuristics
 
+import _ "embed"
+
 // SnapshotProbe returns the JavaScript expression (a self-invoking arrow
 // function) that collects normalized element candidates from the live page.
 //
@@ -44,6 +46,19 @@ func XPathResolveProbe() string {
 	return xpathResolveProbeJS
 }
 
+// ExtractDataProbe returns JavaScript that extracts data from the page using
+// table-row word matching and column-header resolution. This bypasses the
+// standard DOM scoring pipeline (matching ManulEngine's EXTRACT_DATA_JS).
+//
+// Arguments (JSON array): [target string, hint string]
+//   - target: the full query, e.g. "cpu of chrome"
+//   - hint:   context words extracted from the query minus stop words
+//
+// Returns a string with the extracted value, or empty string if not found.
+func ExtractDataProbe() string {
+	return extractDataProbeJS
+}
+
 // ── JavaScript probe implementations ─────────────────────────────────────────
 
 // snapshotProbeJS is the primary heuristic probe.
@@ -68,6 +83,7 @@ const snapshotProbeJS = `([mode, expectedTexts]) => {
     const isInputMode    = mode === 'input';
     const isCheckMode    = mode === 'checkbox';
     const isSelectMode   = mode === 'select';
+    const isLocateMode   = mode === 'none' || mode === 'locate';
     const hasCheckVis    = typeof Element.prototype.checkVisibility === 'function';
 
     // ── Pruned tags (subtrees entirely skipped) ───────────────────────
@@ -84,6 +100,24 @@ const snapshotProbeJS = `([mode, expectedTexts]) => {
     // ── Interactivity predicate (mode-aware) ──────────────────────────
     const isInteractive = (el) => {
         const t = el.tagName;
+        // Locate/none mode: broad search — include any element with text content.
+        // Used by EXTRACT, WAIT FOR, and similar text-finding commands.
+        if (isLocateMode) {
+            if (t === 'BUTTON' || t === 'A' || t === 'INPUT' || t === 'SELECT' ||
+                t === 'TEXTAREA' || t === 'LABEL' || t === 'SUMMARY') return true;
+            if (t === 'TD' || t === 'TH' || t === 'LI' || t === 'SPAN' || t === 'P' ||
+                t === 'H1' || t === 'H2' || t === 'H3' || t === 'H4' || t === 'H5' || t === 'H6' ||
+                t === 'DIV' || t === 'SECTION' || t === 'ARTICLE' || t === 'FIGCAPTION' ||
+                t === 'CAPTION' || t === 'DD' || t === 'DT' || t === 'OPTION') return true;
+            if (el.hasAttribute('data-qa') || el.hasAttribute('data-testid') || el.hasAttribute('data-test')) return true;
+            if (el.hasAttribute('aria-label') || el.hasAttribute('title')) return true;
+            const txt = (el.innerText || el.textContent || '').trim();
+            if (txt.length > 0 && txt.length < 300) {
+                // Any element with meaningful text content
+                if (el.children.length === 0 || t === 'TD' || t === 'TH') return true;
+            }
+            return false;
+        }
         if (isInputMode) {
             if (t === 'INPUT' && el.type !== 'submit' && el.type !== 'button'
                 && el.type !== 'file' && el.type !== 'image' && el.type !== 'reset') return true;
@@ -113,7 +147,14 @@ const snapshotProbeJS = `([mode, expectedTexts]) => {
         if (el.hasAttribute('data-qa') || el.hasAttribute('data-testid') || el.hasAttribute('data-test')) return true;
         if (el.hasAttribute('aria-label') || el.hasAttribute('title')) return true;
         if (el.hasAttribute('onclick') || el.hasAttribute('tabindex')) return true;
-        if (el.id && (t === 'DIV' || t === 'SPAN' || t === 'LI')) return true;
+        if (el.id && (t === 'DIV' || t === 'SPAN')) return true;
+        // <li> elements are common dropdown/menu items; include if they have brief text
+        if (t === 'LI') {
+            const txt = (el.innerText || el.textContent || '').trim();
+            if (txt.length > 0 && txt.length < 200) return true;
+        }
+        // <option> elements inside custom dropdowns (non-native)
+        if (t === 'OPTION') return true;
         const cn = typeof el.className === 'string' ? el.className : '';
         if (cn && RE_CLS.test(cn)) return true;
         return false;
@@ -180,6 +221,43 @@ const snapshotProbeJS = `([mode, expectedTexts]) => {
         if (prev && (prev.tagName === 'LABEL' || prev.tagName === 'SPAN' || prev.tagName === 'P')) {
             const t = (prev.innerText || '').trim();
             if (t.length > 0 && t.length < 80) return t;
+        }
+        // 5. Table row context: for inputs inside <td> (or <td> elements
+        //    themselves), collect text from sibling <td> cells in the same
+        //    <tr>, plus the column header from <th>. This handles paginated
+        //    tables where checkboxes are in one column and the row label
+        //    (e.g. row number, product name) is in adjacent columns.
+        //    The column header text enables EXTRACT 'CPU of Chrome' to
+        //    match the correct cell by combining row+column context.
+        const td = el.closest('td');
+        if (td) {
+            const tr = td.closest('tr');
+            if (tr) {
+                const cells = Array.from(tr.cells || tr.querySelectorAll('td'));
+                const texts = [];
+                for (const c of cells) {
+                    if (c === td) continue;
+                    const ct = (c.innerText || '').trim();
+                    if (ct.length > 0 && ct.length < 100) texts.push(ct);
+                }
+                // Also include column header from <th>
+                const table = tr.closest('table');
+                if (table) {
+                    const colIdx = Array.from(tr.cells || tr.children).indexOf(td);
+                    if (colIdx >= 0) {
+                        const hrow = table.querySelector('thead tr')
+                            || (() => { const fr = table.querySelector('tr'); return (fr && fr !== tr && fr.querySelector('th')) ? fr : null; })();
+                        if (hrow) {
+                            const hCells = Array.from(hrow.cells || hrow.children);
+                            if (colIdx < hCells.length) {
+                                const ht = (hCells[colIdx].innerText || '').trim();
+                                if (ht && ht.length < 100) texts.unshift(ht);
+                            }
+                        }
+                    }
+                }
+                if (texts.length > 0) return texts.join(' ');
+            }
         }
         return '';
     };
@@ -337,3 +415,9 @@ const xpathResolveProbeJS = `(xpath) => {
                       width: rect.width, height: rect.height }
     };
 }`
+
+// extractDataProbeJS is loaded from extract_data.js via go:embed.
+// It is a dedicated data-extraction probe for EXTRACT commands.
+//
+//go:embed extract_data.js
+var extractDataProbeJS string

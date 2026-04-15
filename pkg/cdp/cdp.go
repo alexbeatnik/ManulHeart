@@ -392,6 +392,8 @@ func SetInputValue(ctx context.Context, conn *Conn, xpath, value string) error {
 		const el = r.singleNodeValue;
 		if (!el) return false;
 		el.focus();
+		el.dispatchEvent(new FocusEvent('focus', {bubbles:true}));
+		el.click();
 		if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
 			el.innerText = %q;
 		} else {
@@ -471,9 +473,25 @@ func ScrollPage(ctx context.Context, conn *Conn, direction string, container str
 				el = candidates.length > 0 ? candidates[candidates.length - 1] : null;
 			}
 			if (!el) {
-				// Last resort: find any element matching text
-				el = Array.from(document.querySelectorAll('*')).find(e =>
-					e.textContent.toLowerCase().includes(%q));
+				// Try common dropdown/list selectors
+				const selectors = ['#dropdown', '[class*="dropdown"]', '[class*="listbox"]',
+					'[role="listbox"]', 'select[multiple]', 'select[size]',
+					'ul[class*="scroll"]', 'div[class*="scroll"]'];
+				for (const sel of selectors) {
+					const found = document.querySelector(sel);
+					if (found && found.scrollHeight > found.clientHeight) { el = found; break; }
+				}
+			}
+			if (!el) {
+				// Last resort: find any non-window scrollable element
+				const allScrollable = Array.from(document.querySelectorAll('*')).filter(e => {
+					if (e === document.body || e === document.documentElement) return false;
+					const st = getComputedStyle(e);
+					return e.scrollHeight > e.clientHeight &&
+						(st.overflow === 'auto' || st.overflow === 'scroll' ||
+						 st.overflowY === 'auto' || st.overflowY === 'scroll');
+				});
+				el = allScrollable.length > 0 ? allScrollable[allScrollable.length - 1] : null;
 			}
 			if (el) {
 				if (%d > 0) {
@@ -484,7 +502,7 @@ func ScrollPage(ctx context.Context, conn *Conn, direction string, container str
 				return true;
 			}
 			return false;
-		})()`, container, strings.ToLower(container), strings.ToLower(container), sign)
+		})()`, container, strings.ToLower(container), sign)
 	} else {
 		expr = fmt.Sprintf(`(() => {
 			window.scrollBy(0, %d * window.innerHeight);

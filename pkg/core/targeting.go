@@ -153,6 +153,7 @@ func (t *Targeting) ResolveWithQualifiers(
 
 	t.logger.Debug("targeting: %d candidates found for %q", len(snapshot.Elements), query)
 
+
 	// Step 2b: Region filtering — ON HEADER/FOOTER or INSIDE 'Container'.
 	if onRegion != "" || insideContainer != "" {
 		filtered := t.filterByRegion(ctx, page, snapshot.Elements, onRegion, insideContainer, insideRowText)
