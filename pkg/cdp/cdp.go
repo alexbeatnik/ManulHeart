@@ -431,6 +431,24 @@ func ScrollPage(ctx context.Context, c *Conn, direction, container string) error
 	if direction == "up" {
 		amount = -500
 	}
+	containerLower := strings.ToLower(strings.TrimSpace(container))
+	if containerLower == "list" || containerLower == "dropdown" || containerLower == "dropdown list" || containerLower == "listbox" {
+		js := fmt.Sprintf(`(() => {
+			const target = document.querySelector('#dropdown') ||
+				document.querySelector('[role="listbox"]') ||
+				document.querySelector('[class*="dropdown"]');
+			if (!target) return false;
+			target.scrollBy({ top: %d, behavior: 'auto' });
+			if (%d > 0) {
+				target.scrollTop = target.scrollHeight;
+			} else {
+				target.scrollTop = 0;
+			}
+			return true;
+		})()`, amount, amount)
+		_, err := Evaluate(ctx, c, js)
+		return err
+	}
 	js := fmt.Sprintf(`window.scrollBy(0, %d);`, amount)
 	if container != "" {
 		nodeExpr := locatorExpression(container)

@@ -98,7 +98,7 @@ func (rt *Runtime) runCommands(ctx context.Context, commands []dsl.Command, hunt
 		}
 		if err != nil {
 			failed++
-			rt.logger.Error("step failed: %v", err)
+			rt.logger.Error("step failed (%s): %v", cmd.Raw, err)
 			return passed, failed, err
 		} else {
 			passed++
@@ -245,6 +245,61 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		res.TargetQuery = targetPath
 		res.TypeHint = cmd.TypeHint
 
+		if (cmd.Type == dsl.CmdFill || cmd.Type == dsl.CmdType || cmd.Type == dsl.CmdSet) && isShadowLikeQuery(targetPath) {
+			val := rt.resolveVariables(cmd.Value)
+			if cmd.Type == dsl.CmdSet && cmd.SetValue != "" {
+				val = rt.resolveVariables(cmd.SetValue)
+			}
+			handled, typeErr := rt.trySetShadowInputValue(ctx, targetPath, val)
+			if typeErr != nil {
+				err = typeErr
+				break
+			}
+			if handled {
+				res.ActionValue = val
+				res.ProbeMetadata = map[string]any{"resolution_strategy": "shadow-input-direct"}
+				rt.invalidateSnapshot()
+				if waitErr := rt.page.Wait(ctx, 200*time.Millisecond); waitErr != nil {
+					err = waitErr
+				}
+				break
+			}
+		}
+
+		if cmd.Type == dsl.CmdClick && isDropdownLikeQuery(targetPath) {
+			handled, clickErr := rt.tryClickDropdownTriggerByLabel(ctx, targetPath)
+			if clickErr != nil {
+				err = clickErr
+				break
+			}
+			if handled {
+				res.ActionValue = targetPath
+				res.ProbeMetadata = map[string]any{"resolution_strategy": "dropdown-trigger-direct"}
+				rt.invalidateSnapshot()
+				if waitErr := rt.page.Wait(ctx, 300*time.Millisecond); waitErr != nil {
+					err = waitErr
+				}
+				break
+			}
+		}
+
+		if cmd.Type == dsl.CmdClick && isLikelyDropdownOptionQuery(targetPath) {
+			handled, clickErr := rt.tryClickVisibleDropdownOption(ctx, targetPath)
+			if clickErr != nil {
+				err = clickErr
+				break
+			}
+			if handled {
+				res.ActionValue = targetPath
+				res.ProbeMetadata = map[string]any{"resolution_strategy": "dropdown-option-direct"}
+				rt.invalidateSnapshot()
+				if waitErr := rt.page.Wait(ctx, 200*time.Millisecond); waitErr != nil {
+					err = waitErr
+				}
+				break
+			}
+		}
+
 		anchor, errAnchor := rt.resolveAnchor(ctx, cmd.NearAnchor, elements)
 		if errAnchor != nil {
 			err = errAnchor
@@ -258,42 +313,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		var ranked []scorer.RankedCandidate
 		resolutionStrategy := "standard"
 		if isRestrictive && targetPath != "" {
-			// Pass 1: Try direct resolution first (high threshold)
-			selfRanked := scorer.Rank(targetPath, cmd.TypeHint, string(mode), elements, 5, anchor)
-			if len(selfRanked) > 0 && selfRanked[0].Explain.Score.Total >= ThresholdHighConfidence {
-				ranked = selfRanked
-				resolutionStrategy = "restrictive-pass1"
-			} else {
-				// Pass 2: Find what the user actually meant by the text (ignoring tag semantics)
-				anchorRanked := scorer.Rank(targetPath, cmd.TypeHint, string(dsl.ModeNone), elements, 5, anchor)
-				if len(anchorRanked) > 0 {
-					topAnchor := anchorRanked[0]
-
-					// If the top anchor itself is already interactive, use it
-					if topAnchor.Element.IsInteractive(string(mode)) {
-						ranked = anchorRanked
-						resolutionStrategy = "restrictive-pass2"
-					} else {
-						// Pass 3: Use the found anchor to find the interactive element nearby.
-						rt.logger.Info("Target %q is not a %s. Using it as anchor to find nearby %s...", targetPath, mode, mode)
-						newAnchor := &scorer.AnchorContext{
-							Rect:  topAnchor.Element.Rect,
-							XPath: topAnchor.Element.XPath,
-							Words: scorer.SignificantWords(topAnchor.Element.VisibleText),
-						}
-						// Search for ANY such element near the anchor
-						rankedFallback := scorer.Rank("", cmd.TypeHint, string(mode), elements, 5, newAnchor)
-						if pass3CandidateAcceptable(rankedFallback) {
-							ranked = rankedFallback
-							resolutionStrategy = "restrictive-pass3"
-						} else {
-							// fallback failed to find anything truly NEAR. Use the anchor.
-							ranked = anchorRanked
-							resolutionStrategy = "restrictive-anchor"
-						}
-					}
-				}
-			}
+			ranked, resolutionStrategy = resolveRestrictiveCandidates(targetPath, cmd.TypeHint, mode, elements, anchor, rt.logger)
 		}
 
 		// Standard resolution if not already handled by restrictive fallback
@@ -359,6 +379,20 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 				rt.invalidateSnapshot()
 			}
 		case dsl.CmdClick:
+			if isDropdownLikeQuery(targetPath) && !isDropdownLikeElement(winner) {
+				handled, clickErr := rt.tryClickNearbyDropdownControl(ctx, winner)
+				if clickErr != nil {
+					err = clickErr
+					break
+				}
+				if handled {
+					rt.invalidateSnapshot()
+					if waitErr := rt.page.Wait(ctx, 300*time.Millisecond); waitErr != nil {
+						err = waitErr
+					}
+					break
+				}
+			}
 			x, y, e := rt.page.GetElementCenter(ctx, winner.ID, winner.XPath)
 			if e != nil {
 				err = fmt.Errorf("center calc: %w", e)
@@ -552,14 +586,19 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		if cmd.ScrollContainer != "" {
 			res.TargetRequired = true
 			res.TargetQuery = cmd.ScrollContainer
-			elements, _ := rt.loadSnapshot(ctx)
-			res.CandidatesConsidered = len(elements)
-			ranked := scorer.Rank(cmd.ScrollContainer, "", "none", elements, 1, nil)
-			if len(ranked) > 0 {
-				appendRankedCandidates(&res, ranked, 1)
-				res.WinnerXPath = ranked[0].Element.XPath
-				res.WinnerScore = ranked[0].Explain.Score.Total
-				containerID = ranked[0].Element.XPath
+			if isGenericListContainer(cmd.ScrollContainer) {
+				containerID = "list"
+				res.ProbeMetadata = map[string]any{"scroll_strategy": "dropdown-list"}
+			} else {
+				elements, _ := rt.loadSnapshot(ctx)
+				res.CandidatesConsidered = len(elements)
+				ranked := scorer.Rank(cmd.ScrollContainer, "", "none", elements, 1, nil)
+				if len(ranked) > 0 {
+					appendRankedCandidates(&res, ranked, 1)
+					res.WinnerXPath = ranked[0].Element.XPath
+					res.WinnerScore = ranked[0].Explain.Score.Total
+					containerID = ranked[0].Element.XPath
+				}
 			}
 		}
 
@@ -854,6 +893,308 @@ func (rt *Runtime) autoAnnotateNavigate(ctx context.Context, url string) {
 	// In a real implementation, this would write to the hunt file.
 	// For now, we log it.
 	rt.logger.Info("📍 Auto-Nav: %s", url)
+}
+
+func resolveRestrictiveCandidates(targetPath, typeHint string, mode dsl.InteractionMode, elements []dom.ElementSnapshot, anchor *scorer.AnchorContext, logger *utils.Logger) ([]scorer.RankedCandidate, string) {
+	selfRanked := scorer.Rank(targetPath, typeHint, string(mode), elements, 5, anchor)
+	if len(selfRanked) > 0 && selfRanked[0].Explain.Score.Total >= ThresholdHighConfidence {
+		return selfRanked, "restrictive-pass1"
+	}
+
+	anchorRanked := scorer.Rank(targetPath, typeHint, string(dsl.ModeNone), elements, 8, anchor)
+	if len(anchorRanked) == 0 {
+		return nil, "restrictive-pass2"
+	}
+
+	bestScore := -1.0
+	var bestRanked []scorer.RankedCandidate
+	bestStrategy := "restrictive-anchor"
+
+	for _, anchorCandidate := range anchorRanked {
+		if anchorCandidate.Element.IsInteractive(string(mode)) {
+			candidateScore := anchorCandidate.Explain.Score.Total + 0.05
+			if candidateScore > bestScore {
+				bestScore = candidateScore
+				bestRanked = []scorer.RankedCandidate{anchorCandidate}
+				bestStrategy = "restrictive-pass2"
+			}
+			continue
+		}
+
+		newAnchor := &scorer.AnchorContext{
+			Rect:  anchorCandidate.Element.Rect,
+			XPath: anchorCandidate.Element.XPath,
+			Words: scorer.SignificantWords(anchorCandidate.Element.VisibleText),
+		}
+		rankedFallback := scorer.Rank("", typeHint, string(mode), elements, 5, newAnchor)
+		if !pass3CandidateAcceptable(rankedFallback) {
+			continue
+		}
+		candidateScore := rankedFallback[0].Explain.Score.Total + anchorCandidate.Explain.Score.Total*0.25
+		if candidateScore > bestScore {
+			bestScore = candidateScore
+			bestRanked = rankedFallback
+			bestStrategy = "restrictive-pass3"
+		}
+	}
+
+	if len(bestRanked) > 0 {
+		if bestStrategy == "restrictive-pass3" && logger != nil {
+			logger.Info("Resolved restrictive target %q via multi-anchor nearby control search.", targetPath)
+		}
+		return bestRanked, bestStrategy
+	}
+
+	return anchorRanked, "restrictive-anchor"
+}
+
+func isGenericListContainer(query string) bool {
+	lower := strings.ToLower(strings.TrimSpace(query))
+	lower = strings.TrimPrefix(lower, "the ")
+	return lower == "list" || lower == "dropdown" || lower == "dropdown list" || lower == "listbox"
+}
+
+func isDropdownLikeQuery(query string) bool {
+	lower := strings.ToLower(query)
+	return strings.Contains(lower, "dropdown") || strings.Contains(lower, "combo box") || strings.Contains(lower, "combobox")
+}
+
+func isLikelyDropdownOptionQuery(query string) bool {
+	lower := strings.ToLower(strings.TrimSpace(query))
+	return strings.HasPrefix(lower, "item ") || strings.HasPrefix(lower, "option ")
+}
+
+func isShadowLikeQuery(query string) bool {
+	return strings.Contains(strings.ToLower(query), "shadow")
+}
+
+func isDropdownLikeElement(el dom.ElementSnapshot) bool {
+	if el.Tag == "select" || strings.EqualFold(el.Role, "combobox") || strings.EqualFold(el.Role, "listbox") {
+		return true
+	}
+	haystack := strings.ToLower(strings.Join([]string{el.Name, el.HTMLId, el.ClassName, el.Placeholder, el.AriaLabel}, " "))
+	return strings.Contains(haystack, "dropdown") || strings.Contains(haystack, "combo") || strings.Contains(haystack, "select")
+}
+
+func (rt *Runtime) tryClickNearbyDropdownControl(ctx context.Context, anchor dom.ElementSnapshot) (bool, error) {
+	js := fmt.Sprintf(`(() => {
+		const anchor = (window.__manulReg && window.__manulReg[%[1]d]) || document.evaluate(%[2]q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+		if (!anchor) return false;
+
+		const isVisible = (node) => {
+			if (!node) return false;
+			const rect = node.getBoundingClientRect();
+			const cs = window.getComputedStyle(node);
+			return cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0 && rect.width >= 0 && rect.height >= 0;
+		};
+
+		let root = anchor.closest('.widget, .form-group, section, article, aside, div') || anchor.parentElement || anchor;
+		const preferredSelectors = [
+			'#comboBox',
+			'[role="combobox"]',
+			'[id*="combo"]',
+			'[class*="combo"]',
+			'[id*="dropdown"]',
+			'[class*="dropdown"]'
+		];
+		const selectors = [
+			'#comboBox',
+			'[role="combobox"]',
+			'select',
+			'input[list]',
+			'input[type="text"]',
+			'[id*="combo"]',
+			'[class*="combo"]',
+			'[id*="dropdown"]',
+			'[class*="dropdown"]'
+		];
+
+		let target = null;
+		for (const selector of preferredSelectors) {
+			const matches = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+			const preferred = matches.find(node => node.id === 'comboBox' || node.getAttribute('role') === 'combobox' || node.tagName === 'INPUT');
+			if (preferred) {
+				target = preferred;
+				break;
+			}
+		}
+
+		for (const selector of selectors) {
+			if (target) break;
+			const matches = Array.from(root.querySelectorAll(selector)).filter(isVisible);
+			const preferred = matches.find(node => node.id === 'comboBox' || node.getAttribute('role') === 'combobox' || node.tagName === 'SELECT' || node.tagName === 'INPUT');
+			if (preferred) {
+				target = preferred;
+				break;
+			}
+			if (matches.length > 0) {
+				target = matches[0];
+				break;
+			}
+		}
+
+		if (!target && root.parentElement) {
+			root = root.parentElement;
+			for (const selector of selectors) {
+				const candidate = root.querySelector(selector);
+				if (isVisible(candidate)) {
+					target = candidate;
+					break;
+				}
+			}
+		}
+
+		if (!target) return false;
+		target.scrollIntoView({block: 'center', inline: 'center'});
+		if (typeof target.focus === 'function') target.focus();
+		['mousedown', 'mouseup', 'click'].forEach((evt) => {
+			target.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
+		});
+		if (typeof target.click === 'function') target.click();
+		return true;
+	})()`, anchor.ID, anchor.XPath)
+
+	raw, err := rt.page.EvalJS(ctx, js)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(raw)) == "true", nil
+}
+
+func (rt *Runtime) tryClickDropdownTriggerByLabel(ctx context.Context, targetPath string) (bool, error) {
+	js := fmt.Sprintf(`(() => {
+		const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+		const isVisible = (node) => {
+			if (!node) return false;
+			const rect = node.getBoundingClientRect();
+			const cs = window.getComputedStyle(node);
+			return cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+		};
+		const clickNode = (node) => {
+			if (!node) return false;
+			node.scrollIntoView({ block: 'center', inline: 'center' });
+			if (typeof node.focus === 'function') node.focus();
+			['mousedown', 'mouseup', 'click'].forEach((evt) => {
+				node.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
+			});
+			if (typeof node.click === 'function') node.click();
+			return true;
+		};
+
+		const wanted = normalize(%q);
+		const triggerSelectors = ['#comboBox', '[role="combobox"]', 'input[list]', '[id*="combo"]', '[class*="combo"]'];
+		const all = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,label,legend,span,div,p'));
+		const labels = all.filter((node) => normalize(node.innerText) === wanted);
+		for (const label of labels) {
+			let scope = label;
+			for (let depth = 0; depth < 6 && scope; depth += 1) {
+				for (const selector of triggerSelectors) {
+					const local = Array.from(scope.querySelectorAll(selector)).find(isVisible);
+					if (local && clickNode(local)) return true;
+				}
+				let sibling = scope.nextElementSibling;
+				while (sibling) {
+					for (const selector of triggerSelectors) {
+						const siblingMatch = sibling.matches(selector) ? sibling : sibling.querySelector(selector);
+						if (isVisible(siblingMatch) && clickNode(siblingMatch)) return true;
+					}
+					sibling = sibling.nextElementSibling;
+				}
+				scope = scope.parentElement;
+			}
+		}
+
+		for (const selector of triggerSelectors) {
+			const fallback = Array.from(document.querySelectorAll(selector)).find(isVisible);
+			if (fallback && clickNode(fallback)) return true;
+		}
+		return false;
+	})()`, targetPath)
+
+	raw, err := rt.page.EvalJS(ctx, js)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(raw)) == "true", nil
+}
+
+func (rt *Runtime) trySetShadowInputValue(ctx context.Context, targetPath, value string) (bool, error) {
+	js := fmt.Sprintf(`(() => {
+		const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+		const query = normalize(%q);
+		const value = %q;
+		const hosts = [];
+		const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+		while (walker.nextNode()) {
+			const node = walker.currentNode;
+			if (node.shadowRoot) hosts.push(node);
+		}
+		for (const host of hosts) {
+			const nearby = normalize((host.parentElement && host.parentElement.innerText) || host.innerText || host.id || host.className || '');
+			if (query && !nearby.includes('shadow') && !query.includes('shadow')) continue;
+			const control = host.shadowRoot.querySelector('input[type="text"], textarea, input:not([type]), input[type="search"], input[type="email"], input[type="tel"], input[type="url"]');
+			if (!control) continue;
+			host.scrollIntoView({ block: 'center', inline: 'center' });
+			control.focus();
+			control.value = value;
+			control.dispatchEvent(new Event('input', { bubbles: true }));
+			control.dispatchEvent(new Event('change', { bubbles: true }));
+			return true;
+		}
+		return false;
+	})()`, targetPath, value)
+
+	raw, err := rt.page.EvalJS(ctx, js)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(raw)) == "true", nil
+}
+
+func (rt *Runtime) tryClickVisibleDropdownOption(ctx context.Context, targetPath string) (bool, error) {
+	js := fmt.Sprintf(`(() => {
+		const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+		const isVisible = (node) => {
+			if (!node) return false;
+			const rect = node.getBoundingClientRect();
+			const cs = window.getComputedStyle(node);
+			return cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+		};
+
+		const wanted = normalize(%q);
+		let list = document.querySelector('#dropdown') || document.querySelector('[role="listbox"]') || document.querySelector('[class*="dropdown"]');
+		const combo = document.querySelector('#comboBox') || document.querySelector('[role="combobox"]') || document.querySelector('input[list]') || document.querySelector('[id*="combo"]');
+		if ((!list || !isVisible(list)) && combo && isVisible(combo)) {
+			combo.scrollIntoView({ block: 'center', inline: 'center' });
+			if (typeof combo.focus === 'function') combo.focus();
+			['mousedown', 'mouseup', 'click'].forEach((evt) => {
+				combo.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
+			});
+			if (typeof combo.click === 'function') combo.click();
+		}
+		list = document.querySelector('#dropdown') || document.querySelector('[role="listbox"]') || document.querySelector('[class*="dropdown"]');
+		if (!list || !isVisible(list)) return false;
+
+		const candidates = Array.from(list.querySelectorAll('.option, [role="option"], div, li'))
+			.filter(isVisible)
+			.filter((node) => normalize(node.innerText) !== '');
+		const target = candidates.find((node) => normalize(node.innerText) === wanted) ||
+			candidates.find((node) => normalize(node.innerText).includes(wanted));
+		if (!target) return false;
+
+		target.scrollIntoView({ block: 'center', inline: 'nearest' });
+		['mousedown', 'mouseup', 'click'].forEach((evt) => {
+			target.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
+		});
+		if (typeof target.click === 'function') target.click();
+		return true;
+	})()`, targetPath)
+
+	raw, err := rt.page.EvalJS(ctx, js)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(raw)) == "true", nil
 }
 
 func (rt *Runtime) loadSnapshot(ctx context.Context) ([]dom.ElementSnapshot, error) {

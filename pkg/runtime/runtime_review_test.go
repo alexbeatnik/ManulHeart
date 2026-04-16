@@ -118,3 +118,33 @@ func TestRuntime_SnapshotCacheUsedForRepeatedReadOnlyLookups(t *testing.T) {
 		t.Fatalf("ProbeCalls = %d, want 1 with cache enabled", mock.ProbeCalls)
 	}
 }
+
+func TestResolveRestrictiveCandidatesPrefersAnchorWithNearbyControl(t *testing.T) {
+	elements := []dom.ElementSnapshot{
+		{ID: 1, XPath: "/html/body/div[1]/table[1]/tbody[1]/tr[1]/td[1]", Tag: "td", VisibleText: "7", IsVisible: true, Rect: dom.Rect{Top: 100, Left: 100, Width: 30, Height: 20}},
+		{ID: 2, XPath: "/html/body/div[1]/table[2]/tbody[1]/tr[1]/td[1]", Tag: "td", VisibleText: "7", IsVisible: true, Rect: dom.Rect{Top: 200, Left: 100, Width: 30, Height: 20}},
+		{ID: 3, XPath: "/html/body/div[1]/table[2]/tbody[1]/tr[1]/td[3]/input[1]", Tag: "input", InputType: "checkbox", IsVisible: true, Rect: dom.Rect{Top: 200, Left: 180, Width: 20, Height: 20}},
+	}
+	for i := range elements {
+		elements[i].Normalize()
+	}
+
+	ranked, strategy := resolveRestrictiveCandidates("7", "checkbox", dsl.ModeCheckbox, elements, nil, nil)
+	if strategy != "restrictive-pass3" {
+		t.Fatalf("strategy = %q, want restrictive-pass3", strategy)
+	}
+	if len(ranked) == 0 || ranked[0].Element.ID != 3 {
+		t.Fatalf("winner = %+v, want checkbox ID 3", ranked)
+	}
+}
+
+func TestIsGenericListContainer(t *testing.T) {
+	for _, input := range []string{"list", "the list", "dropdown", "dropdown list", "listbox"} {
+		if !isGenericListContainer(input) {
+			t.Fatalf("expected %q to be treated as a generic list container", input)
+		}
+	}
+	if isGenericListContainer("Country") {
+		t.Fatal("did not expect Country to be treated as a generic list container")
+	}
+}
