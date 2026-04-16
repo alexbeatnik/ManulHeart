@@ -106,6 +106,17 @@ cp manul ~/.local/bin/manul
 | `--retries` | `0` | Retry failed steps N times |
 | `--disable-cache` | `false` | Disable DOM snapshot caching |
 
+### Environment Variables
+
+ManulHeart respects the following `MANUL_` prefix environment variables (CLI flags always take precedence):
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `MANUL_HEADLESS` | `bool` | Run Chrome in headless mode if `true` |
+| `MANUL_TIMEOUT` | `dur` | Default per-command timeout (e.g. `5s` or `5000` ms) |
+| `MANUL_EXPLAIN` | `bool` | Enable explain mode scores if `true` |
+| `MANUL_SCREENSHOT` | `str` | Screenshot mode: `none`, `on-fail`, `always` |
+
 ---
 
 ## DSL Syntax
@@ -239,20 +250,21 @@ all runtime variables.
 
 STEP 1: Login
     NAVIGATE to https://www.saucedemo.com/
-    FILL 'Username' field with '{username}'
-    FILL 'Password' field with '{password}'
-    CLICK 'Login' button
-
-STEP 2: Add item to cart
+    USE LoginBlock
     VERIFY that 'Products' is present
-    CLICK 'Add to cart' button NEAR 'Sauce Labs Bolt T-Shirt'
 
-STEP 3: Review cart
-    CLICK the 'Shopping cart' link
-    VERIFY that 'Sauce Labs Bolt T-Shirt' is present
-
-DONE.
+* `VERIFY [Target] has [text|placeholder|value] "[Expected]"`
+* `USE [BlockName]` (Inlines imported step block)
+* `CALL [BlockName]` (Functional alias for USE)
+* `DONE.`
 ```
+
+**Structural Commands:**
+
+| Command | Purpose |
+|---------|---------|
+| `USE [Block]` | Inlines a `STEP` block from an imported `.hunt` file at parse time. |
+| `CALL [Block]` | Alias for `USE` (functional/modular call). |
 
 **File-level directives:**
 
@@ -305,9 +317,10 @@ See [docs/overview.md](docs/overview.md) for a detailed architecture walkthrough
 
 Alpha. The core engine is feature-complete for single-threaded execution:
 32 DSL commands, full control flow (IF/ELIF/ELSE, WHILE, REPEAT, FOR EACH),
-import system, 4-channel scoring, contextual qualifiers (NEAR, ON HEADER/FOOTER,
-INSIDE), HTML reporting, screenshots, debug mode, explain mode, and 476
-synthetic unit tests across 35 test files.
+import system (including USE/CALL expansion), 4-channel scoring, contextual 
+qualifiers (NEAR, ON HEADER/FOOTER, INSIDE), Shadow DOM support, 3-pass 
+proximity resolution, HTML reporting, screenshots, debug mode, explain mode, 
+and 476 synthetic unit tests across 35 test files.
 
 Not yet implemented: parallel execution (workers > 1), LLM-based fallback,
 scan/record subcommands.

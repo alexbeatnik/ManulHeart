@@ -171,5 +171,7 @@ round-trips to the page.
 | Custom controls | `pkg/runtime` — pluggable resolver hooks |
 | Screenshots | `pkg/cdp` — `Page.captureScreenshot` |
 | Scan-page | New subcommand + `pkg/heuristics` scan probe |
-| Contextual qualifiers | `pkg/runtime` — NEAR/ON HEADER/INSIDE proximity scoring |
-| Semantic cache | `pkg/runtime` — XPath reuse from previous steps |
+| Contextual qualifiers | `pkg/runtime` — NEAR/ON HEADER/INSIDE/USE/CALL expansion |
+| Semantic cache      | `pkg/runtime` — XPath reuse from previous steps |
+| Shadow DOM          | `pkg/heuristics` — TreeWalker crossing shadow-root boundaries |
+| Proximity Targeting | `pkg/runtime` — 3-pass resolution for restrictive inputs |

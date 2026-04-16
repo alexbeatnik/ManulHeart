@@ -97,6 +97,8 @@ STEP 2: Enter credentials
 * `EXTRACT [target] into {variable_name}`
 * `VERIFY that [target] is [present|not present|checked|enabled|disabled]`
 * `VERIFY [Target] has [text|placeholder|value] "[Expected]"`
+* `USE [BlockName]` (Inlines imported step block)
+* `CALL [BlockName]` (Functional alias for USE)
 * `DONE.`
 
 ## Heuristic Scoring (Normalised 0.0–1.0)
