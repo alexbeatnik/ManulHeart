@@ -236,6 +236,66 @@ func TestRuntime_ReconcileStickyCheckboxStateReappliesVisibleRow(t *testing.T) {
 	}
 }
 
+func TestRuntime_ClickPrefersExactAriaLabel(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/button[1]", Tag: "button", AriaLabel: "Expand all", IsVisible: true, Rect: dom.Rect{Top: 20, Left: 20, Width: 24, Height: 24}},
+			{ID: 2, XPath: "/html/body/div[1]/button[2]", Tag: "button", AriaLabel: "Collapse all", IsVisible: true, Rect: dom.Rect{Top: 20, Left: 70, Width: 24, Height: 24}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	_, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:     dsl.CmdClick,
+		Raw:      "CLICK the 'Expand all' button",
+		Target:   "Expand all",
+		TypeHint: "button",
+	})
+	if err != nil {
+		t.Fatalf("click failed: %v", err)
+	}
+	if len(mock.Clicks) != 1 {
+		t.Fatalf("expected 1 click, got %d", len(mock.Clicks))
+	}
+	if mock.Clicks[0].X != 32 || mock.Clicks[0].Y != 32 {
+		t.Fatalf("clicked (%v,%v), want center of Expand all button (32,32)", mock.Clicks[0].X, mock.Clicks[0].Y)
+	}
+}
+
+func TestRuntime_ClickNearAnchorChoosesClosestCandidate(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/span[1]", Tag: "span", VisibleText: "Quantity", IsVisible: true, Rect: dom.Rect{Top: 100, Left: 100, Width: 80, Height: 20}},
+			{ID: 2, XPath: "/html/body/div[1]/button[1]", Tag: "button", VisibleText: "Increase", AriaLabel: "Increase Quantity", IsVisible: true, Rect: dom.Rect{Top: 100, Left: 200, Width: 24, Height: 24}},
+			{ID: 3, XPath: "/html/body/div[2]/button[1]", Tag: "button", VisibleText: "Increase", AriaLabel: "Increase Adults", IsVisible: true, Rect: dom.Rect{Top: 100, Left: 500, Width: 24, Height: 24}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	_, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:       dsl.CmdClick,
+		Raw:        "CLICK the 'Increase' button NEAR 'Quantity'",
+		Target:     "Increase",
+		TypeHint:   "button",
+		NearAnchor: "Quantity",
+	})
+	if err != nil {
+		t.Fatalf("click with near anchor failed: %v", err)
+	}
+	if len(mock.Clicks) != 1 {
+		t.Fatalf("expected 1 click, got %d", len(mock.Clicks))
+	}
+	if mock.Clicks[0].X != 212 || mock.Clicks[0].Y != 112 {
+		t.Fatalf("clicked (%v,%v), want center of near candidate (212,112)", mock.Clicks[0].X, mock.Clicks[0].Y)
+	}
+}
+
 type noOpCheckPage struct {
 	*MockPage
 }
