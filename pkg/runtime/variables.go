@@ -14,6 +14,7 @@ const (
 	LevelStep    Level = 2
 	LevelMission Level = 3
 	LevelGlobal  Level = 4
+	LevelImport  Level = 5
 )
 
 // ScopedVariables manages variables across multiple precedence levels.
@@ -29,6 +30,7 @@ func NewScopedVariables() *ScopedVariables {
 			LevelStep:    make(map[string]string),
 			LevelMission: make(map[string]string),
 			LevelGlobal:  make(map[string]string),
+			LevelImport:  make(map[string]string),
 		},
 	}
 }
@@ -44,7 +46,7 @@ func (sv *ScopedVariables) Set(name, value string, level Level) {
 // Resolve returns the value of a variable, respecting precedence (Row > Step > Mission > Global).
 func (sv *ScopedVariables) Resolve(name string) (string, bool) {
 	// Priority order: 1, 2, 3, 4
-	for i := Level(1); i <= 4; i++ {
+	for i := Level(1); i <= 5; i++ {
 		if val, ok := sv.levels[i][name]; ok {
 			return val, true
 		}
@@ -54,7 +56,7 @@ func (sv *ScopedVariables) Resolve(name string) (string, bool) {
 
 // ResolveLevel returns the value and the level it was found at.
 func (sv *ScopedVariables) ResolveLevel(name string) (string, Level, bool) {
-	for i := Level(1); i <= 4; i++ {
+	for i := Level(1); i <= 5; i++ {
 		if val, ok := sv.levels[i][name]; ok {
 			return val, i, true
 		}
@@ -69,7 +71,7 @@ func (sv *ScopedVariables) ClearLevel(level Level) {
 
 // ClearAll wipes all variables across all levels.
 func (sv *ScopedVariables) ClearAll() {
-	for i := Level(1); i <= 4; i++ {
+	for i := Level(1); i <= 5; i++ {
 		sv.ClearLevel(i)
 	}
 }
@@ -78,7 +80,7 @@ func (sv *ScopedVariables) ClearAll() {
 func (sv *ScopedVariables) Flatten() map[string]string {
 	flat := make(map[string]string)
 	// Iterate backwards (Global to Row) so higher priority overwrites.
-	for i := Level(4); i >= 1; i-- {
+	for i := Level(5); i >= 1; i-- {
 		for k, v := range sv.levels[i] {
 			flat[k] = v
 		}
@@ -115,13 +117,14 @@ func (sv *ScopedVariables) Interpolate(s string) string {
 func (sv *ScopedVariables) String() string {
 	var sb strings.Builder
 	sb.WriteString("DEBUG VARS:\n")
-	for i := Level(1); i <= 4; i++ {
+	for i := Level(1); i <= 5; i++ {
 		lvlName := ""
 		switch i {
 		case LevelRow: lvlName = "ROW"
 		case LevelStep: lvlName = "STEP"
 		case LevelMission: lvlName = "MISSION"
 		case LevelGlobal: lvlName = "GLOBAL"
+		case LevelImport: lvlName = "IMPORT"
 		}
 		sb.WriteString(fmt.Sprintf("  [%s]:\n", lvlName))
 		for k, v := range sv.levels[i] {

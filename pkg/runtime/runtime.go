@@ -28,6 +28,11 @@ func min(a, b int) int {
 }
 
 
+const (
+	ThresholdHighConfidence = 0.112 // strong heuristic match
+	ThresholdAmbiguous      = 0.03  // minimum for heuristic choice
+)
+
 // Runtime executes ManulHeart DSL hunts against a live browser page.
 type Runtime struct {
 	cfg    config.Config
@@ -64,7 +69,10 @@ func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRe
 		Context:  hunt.Context,
 	}
 
+	start := time.Now()
 	passed, failed, err := rt.runCommands(ctx, hunt.Commands, result)
+	result.TotalDuration = time.Since(start)
+	result.TotalDurationMS = result.TotalDuration.Milliseconds()
 	result.TotalSteps = passed + failed
 	result.Passed = passed
 	result.Failed = failed
@@ -144,17 +152,28 @@ func (rt *Runtime) resolveAnchor(ctx context.Context, label string, elements []d
 }
 
 // executeCommand runs a single DSL command and returns its execution result.
-func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain.ExecutionResult, error) {
-	res := explain.ExecutionResult{
+func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res explain.ExecutionResult, err error) {
+	start := time.Now()
+	res = explain.ExecutionResult{
 		Step:        cmd.Raw,
 		CommandType: string(cmd.Type),
 	}
-	var err error
+	defer func() {
+		res.Duration = time.Since(start)
+		res.DurationMS = res.Duration.Milliseconds()
+	}()
 
 	switch cmd.Type {
 	case dsl.CmdNavigate:
 		url := rt.resolveVariables(cmd.URL)
 		err = rt.page.Navigate(ctx, url)
+		if err == nil {
+			// Navigation started, wait for it to complete.
+			// Brief pause helps CDP catch up before we check readyState.
+			time.Sleep(300 * time.Millisecond)
+			_ = rt.page.WaitForLoad(ctx)
+			rt.autoAnnotateNavigate(ctx, url)
+		}
 
 	case dsl.CmdWait:
 		time.Sleep(time.Duration(cmd.WaitSeconds * float64(time.Second)))
@@ -208,17 +227,54 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 		}
 
 		ranked := scorer.Rank(targetPath, cmd.TypeHint, string(mode), elements, 5, anchor)
+		
+		// Implicit Anchor Fallback:
+		// If 1) we are in a restrictive mode (input, checkbox, select)
+		// AND 2) nothing was found or the best result is penalized (-50,000)
+		// AND 3) targetPath is not empty
+		// THEN try resolving targetPath as a generic anchor and find the restrictive element NEAR it.
+		isRestrictive := mode == dsl.ModeInput || mode == "checkbox" || mode == "select"
+		if isRestrictive && targetPath != "" && (len(ranked) == 0 || ranked[0].Explain.Score.TagSemantics < -1000) {
+			anchorRanked := scorer.Rank(targetPath, "", string(dsl.ModeNone), elements, 1, anchor)
+			if len(anchorRanked) > 0 && anchorRanked[0].Explain.Score.Total > ThresholdAmbiguous {
+				rt.logger.Info("Target %q is not a %s, using as proximity anchor...", targetPath, mode)
+				newAnchor := &scorer.AnchorContext{
+					Rect:  anchorRanked[0].Element.Rect,
+					XPath: anchorRanked[0].Element.XPath,
+					Words: scorer.SignificantWords(anchorRanked[0].Element.VisibleText),
+				}
+				// Re-rank with "" query (ANY such element) near the new anchor.
+				ranked = scorer.Rank("", cmd.TypeHint, string(mode), elements, 5, newAnchor)
+			}
+		}
+
 		if len(ranked) == 0 {
 			err = fmt.Errorf("target not found: %q", targetPath)
 			break
 		}
 
-		for _, r := range ranked {
-			res.RankedCandidates = append(res.RankedCandidates, r.Explain)
+		best := ranked[0]
+		if best.Explain.Score.Total < ThresholdAmbiguous {
+			err = fmt.Errorf("target resolution too ambiguous (confidence %.3f < %.3f)", best.Explain.Score.Total, ThresholdAmbiguous)
+			break
 		}
 
-		winner := ranked[0].Element
-		rt.logger.Info("Target '%s' resolved to element: ID=%d Tag=%s XPath=%s", targetPath, winner.ID, winner.Tag, winner.XPath)
+		// Anti-phantom guard for inputs/selects (soft warning for now)
+		if !rt.passesAntiPhantomGuard(string(mode), targetPath, best.Element) {
+			rt.logger.Info("⚠️  Anti-phantom guard: heuristic choice %q for target %q has low keyword correlation.", best.Element.Tag, targetPath)
+		}
+
+		winner := best.Element
+		rt.logger.Info("Target '%s' resolved to element: ID=%d Tag=%s XPath=%s Score=%.3f", 
+			targetPath, winner.ID, winner.Tag, winner.XPath, best.Explain.Score.Total)
+		
+		if rt.cfg.ExplainMode {
+			rt.logger.Info("  Breakdown: Text=%.2f, Attr=%.2f, Sem=%.2f, Prox=%.2f",
+				best.Explain.Score.NormalizedTextMatch,
+				best.Explain.Score.LabelMatch+best.Explain.Score.AriaMatch,
+				best.Explain.Score.TagSemantics,
+				best.Explain.Score.ProximityScore)
+		}
 
 		// Perform action
 		switch cmd.Type {
@@ -267,9 +323,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 			}
 		case dsl.CmdCheck, dsl.CmdUncheck:
 			checked := cmd.Type == dsl.CmdCheck
-			js := fmt.Sprintf(`document.evaluate("%s", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.checked = %v`,
-				strings.ReplaceAll(winner.XPath, `"`, `\"`), checked)
-			_, err = rt.page.EvalJS(ctx, js)
+			err = rt.page.SetChecked(ctx, winner.ID, winner.XPath, checked)
 		case dsl.CmdSelect:
 			val := rt.resolveVariables(cmd.Value)
 			js := fmt.Sprintf(`(() => {
@@ -598,4 +652,37 @@ func (rt *Runtime) evaluateCondition(ctx context.Context, cond string) (bool, er
 
 func (rt *Runtime) resolveVariables(s string) string {
 	return rt.vars.Interpolate(s)
+}
+
+func (rt *Runtime) passesAntiPhantomGuard(mode string, query string, el dom.ElementSnapshot) bool {
+	if mode != string(dsl.ModeInput) && mode != "select" {
+		return true
+	}
+
+	q := strings.ToLower(query)
+	words := strings.Fields(q)
+	if len(words) == 0 {
+		return true
+	}
+
+	// Collected signals for this element
+	signals := el.AllTextSignals()
+	signals = append(signals, el.HTMLId, el.Tag)
+
+	for _, s := range signals {
+		s_l := strings.ToLower(s)
+		for _, w := range words {
+			if len(w) >= 2 && strings.Contains(s_l, w) {
+				return true
+			}
+		}
+	}
+	rt.logger.Info("Anti-phantom guard rejected element ID=%d signals=%v for query words=%v", el.ID, signals, words)
+	return false
+}
+
+func (rt *Runtime) autoAnnotateNavigate(ctx context.Context, url string) {
+	// In a real implementation, this would write to the hunt file.
+	// For now, we log it.
+	rt.logger.Info("📍 Auto-Nav: %s", url)
 }

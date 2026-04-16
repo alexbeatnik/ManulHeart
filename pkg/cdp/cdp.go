@@ -280,6 +280,7 @@ func (c *Conn) SetInputValue(ctx context.Context, id int, xpath, value string) e
 				}
 				proto = Object.getPrototypeOf(proto);
 			}
+
 			if (nativeSetter) {
 				nativeSetter.call(el, %[3]q);
 			} else {
@@ -287,9 +288,63 @@ func (c *Conn) SetInputValue(ctx context.Context, id int, xpath, value string) e
 			}
 			el.dispatchEvent(new Event('input', { bubbles: true }));
 			el.dispatchEvent(new Event('change', { bubbles: true }));
-			console.log("SetInputValue:", el.tagName, el.id, "to", el.value);
 		}
 	`, id, xpath, value)
+	_, err := Evaluate(ctx, c, js)
+	return err
+}
+
+func (c *Conn) SetChecked(ctx context.Context, id int, xpath string, checked bool) error {
+	js := fmt.Sprintf(`
+		var el = (window.__manulReg && window.__manulReg[%[1]d]) || document.evaluate(%[2]q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+		if (el) {
+			var targetEl = el;
+			// Refinement: find checkbox/radio if el is not one
+			if (el.tagName !== 'INPUT' || (el.type !== 'checkbox' && el.type !== 'radio')) {
+				if (el.tagName === 'LABEL' && el.htmlFor) {
+					targetEl = document.getElementById(el.htmlFor) || targetEl;
+				} else {
+					var child = el.querySelector('input[type=checkbox], input[type=radio]');
+					if (child) {
+						targetEl = child;
+					} else {
+						// Look in nearby siblings or parents (common in tables)
+						var cell = el.closest('td, th, div');
+						if (cell) {
+							var cb = cell.querySelector('input[type=checkbox], input[type=radio]') || 
+							         cell.parentElement.querySelector('input[type=checkbox], input[type=radio]');
+							if (cb) targetEl = cb;
+						}
+					}
+				}
+			}
+			el = targetEl;
+
+			if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
+				if (el.checked !== %[3]v) {
+					// Use native setter for framework compatibility
+					var proto = Object.getPrototypeOf(el);
+					var nativeSetter = null;
+					while (proto && proto !== Object.prototype) {
+						var desc = Object.getOwnPropertyDescriptor(proto, 'checked');
+						if (desc && desc.set) {
+							nativeSetter = desc.set;
+							break;
+						}
+						proto = Object.getPrototypeOf(proto);
+					}
+					if (nativeSetter) {
+						nativeSetter.call(el, %[3]v);
+					} else {
+						el.checked = %[3]v;
+					}
+					el.dispatchEvent(new Event('click', { bubbles: true }));
+					el.dispatchEvent(new Event('input', { bubbles: true }));
+					el.dispatchEvent(new Event('change', { bubbles: true }));
+				}
+			}
+		}
+	`, id, xpath, checked)
 	_, err := Evaluate(ctx, c, js)
 	return err
 }

@@ -124,19 +124,29 @@ func Score(query, typeHint, mode string, el *dom.ElementSnapshot, anchor *Anchor
 		htmlID*0.5 +
 		tagSem*0.6 +
 		typeHintScore*0.5 +
-		depth*0.05 +
+		depth*0.4 +
 		className*0.15 +
-		proximity*0.4 +
+		proximity*0.8 +
 		anchorAttr*0.35
 
-	// Apply visibility penalty to raw score BEFORE normalization.
-	// This ensures hidden elements rank strictly below visible ones even
-	// when the raw text match is perfect.
-	rawPenalized := raw * vis * interact
+	// Penalty for container-style interaction (preferring leaves)
+	containerPenalty := 1.0
+	if mode != "none" && mode != "locate" {
+		tag := strings.ToLower(el.Tag)
+		if tag == "div" || tag == "td" || tag == "th" || tag == "li" || tag == "section" || tag == "span" {
+			containerPenalty = 0.6
+		}
+	}
+
+	// Apply visibility and container penalty to raw score BEFORE normalization.
+	rawPenalized := raw * vis * interact * containerPenalty
 
 	// Normalize to [0, 1] using the sum of max possible weights.
-	const maxRaw = 1.0 + 0.7 + 0.85 + 0.6 + 0.7 + 0.8 + 0.5 + 0.6 + 0.5 + 0.05 + 0.15 + 0.4 + 0.35
-	total := clamp(rawPenalized/maxRaw, 0, 1)
+	// Weights: Text(1.0), NormText(0.7), Label(0.85), Placeholder(0.6), Aria(0.7),
+	// DataQA(0.8), ID(0.5), TagSem(0.6), TypeHint(0.5), Depth(0.4), Class(0.15),
+	// Proximity(0.8), AnchorAttr(0.35)
+	const maxPossible = 1.0 + 0.7 + 0.85 + 0.6 + 0.7 + 0.8 + 0.5 + 0.6 + 0.5 + 0.4 + 0.15 + 0.8 + 0.35
+	total := clamp(rawPenalized/maxPossible, 0, 1)
 
 	bd := explain.ScoreBreakdown{
 		ExactTextMatch:       exactText,
@@ -391,11 +401,8 @@ func scoreTagSemantics(mode string, el *dom.ElementSnapshot) float64 {
 		if role == "checkbox" || role == "radio" || role == "switch" {
 			return 0.4
 		}
-		// Penalty for non-checkbox elements in checkbox mode.
-		if tag == "button" || tag == "a" {
-			return -0.3
-		}
-		return 0.0
+		// Strict penalty for non-checkbox elements in checkbox mode.
+		return -50000.0
 
 	case "select":
 		if tag == "select" {
@@ -404,7 +411,8 @@ func scoreTagSemantics(mode string, el *dom.ElementSnapshot) float64 {
 		if role == "listbox" || role == "combobox" {
 			return 0.4
 		}
-		return 0.0
+		// Strict penalty for non-selects in select mode
+		return -50000.0
 
 	default: // clickable
 		if tag == "button" || tag == "a" || tag == "summary" {
@@ -471,14 +479,15 @@ func scoreTypeHint(hint string, el *dom.ElementSnapshot) float64 {
 	return 0.0
 }
 
-// scoreDepth returns a small bonus for shallower DOM elements.
-// Score decays gently: depth 3 → 0.9, depth 10 → 0.5, depth 20+ → 0.1.
+// scoreDepth returns a small bonus for deeper DOM elements (leaves).
+// Deeper elements are typically the actual interaction targets.
 func scoreDepth(el *dom.ElementSnapshot) float64 {
 	depth := strings.Count(el.XPath, "/")
 	if depth <= 0 {
-		return 0.5
+		return 0.1
 	}
-	return clamp(1.0-0.04*float64(depth-3), 0.1, 1.0)
+	// Favor deeper: depth 3 -> 0.1, depth 10 -> 0.4, depth 20 -> 0.8
+	return clamp(0.04*float64(depth), 0.1, 1.0)
 }
 
 // scoreNear returns a [0.0, 1.0] proximity score for a NEAR qualifier.

@@ -43,6 +43,9 @@ type Page interface {
 	// SetInputValue sets the value of an input element at the given ID or XPath,
 	// dispatching the appropriate input/change events.
 	SetInputValue(ctx context.Context, id int, xpath, value string) error
+	
+	// SetChecked sets the checked state of a checkbox or radio element.
+	SetChecked(ctx context.Context, id int, xpath string, checked bool) error
 
 	// ScrollIntoView scrolls the element at the given ID or XPath into the viewport.
 	ScrollIntoView(ctx context.Context, id int, xpath string) error

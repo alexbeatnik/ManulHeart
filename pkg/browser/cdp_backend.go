@@ -138,6 +138,10 @@ func (p *CDPPage) SetInputValue(ctx context.Context, id int, xpath, value string
 func (p *CDPPage) ScrollIntoView(ctx context.Context, id int, xpath string) error {
 	return p.conn.ScrollIntoView(ctx, id, xpath)
 }
+func (p *CDPPage) SetChecked(ctx context.Context, id int, xpath string, checked bool) error {
+	return p.conn.SetChecked(ctx, id, xpath, checked)
+}
+
 
 func (p *CDPPage) ScrollPage(ctx context.Context, direction, container string) error {
 	return cdp.ScrollPage(ctx, p.conn, direction, container)
