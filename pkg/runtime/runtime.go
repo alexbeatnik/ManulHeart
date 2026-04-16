@@ -43,16 +43,18 @@ type Runtime struct {
 	logger *utils.Logger
 	vars   *ScopedVariables
 
-	cachedElements []dom.ElementSnapshot
+	cachedElements       []dom.ElementSnapshot
+	stickyCheckboxStates map[string]bool
 }
 
 // New creates a new Runtime bound to the given Config, Page, and Logger.
 func New(cfg config.Config, page browser.Page, logger *utils.Logger) *Runtime {
 	return &Runtime{
-		cfg:    cfg,
-		page:   page,
-		logger: logger,
-		vars:   NewScopedVariables(),
+		cfg:                  cfg,
+		page:                 page,
+		logger:               logger,
+		vars:                 NewScopedVariables(),
+		stickyCheckboxStates: make(map[string]bool),
 	}
 }
 
@@ -389,6 +391,8 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 					rt.invalidateSnapshot()
 					if waitErr := rt.page.Wait(ctx, 300*time.Millisecond); waitErr != nil {
 						err = waitErr
+					} else if stickyErr := rt.reconcileStickyCheckboxStates(ctx); stickyErr != nil {
+						err = stickyErr
 					}
 					break
 				}
@@ -408,6 +412,9 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 					}
 					rt.invalidateSnapshot()
 					_ = rt.page.WaitForLoad(ctx)
+					if stickyErr := rt.reconcileStickyCheckboxStates(ctx); stickyErr != nil {
+						err = stickyErr
+					}
 				}
 			}
 		case dsl.CmdDoubleClick:
@@ -435,7 +442,11 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			checked := cmd.Type == dsl.CmdCheck
 			err = rt.page.SetChecked(ctx, winner.ID, winner.XPath, checked)
 			if err == nil {
+				rt.rememberStickyCheckboxState(targetPath, checked)
 				rt.invalidateSnapshot()
+				if verifyErr := rt.ensureCheckboxTargetState(ctx, targetPath, checked, ranked); verifyErr != nil {
+					err = verifyErr
+				}
 			}
 		case dsl.CmdSelect:
 			val := rt.resolveVariables(cmd.Value)
@@ -662,28 +673,73 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		}
 
 	case dsl.CmdVerifyField:
-		// Full element resolution for attribute-specific verification
+		// Full element resolution for state-specific verification.
 		res.TargetRequired = true
-		elements, errSnapshot := rt.loadSnapshot(ctx)
-		if errSnapshot != nil {
-			err = errSnapshot
-			break
-		}
-		res.CandidatesConsidered = len(elements)
 		target := rt.resolveVariables(cmd.VerifyText)
 		res.TargetQuery = target
-		ranked := scorer.Rank(target, "", "none", elements, 1, nil)
-		present := len(ranked) > 0 && ranked[0].Explain.Score.Total > 0.3
+		verifyDeadline := time.Now().Add(2 * time.Second)
+		stateVerified := false
+		lastFound := false
+		lastStateValue := false
+		var lastWinner dom.ElementSnapshot
+		var ranked []scorer.RankedCandidate
+
+		for {
+			rt.invalidateSnapshot()
+			elements, errSnapshot := rt.loadSnapshot(ctx)
+			if errSnapshot != nil {
+				err = errSnapshot
+				break
+			}
+			res.CandidatesConsidered = len(elements)
+
+			ranked = rankForVerifyState(target, cmd.VerifyState, elements, rt.logger)
+			lastFound = verifyRankedCandidateAcceptable(cmd.VerifyState, ranked)
+			if lastFound {
+				lastWinner = ranked[0].Element
+				lastStateValue = elementMatchesVerifyState(lastWinner, cmd.VerifyState)
+				verifySatisfied := lastStateValue
+				if cmd.VerifyNegated {
+					verifySatisfied = !verifySatisfied
+				}
+				if verifySatisfied {
+					stateVerified = true
+					break
+				}
+			} else {
+				verifySatisfied := missingElementSatisfiesVerifyState(cmd.VerifyState)
+				if cmd.VerifyNegated {
+					verifySatisfied = !verifySatisfied
+				}
+				if verifySatisfied {
+					stateVerified = true
+					break
+				}
+			}
+
+			if time.Now().After(verifyDeadline) {
+				break
+			}
+			if waitErr := rt.page.Wait(ctx, 200*time.Millisecond); waitErr != nil {
+				err = waitErr
+				break
+			}
+		}
+
 		if len(ranked) > 0 {
 			appendRankedCandidates(&res, ranked, 1)
 			res.WinnerXPath = ranked[0].Element.XPath
 			res.WinnerScore = ranked[0].Explain.Score.Total
 		}
-		if !present {
-			err = fmt.Errorf("verification failed: target field '%s' not found", target)
-		} else if cmd.VerifyState != "" {
-			// verify state (e.g., checked, enabled)
-			// ... logic ...
+		if err != nil {
+			break
+		}
+		if !stateVerified {
+			if !lastFound {
+				err = fmt.Errorf("verification failed: target field '%s' not found for state %q", target, cmd.VerifyState)
+				break
+			}
+			err = fmt.Errorf("verification failed: target '%s' expected state %s, actual state %s", target, expectedVerifyStateDescription(cmd.VerifyState, cmd.VerifyNegated), actualVerifyStateDescription(cmd.VerifyState, lastStateValue))
 		}
 
 	case dsl.CmdIf:
@@ -926,6 +982,21 @@ func resolveRestrictiveCandidates(targetPath, typeHint string, mode dsl.Interact
 			XPath: anchorCandidate.Element.XPath,
 			Words: scorer.SignificantWords(anchorCandidate.Element.VisibleText),
 		}
+		if mode == dsl.ModeCheckbox {
+			rowScoped := checkboxCandidatesInSameRow(anchorCandidate.Element, elements)
+			if len(rowScoped) > 0 {
+				rowRanked := scorer.Rank("", typeHint, string(mode), rowScoped, 5, newAnchor)
+				if pass3CandidateAcceptable(rowRanked) {
+					candidateScore := rowRanked[0].Explain.Score.Total + anchorCandidate.Explain.Score.Total*0.35 + 0.15
+					if candidateScore > bestScore {
+						bestScore = candidateScore
+						bestRanked = rowRanked
+						bestStrategy = "restrictive-pass3-row"
+					}
+					continue
+				}
+			}
+		}
 		rankedFallback := scorer.Rank("", typeHint, string(mode), elements, 5, newAnchor)
 		if !pass3CandidateAcceptable(rankedFallback) {
 			continue
@@ -946,6 +1017,38 @@ func resolveRestrictiveCandidates(targetPath, typeHint string, mode dsl.Interact
 	}
 
 	return anchorRanked, "restrictive-anchor"
+}
+
+func checkboxCandidatesInSameRow(anchor dom.ElementSnapshot, elements []dom.ElementSnapshot) []dom.ElementSnapshot {
+	rowPrefix := rowXPathPrefix(anchor.XPath)
+	if rowPrefix == "" {
+		return nil
+	}
+	var out []dom.ElementSnapshot
+	for _, element := range elements {
+		if !element.IsInteractive(string(dsl.ModeCheckbox)) {
+			continue
+		}
+		if strings.HasPrefix(element.XPath, rowPrefix+"/") {
+			out = append(out, element)
+		}
+	}
+	return out
+}
+
+func rowXPathPrefix(xpath string) string {
+	parts := strings.Split(strings.Trim(xpath, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	prefix := make([]string, 0, len(parts))
+	for _, part := range parts {
+		prefix = append(prefix, part)
+		if strings.HasPrefix(part, "tr[") {
+			return "/" + strings.Join(prefix, "/")
+		}
+	}
+	return ""
 }
 
 func isGenericListContainer(query string) bool {
@@ -974,6 +1077,220 @@ func isDropdownLikeElement(el dom.ElementSnapshot) bool {
 	}
 	haystack := strings.ToLower(strings.Join([]string{el.Name, el.HTMLId, el.ClassName, el.Placeholder, el.AriaLabel}, " "))
 	return strings.Contains(haystack, "dropdown") || strings.Contains(haystack, "combo") || strings.Contains(haystack, "select")
+}
+
+func rankForVerifyState(target, state string, elements []dom.ElementSnapshot, logger *utils.Logger) []scorer.RankedCandidate {
+	mode := dsl.ModeNone
+	typeHint := ""
+	switch strings.ToLower(state) {
+	case "checked", "unchecked":
+		mode = dsl.ModeCheckbox
+		typeHint = "checkbox"
+	case "selected":
+		mode = dsl.ModeSelect
+	}
+	if mode != dsl.ModeNone && target != "" {
+		ranked, _ := resolveRestrictiveCandidates(target, typeHint, mode, elements, nil, nil)
+		if len(ranked) > 0 {
+			return ranked
+		}
+	}
+	return scorer.Rank(target, "", "none", elements, 1, nil)
+}
+
+func elementMatchesVerifyState(el dom.ElementSnapshot, state string) bool {
+	switch strings.ToLower(state) {
+	case "checked":
+		return el.IsChecked
+	case "unchecked":
+		return !el.IsChecked
+	case "enabled":
+		return !el.IsDisabled
+	case "disabled":
+		return el.IsDisabled
+	case "visible":
+		return el.IsVisible && !el.IsHidden
+	case "hidden", "disappear":
+		return !el.IsVisible || el.IsHidden
+	case "selected":
+		return el.IsSelected
+	default:
+		return false
+	}
+}
+
+func missingElementSatisfiesVerifyState(state string) bool {
+	switch strings.ToLower(state) {
+	case "hidden", "disappear":
+		return true
+	default:
+		return false
+	}
+}
+
+func expectedVerifyStateDescription(state string, negated bool) string {
+	base := strings.ToLower(strings.TrimSpace(state))
+	if base == "" {
+		base = "present"
+	}
+	if negated {
+		return "NOT " + base
+	}
+	return base
+}
+
+func actualVerifyStateDescription(state string, matches bool) string {
+	base := strings.ToLower(strings.TrimSpace(state))
+	if base == "" {
+		return "unknown"
+	}
+	if matches {
+		return base
+	}
+	switch base {
+	case "checked":
+		return "unchecked"
+	case "unchecked":
+		return "checked"
+	case "enabled":
+		return "disabled"
+	case "disabled":
+		return "enabled"
+	case "visible":
+		return "hidden"
+	case "hidden", "disappear":
+		return "visible"
+	case "selected":
+		return "not selected"
+	default:
+		return "not " + base
+	}
+}
+
+func verifyRankedCandidateAcceptable(state string, ranked []scorer.RankedCandidate) bool {
+	if len(ranked) == 0 {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "checked", "unchecked", "selected":
+		return true
+	default:
+		return ranked[0].Explain.Score.Total > 0.3
+	}
+}
+
+func (rt *Runtime) ensureCheckboxTargetState(ctx context.Context, target string, desired bool, initialRanked []scorer.RankedCandidate) error {
+	if waitErr := rt.page.Wait(ctx, 150*time.Millisecond); waitErr != nil {
+		return waitErr
+	}
+	rt.invalidateSnapshot()
+	matched, err := rt.checkboxTargetHasState(ctx, target, desired)
+	if err != nil {
+		return err
+	}
+	if matched {
+		return nil
+	}
+
+	retryCandidates, err := rt.collectCheckboxRetryCandidates(ctx, target, initialRanked)
+	if err != nil {
+		return err
+	}
+	tried := map[string]bool{}
+	for _, candidate := range retryCandidates {
+		key := candidate.Element.XPath
+		if key == "" {
+			key = fmt.Sprintf("id:%d", candidate.Element.ID)
+		}
+		if tried[key] {
+			continue
+		}
+		tried[key] = true
+
+		if err := rt.page.SetChecked(ctx, candidate.Element.ID, candidate.Element.XPath, desired); err != nil {
+			continue
+		}
+		if waitErr := rt.page.Wait(ctx, 150*time.Millisecond); waitErr != nil {
+			return waitErr
+		}
+		rt.invalidateSnapshot()
+		matched, err = rt.checkboxTargetHasState(ctx, target, desired)
+		if err != nil {
+			return err
+		}
+		if matched {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("checkbox target %q did not reach checked=%t", target, desired)
+}
+
+func (rt *Runtime) checkboxTargetHasState(ctx context.Context, target string, desired bool) (bool, error) {
+	elements, err := rt.loadSnapshot(ctx)
+	if err != nil {
+		return false, err
+	}
+	ranked := rankForVerifyState(target, "checked", elements, nil)
+	if !verifyRankedCandidateAcceptable("checked", ranked) {
+		return false, nil
+	}
+	return ranked[0].Element.IsChecked == desired, nil
+}
+
+func (rt *Runtime) collectCheckboxRetryCandidates(ctx context.Context, target string, initialRanked []scorer.RankedCandidate) ([]scorer.RankedCandidate, error) {
+	elements, err := rt.loadSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []scorer.RankedCandidate
+	candidates = append(candidates, initialRanked...)
+	if restrictive, _ := resolveRestrictiveCandidates(target, "checkbox", dsl.ModeCheckbox, elements, nil, nil); len(restrictive) > 0 {
+		candidates = append(candidates, restrictive...)
+	}
+	candidates = append(candidates, scorer.Rank(target, "checkbox", string(dsl.ModeCheckbox), elements, 5, nil)...)
+	candidates = append(candidates, scorer.Rank(target, "", string(dsl.ModeNone), elements, 5, nil)...)
+	return candidates, nil
+}
+
+func (rt *Runtime) rememberStickyCheckboxState(target string, checked bool) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return
+	}
+	if rt.stickyCheckboxStates == nil {
+		rt.stickyCheckboxStates = make(map[string]bool)
+	}
+	rt.stickyCheckboxStates[target] = checked
+}
+
+func (rt *Runtime) reconcileStickyCheckboxStates(ctx context.Context) error {
+	if len(rt.stickyCheckboxStates) == 0 {
+		return nil
+	}
+	elements, err := rt.loadSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	for target, desired := range rt.stickyCheckboxStates {
+		ranked := rankForVerifyState(target, "checked", elements, nil)
+		if !verifyRankedCandidateAcceptable("checked", ranked) {
+			continue
+		}
+		winner := ranked[0].Element
+		if winner.IsChecked == desired {
+			continue
+		}
+		if err := rt.page.SetChecked(ctx, winner.ID, winner.XPath, desired); err != nil {
+			return err
+		}
+		rt.invalidateSnapshot()
+		elements, err = rt.loadSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (rt *Runtime) tryClickNearbyDropdownControl(ctx context.Context, anchor dom.ElementSnapshot) (bool, error) {

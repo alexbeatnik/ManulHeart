@@ -384,27 +384,43 @@ func (c *Conn) SetChecked(ctx context.Context, id int, xpath string, checked boo
 
 			if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
 				if (el.checked !== %[3]v) {
-					// Use native setter for framework compatibility
-					var proto = Object.getPrototypeOf(el);
-					var nativeSetter = null;
-					while (proto && proto !== Object.prototype) {
-						var desc = Object.getOwnPropertyDescriptor(proto, 'checked');
-						if (desc && desc.set) {
-							nativeSetter = desc.set;
-							break;
-						}
-						proto = Object.getPrototypeOf(proto);
+					if (typeof el.scrollIntoView === 'function') {
+						el.scrollIntoView({ block: 'center', inline: 'center' });
 					}
-					if (nativeSetter) {
-						nativeSetter.call(el, %[3]v);
+					if (typeof el.focus === 'function') {
+						try { el.focus({ preventScroll: true }); } catch (_) { el.focus(); }
+					}
+
+					// Let the browser perform the native toggle first.
+					el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+					el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+					if (typeof el.click === 'function') {
+						el.click();
 					} else {
-						el.checked = %[3]v;
+						el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
 					}
-					// Fire a full sequence of events
-					const events = ['mousedown', 'mouseup', 'click', 'input', 'change'];
-					events.forEach(evt => {
-						el.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
-					});
+
+					// If the native click did not produce the requested state,
+					// fall back to the native checked setter and emit value events.
+					if (el.checked !== %[3]v) {
+						var proto = Object.getPrototypeOf(el);
+						var nativeSetter = null;
+						while (proto && proto !== Object.prototype) {
+							var desc = Object.getOwnPropertyDescriptor(proto, 'checked');
+							if (desc && desc.set) {
+								nativeSetter = desc.set;
+								break;
+							}
+							proto = Object.getPrototypeOf(proto);
+						}
+						if (nativeSetter) {
+							nativeSetter.call(el, %[3]v);
+						} else {
+							el.checked = %[3]v;
+						}
+						el.dispatchEvent(new Event('input', { bubbles: true }));
+						el.dispatchEvent(new Event('change', { bubbles: true }));
+					}
 				}
 			}
 		}

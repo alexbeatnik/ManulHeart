@@ -130,11 +130,28 @@ func TestResolveRestrictiveCandidatesPrefersAnchorWithNearbyControl(t *testing.T
 	}
 
 	ranked, strategy := resolveRestrictiveCandidates("7", "checkbox", dsl.ModeCheckbox, elements, nil, nil)
-	if strategy != "restrictive-pass3" {
-		t.Fatalf("strategy = %q, want restrictive-pass3", strategy)
+	if strategy != "restrictive-pass3" && strategy != "restrictive-pass3-row" {
+		t.Fatalf("strategy = %q, want restrictive-pass3 or restrictive-pass3-row", strategy)
 	}
 	if len(ranked) == 0 || ranked[0].Element.ID != 3 {
 		t.Fatalf("winner = %+v, want checkbox ID 3", ranked)
+	}
+}
+
+func TestResolveRestrictiveCandidatesPrefersSameRowCheckbox(t *testing.T) {
+	elements := []dom.ElementSnapshot{
+		{ID: 1, XPath: "/html/body/table[1]/tbody[1]/tr[8]/td[1]", Tag: "td", VisibleText: "7", IsVisible: true, Rect: dom.Rect{Top: 1200, Left: -9000, Width: 30, Height: 20}},
+		{ID: 2, XPath: "/html/body/table[2]/tbody[1]/tr[2]/td[1]", Tag: "td", VisibleText: "7", IsVisible: true, Rect: dom.Rect{Top: 200, Left: 100, Width: 30, Height: 20}},
+		{ID: 3, XPath: "/html/body/table[2]/tbody[1]/tr[2]/td[4]/input[1]", Tag: "input", InputType: "checkbox", IsVisible: true, Rect: dom.Rect{Top: 200, Left: 180, Width: 20, Height: 20}},
+		{ID: 4, XPath: "/html/body/div[1]/input[1]", Tag: "input", InputType: "checkbox", IsVisible: true, Rect: dom.Rect{Top: 1210, Left: -8960, Width: 20, Height: 20}},
+	}
+	for i := range elements {
+		elements[i].Normalize()
+	}
+
+	ranked, _ := resolveRestrictiveCandidates("7", "checkbox", dsl.ModeCheckbox, elements, nil, nil)
+	if len(ranked) == 0 || ranked[0].Element.ID != 3 {
+		t.Fatalf("winner = %+v, want same-row checkbox ID 3", ranked)
 	}
 }
 
@@ -146,5 +163,106 @@ func TestIsGenericListContainer(t *testing.T) {
 	}
 	if isGenericListContainer("Country") {
 		t.Fatal("did not expect Country to be treated as a generic list container")
+	}
+}
+
+func TestRuntime_VerifyCheckedFailsForUncheckedControl(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/table[1]/tr[1]/td[1]", Tag: "td", VisibleText: "7", IsVisible: true, Rect: dom.Rect{Top: 100, Left: 100, Width: 30, Height: 20}},
+			{ID: 2, XPath: "/html/body/table[1]/tr[1]/td[4]/input[1]", Tag: "input", InputType: "checkbox", LabelText: "Select", IsVisible: true, IsChecked: false, Rect: dom.Rect{Top: 100, Left: 180, Width: 20, Height: 20}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	_, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:        dsl.CmdVerifyField,
+		Raw:         "VERIFY that '7' is checked",
+		VerifyText:  "7",
+		VerifyState: "checked",
+	})
+	if err == nil {
+		t.Fatal("expected verify checked to fail for unchecked control")
+	}
+}
+
+func TestRuntime_CheckThenVerifyCheckedPasses(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/table[1]/tr[1]/td[1]", Tag: "td", VisibleText: "7", IsVisible: true, Rect: dom.Rect{Top: 100, Left: 100, Width: 30, Height: 20}},
+			{ID: 2, XPath: "/html/body/table[1]/tr[1]/td[4]/input[1]", Tag: "input", InputType: "checkbox", LabelText: "Select", IsVisible: true, IsChecked: false, Rect: dom.Rect{Top: 100, Left: 180, Width: 20, Height: 20}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	_, err := rt.RunHunt(context.Background(), &dsl.Hunt{
+		Commands: []dsl.Command{
+			{Type: dsl.CmdCheck, Raw: "CHECK the checkbox for '7'", Target: "7", TypeHint: "checkbox"},
+			{Type: dsl.CmdVerifyField, Raw: "VERIFY that '7' is checked", VerifyText: "7", VerifyState: "checked"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected hunt to pass after checking control, got %v", err)
+	}
+	if !mock.Elements[1].IsChecked {
+		t.Fatal("expected mock checkbox state to be updated by CHECK")
+	}
+}
+
+func TestRuntime_ReconcileStickyCheckboxStateReappliesVisibleRow(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/table[1]/tr[1]/td[1]", Tag: "td", VisibleText: "7", IsVisible: true, Rect: dom.Rect{Top: 100, Left: 100, Width: 30, Height: 20}},
+			{ID: 2, XPath: "/html/body/table[1]/tr[1]/td[4]/input[1]", Tag: "input", InputType: "checkbox", LabelText: "Select", IsVisible: true, IsChecked: false, Rect: dom.Rect{Top: 100, Left: 180, Width: 20, Height: 20}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt.rememberStickyCheckboxState("7", true)
+	if err := rt.reconcileStickyCheckboxStates(context.Background()); err != nil {
+		t.Fatalf("reconcileStickyCheckboxStates failed: %v", err)
+	}
+	if !mock.Elements[1].IsChecked {
+		t.Fatal("expected reconcile to reapply checked state for visible row")
+	}
+}
+
+type noOpCheckPage struct {
+	*MockPage
+}
+
+func (p *noOpCheckPage) SetChecked(ctx context.Context, id int, xpath string, checked bool) error {
+	return nil
+}
+
+func TestRuntime_CheckFailsWhenCheckboxStateDoesNotChange(t *testing.T) {
+	base := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/table[1]/tr[1]/td[1]", Tag: "td", VisibleText: "7", IsVisible: true, Rect: dom.Rect{Top: 100, Left: 100, Width: 30, Height: 20}},
+			{ID: 2, XPath: "/html/body/table[1]/tr[1]/td[4]/input[1]", Tag: "input", InputType: "checkbox", LabelText: "Select", IsVisible: true, IsChecked: false, Rect: dom.Rect{Top: 100, Left: 180, Width: 20, Height: 20}},
+		},
+	}
+	for i := range base.Elements {
+		base.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, &noOpCheckPage{MockPage: base}, utils.NewLogger(utils.LogLevelInfo, nil))
+	_, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:     dsl.CmdCheck,
+		Raw:      "CHECK the checkbox for '7'",
+		Target:   "7",
+		TypeHint: "checkbox",
+	})
+	if err == nil {
+		t.Fatal("expected CHECK to fail when checkbox state does not actually change")
 	}
 }

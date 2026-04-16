@@ -83,6 +83,12 @@ func (m *MockPage) SetInputValue(ctx context.Context, id int, xpath, value strin
 }
 
 func (m *MockPage) SetChecked(ctx context.Context, id int, xpath string, checked bool) error {
+	for i := range m.Elements {
+		if m.Elements[i].XPath == xpath || m.Elements[i].ID == id {
+			m.Elements[i].IsChecked = checked
+			return nil
+		}
+	}
 	return nil
 }
 

@@ -236,6 +236,7 @@
                              el.getAttribute('contenteditable') === 'true' ||
                              (el.getAttribute('role') || '') === 'textbox'),
             is_checked:     el.checked || el.getAttribute('aria-checked') === 'true',
+            is_selected:    el.selected || el.getAttribute('aria-selected') === 'true',
             is_in_shadow:   inShadow,
             rect: {
                 top:    rect.top,

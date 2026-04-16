@@ -84,6 +84,8 @@ type ElementSnapshot struct {
 	IsContentEditable bool `json:"is_contenteditable"`
 	// IsChecked reports whether the element (checkbox/radio) is checked.
 	IsChecked bool `json:"is_checked"`
+	// IsSelected reports whether the element is selected (option/aria-selected).
+	IsSelected bool `json:"is_selected"`
 	// IsInShadow reports whether the element is inside a shadow DOM.
 	IsInShadow bool `json:"is_in_shadow,omitempty"`
 

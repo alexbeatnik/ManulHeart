@@ -104,5 +104,4 @@ STEP 11: Final validation
     VERIFY that 'Dropped!' is present
     VERIFY that 'Item 100' is present
     VERIFY that 'Shadow Boss' is present
-    WAIT 30
 DONE.
