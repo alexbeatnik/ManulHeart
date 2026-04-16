@@ -207,6 +207,9 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		res.ActionValue = pattern
 		err = rt.page.WaitForResponse(ctx, pattern, rt.cfg.DefaultTimeout)
 
+	case dsl.CmdCallGo:
+		res.ActionValue, res.ProbeMetadata, err = rt.executeCallGo(ctx, cmd)
+
 	case dsl.CmdSet:
 		if cmd.SetVar != "" {
 			val := rt.resolveVariables(cmd.SetValue)
@@ -217,6 +220,18 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		fallthrough
 
 	case dsl.CmdClick, dsl.CmdFill, dsl.CmdType, dsl.CmdHover, dsl.CmdCheck, dsl.CmdUncheck, dsl.CmdSelect, dsl.CmdDoubleClick, dsl.CmdRightClick, dsl.CmdUploadFile:
+		handled, actionValue, metadata, customErr := rt.tryExecuteCustomControl(ctx, cmd)
+		if handled {
+			res.ActionValue = actionValue
+			res.ProbeMetadata = metadata
+			if customErr != nil {
+				err = customErr
+			} else {
+				rt.invalidateSnapshot()
+			}
+			break
+		}
+
 		// Target resolution needed for interaction
 		res.TargetRequired = true
 		elements, errSnapshot := rt.loadSnapshot(ctx)

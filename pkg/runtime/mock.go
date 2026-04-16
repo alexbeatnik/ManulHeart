@@ -14,6 +14,7 @@ import (
 // pre-defined DOM snapshots instead of a real browser.
 type MockPage struct {
 	URL      string
+	Title    string
 	Elements []dom.ElementSnapshot
 
 	// Record of interaction calls
@@ -35,6 +36,9 @@ func (m *MockPage) Navigate(ctx context.Context, url string) error {
 }
 
 func (m *MockPage) EvalJS(ctx context.Context, expr string) ([]byte, error) {
+	if strings.Contains(expr, "document.title") {
+		return json.Marshal(m.Title)
+	}
 	return nil, nil
 }
 

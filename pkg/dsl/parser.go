@@ -22,45 +22,46 @@ import (
 type CommandType string
 
 const (
-	CmdNavigate     CommandType = "NAVIGATE"
-	CmdClick        CommandType = "CLICK"
-	CmdDoubleClick  CommandType = "DOUBLE_CLICK"
-	CmdRightClick   CommandType = "RIGHT_CLICK"
-	CmdFill         CommandType = "FILL"
-	CmdType         CommandType = "TYPE"
-	CmdSelect       CommandType = "SELECT"
-	CmdCheck        CommandType = "CHECK"
-	CmdUncheck      CommandType = "UNCHECK"
-	CmdVerify       CommandType = "VERIFY"
-	CmdVerifySoft   CommandType = "VERIFY_SOFT"
-	CmdVerifyField  CommandType = "VERIFY_FIELD"
-	CmdExtract      CommandType = "EXTRACT"
-	CmdScroll       CommandType = "SCROLL"
-	CmdPress        CommandType = "PRESS"
-	CmdWait         CommandType = "WAIT"
-	CmdWaitFor      CommandType = "WAIT_FOR"
+	CmdNavigate        CommandType = "NAVIGATE"
+	CmdClick           CommandType = "CLICK"
+	CmdDoubleClick     CommandType = "DOUBLE_CLICK"
+	CmdRightClick      CommandType = "RIGHT_CLICK"
+	CmdFill            CommandType = "FILL"
+	CmdType            CommandType = "TYPE"
+	CmdSelect          CommandType = "SELECT"
+	CmdCheck           CommandType = "CHECK"
+	CmdUncheck         CommandType = "UNCHECK"
+	CmdVerify          CommandType = "VERIFY"
+	CmdVerifySoft      CommandType = "VERIFY_SOFT"
+	CmdVerifyField     CommandType = "VERIFY_FIELD"
+	CmdExtract         CommandType = "EXTRACT"
+	CmdScroll          CommandType = "SCROLL"
+	CmdPress           CommandType = "PRESS"
+	CmdWait            CommandType = "WAIT"
+	CmdWaitFor         CommandType = "WAIT_FOR"
 	CmdWaitForResponse CommandType = "WAIT_FOR_RESPONSE"
-	CmdHover        CommandType = "HOVER"
-	CmdDrag         CommandType = "DRAG"
-	CmdSet          CommandType = "SET"
-	CmdPrint        CommandType = "PRINT"
-	CmdScreenshot   CommandType = "SCREENSHOT"
-	CmdHighlight    CommandType = "HIGHLIGHT"
-	CmdRepeat       CommandType = "REPEAT"
-	CmdForEach      CommandType = "FOR_EACH"
-	CmdWhile        CommandType = "WHILE"
-	CmdIf           CommandType = "IF"
-	CmdElIf         CommandType = "ELIF"
-	CmdElse         CommandType = "ELSE"
-	CmdEndIf        CommandType = "END_IF"
-	CmdEndFor       CommandType = "END_FOR"
-	CmdEndWhile     CommandType = "END_WHILE"
-	CmdEndRepeat    CommandType = "END_REPEAT"
-	CmdCallStep     CommandType = "CALL"
-	CmdUse          CommandType = "USE"
-	CmdUploadFile   CommandType = "UPLOAD_FILE"
-	CmdUpload       CommandType = "UPLOAD_FILE" // alias for backward compatibility
-	CmdUnknown      CommandType = "UNKNOWN"
+	CmdHover           CommandType = "HOVER"
+	CmdDrag            CommandType = "DRAG"
+	CmdSet             CommandType = "SET"
+	CmdPrint           CommandType = "PRINT"
+	CmdScreenshot      CommandType = "SCREENSHOT"
+	CmdHighlight       CommandType = "HIGHLIGHT"
+	CmdRepeat          CommandType = "REPEAT"
+	CmdForEach         CommandType = "FOR_EACH"
+	CmdWhile           CommandType = "WHILE"
+	CmdIf              CommandType = "IF"
+	CmdElIf            CommandType = "ELIF"
+	CmdElse            CommandType = "ELSE"
+	CmdEndIf           CommandType = "END_IF"
+	CmdEndFor          CommandType = "END_FOR"
+	CmdEndWhile        CommandType = "END_WHILE"
+	CmdEndRepeat       CommandType = "END_REPEAT"
+	CmdCallGo          CommandType = "CALL_GO"
+	CmdCallStep        CommandType = "CALL"
+	CmdUse             CommandType = "USE"
+	CmdUploadFile      CommandType = "UPLOAD_FILE"
+	CmdUpload          CommandType = "UPLOAD_FILE" // alias for backward compatibility
+	CmdUnknown         CommandType = "UNKNOWN"
 )
 
 // InteractionMode controls which elements are eligible for targeting.
@@ -186,6 +187,12 @@ type Command struct {
 
 	// CallStepName is the step block name to call for CALL_STEP commands.
 	CallStepName string
+	// GoCallName is the registered handler name for CALL GO commands.
+	GoCallName string
+	// GoCallArgs is the positional argument list for CALL GO commands.
+	GoCallArgs []string
+	// GoCallResultVar stores CALL GO results into {var} when provided.
+	GoCallResultVar string
 
 	// UploadFilePath is the file path for UPLOAD_FILE commands.
 	UploadFilePath string
@@ -904,6 +911,12 @@ func parseCommandLine(line string) Command {
 	case upper == "END REPEAT" || upper == "END REPEAT:" || upper == "ENDREPEAT":
 		cmd.Type = CmdEndRepeat
 
+	// ── CALL GO ─────────────────────────────────────────────────────────────
+	case strings.HasPrefix(upper, "CALL GO "):
+		cmd.Type = CmdCallGo
+		rest := strings.TrimSpace(stripPrefix(line, "CALL GO "))
+		cmd.GoCallName, cmd.GoCallArgs, cmd.GoCallResultVar = parseCallGo(rest)
+
 	// ── USE / CALL STEP ──────────────────────────────────────────────────────
 	case strings.HasPrefix(upper, "USE ") || strings.HasPrefix(upper, "CALL ") || strings.HasPrefix(upper, "RUN STEP "):
 		if strings.HasPrefix(upper, "USE ") {
@@ -920,6 +933,33 @@ func parseCommandLine(line string) Command {
 	}
 
 	return cmd
+}
+
+func parseCallGo(rest string) (name string, args []string, resultVar string) {
+	tokens := splitShellTokens(rest)
+	if len(tokens) == 0 {
+		return "", nil, ""
+	}
+
+	name = tokens[0]
+	args = append([]string(nil), tokens[1:]...)
+
+	if len(args) >= 2 && strings.EqualFold(args[0], "with") {
+		argsKeyword := strings.TrimSuffix(strings.ToLower(args[1]), ":")
+		if argsKeyword == "args" {
+			args = args[2:]
+		}
+	}
+
+	if len(args) >= 2 {
+		assignKeyword := strings.ToLower(args[len(args)-2])
+		if (assignKeyword == "into" || assignKeyword == "to") && isVariableToken(args[len(args)-1]) {
+			resultVar = strings.Trim(args[len(args)-1], "{}")
+			args = args[:len(args)-2]
+		}
+	}
+
+	return name, args, resultVar
 }
 
 // ── Target parsing helpers ─────────────────────────────────────────────────────
@@ -1072,4 +1112,42 @@ func extractFirstQuoted(s string) string {
 		return s[start+1 : start+1+end]
 	}
 	return ""
+}
+
+func splitShellTokens(s string) []string {
+	var tokens []string
+	var current strings.Builder
+	var quote rune
+
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		tokens = append(tokens, current.String())
+		current.Reset()
+	}
+
+	for _, r := range s {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+				continue
+			}
+			current.WriteRune(r)
+		case r == '\'' || r == '"':
+			quote = r
+		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
+			flush()
+		default:
+			current.WriteRune(r)
+		}
+	}
+	flush()
+	return tokens
+}
+
+func isVariableToken(s string) bool {
+	s = strings.TrimSpace(s)
+	return len(s) >= 3 && strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")
 }

@@ -217,6 +217,60 @@ func TestParseUncheck(t *testing.T) {
 	}
 }
 
+func TestParseCallGoWithArgsAndInto(t *testing.T) {
+	cmd := mustParseLine(t, `CALL GO helpers.echo "hello world" {email} plain into {message}`)
+	if cmd.Type != CmdCallGo {
+		t.Fatalf("type = %s, want %s", cmd.Type, CmdCallGo)
+	}
+	if cmd.GoCallName != "helpers.echo" {
+		t.Fatalf("GoCallName = %q, want helpers.echo", cmd.GoCallName)
+	}
+	wantArgs := []string{"hello world", "{email}", "plain"}
+	if len(cmd.GoCallArgs) != len(wantArgs) {
+		t.Fatalf("GoCallArgs len = %d, want %d (%v)", len(cmd.GoCallArgs), len(wantArgs), cmd.GoCallArgs)
+	}
+	for i := range wantArgs {
+		if cmd.GoCallArgs[i] != wantArgs[i] {
+			t.Fatalf("GoCallArgs[%d] = %q, want %q", i, cmd.GoCallArgs[i], wantArgs[i])
+		}
+	}
+	if cmd.GoCallResultVar != "message" {
+		t.Fatalf("GoCallResultVar = %q, want message", cmd.GoCallResultVar)
+	}
+}
+
+func TestParseCallGoWithArgsPrefixAndToAlias(t *testing.T) {
+	cmd := mustParseLine(t, `CALL GO math.concat with args: 'a' 'b c' to {joined}`)
+	if cmd.Type != CmdCallGo {
+		t.Fatalf("type = %s, want %s", cmd.Type, CmdCallGo)
+	}
+	if cmd.GoCallName != "math.concat" {
+		t.Fatalf("GoCallName = %q, want math.concat", cmd.GoCallName)
+	}
+	wantArgs := []string{"a", "b c"}
+	if len(cmd.GoCallArgs) != len(wantArgs) {
+		t.Fatalf("GoCallArgs len = %d, want %d (%v)", len(cmd.GoCallArgs), len(wantArgs), cmd.GoCallArgs)
+	}
+	for i := range wantArgs {
+		if cmd.GoCallArgs[i] != wantArgs[i] {
+			t.Fatalf("GoCallArgs[%d] = %q, want %q", i, cmd.GoCallArgs[i], wantArgs[i])
+		}
+	}
+	if cmd.GoCallResultVar != "joined" {
+		t.Fatalf("GoCallResultVar = %q, want joined", cmd.GoCallResultVar)
+	}
+}
+
+func TestParseCallStepStillUsesExistingSemantics(t *testing.T) {
+	cmd := mustParseLine(t, "CALL Login Flow")
+	if cmd.Type != CmdCallStep {
+		t.Fatalf("type = %s, want %s", cmd.Type, CmdCallStep)
+	}
+	if cmd.CallStepName != "Login Flow" {
+		t.Fatalf("CallStepName = %q, want Login Flow", cmd.CallStepName)
+	}
+}
+
 // ── VERIFY ────────────────────────────────────────────────────────────────────
 
 func TestParseVerifyPresent(t *testing.T) {
