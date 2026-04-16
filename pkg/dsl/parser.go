@@ -56,7 +56,8 @@ const (
 	CmdEndFor       CommandType = "END_FOR"
 	CmdEndWhile     CommandType = "END_WHILE"
 	CmdEndRepeat    CommandType = "END_REPEAT"
-	CmdCallStep     CommandType = "CALL_STEP"
+	CmdCallStep     CommandType = "CALL"
+	CmdUse          CommandType = "USE"
 	CmdUploadFile   CommandType = "UPLOAD_FILE"
 	CmdUpload       CommandType = "UPLOAD_FILE" // alias for backward compatibility
 	CmdUnknown      CommandType = "UNKNOWN"
@@ -226,6 +227,60 @@ type Hunt struct {
 	Blueprints map[string][]Command
 	// Commands is the ordered list of top-level parsed commands.
 	Commands []Command
+}
+
+// Expand replaces all CmdUse and CmdCallStep placeholders in the Hunt's
+// top-level commands and nested blocks with the actual commands from
+// hunt.Blueprints. It should be called after ResolveImports.
+func (h *Hunt) Expand() error {
+	expanded, err := expandCommands(h.Commands, h.Blueprints, make(map[string]bool))
+	if err != nil {
+		return err
+	}
+	h.Commands = expanded
+	return nil
+}
+
+func expandCommands(cmds []Command, blueprints map[string][]Command, visited map[string]bool) ([]Command, error) {
+	var out []Command
+	for _, cmd := range cmds {
+		if cmd.Type == CmdUse || cmd.Type == CmdCallStep {
+			name := strings.ToLower(cmd.CallStepName)
+			if visited[name] {
+				return nil, fmt.Errorf("recursion detected in USE/CALL expansion: %s", name)
+			}
+			block, found := blueprints[name]
+			if !found {
+				return nil, fmt.Errorf("USE/CALL: block %q not found in blueprints", name)
+			}
+			// Recursive expansion of the block itself.
+			visited[name] = true
+			expandedBody, err := expandCommands(block, blueprints, visited)
+			delete(visited, name) // clean up for sister branches
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, expandedBody...)
+		} else {
+			// Expand nested blocks (IF, REPEAT, etc.)
+			if len(cmd.Body) > 0 {
+				eb, err := expandCommands(cmd.Body, blueprints, visited)
+				if err != nil {
+					return nil, err
+				}
+				cmd.Body = eb
+			}
+			for i := range cmd.Branches {
+				eb, err := expandCommands(cmd.Branches[i].Body, blueprints, visited)
+				if err != nil {
+					return nil, err
+				}
+				cmd.Branches[i].Body = eb
+			}
+			out = append(out, cmd)
+		}
+	}
+	return out, nil
 }
 
 // ── Parser ─────────────────────────────────────────────────────────────────────
@@ -849,10 +904,16 @@ func parseCommandLine(line string) Command {
 	case upper == "END REPEAT" || upper == "END REPEAT:" || upper == "ENDREPEAT":
 		cmd.Type = CmdEndRepeat
 
-	// ── CALL STEP ─────────────────────────────────────────────────────────────
-	case strings.HasPrefix(upper, "CALL ") || strings.HasPrefix(upper, "RUN STEP "):
-		cmd.Type = CmdCallStep
-		cmd.CallStepName = stripPrefix(line, "RUN STEP ", "CALL ")
+	// ── USE / CALL STEP ──────────────────────────────────────────────────────
+	case strings.HasPrefix(upper, "USE ") || strings.HasPrefix(upper, "CALL ") || strings.HasPrefix(upper, "RUN STEP "):
+		if strings.HasPrefix(upper, "USE ") {
+			cmd.Type = CmdUse
+			cmd.CallStepName = stripPrefix(line, "USE ")
+		} else {
+			cmd.Type = CmdCallStep
+			cmd.CallStepName = stripPrefix(line, "RUN STEP ", "CALL ")
+		}
+		cmd.CallStepName = strings.TrimSpace(cmd.CallStepName)
 
 	default:
 		cmd.Type = CmdUnknown

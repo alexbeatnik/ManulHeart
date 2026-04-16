@@ -114,7 +114,15 @@
     const buildXPath = (el) => {
         const parts = [];
         let node = el;
-        while (node && node.nodeType === Node.ELEMENT_NODE) {
+        while (node && (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.DOCUMENT_FRAGMENT_NODE)) {
+            if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+                if (node.host) {
+                    node = node.host;
+                    continue;
+                } else {
+                    break;
+                }
+            }
             const tag = node.tagName.toLowerCase();
             let idx = 1;
             let sibling = node.previousElementSibling;
@@ -123,7 +131,7 @@
                 sibling = sibling.previousElementSibling;
             }
             parts.unshift(`${tag}[${idx}]`);
-            node = node.parentElement;
+            node = node.parentElement || (node.parentNode && node.parentNode.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? node.parentNode : null);
         }
         return '/' + parts.join('/');
     };
@@ -152,7 +160,7 @@
         if (!vis && !isSpecial) return;
 
         const rect = el.getBoundingClientRect();
-        if (!isSpecial && rect.width < 2 && rect.height < 2) return;
+        // Collect all interactive elements, even if small (might be hidden inputs)
 
         let eid = el.__manulId;
         if (eid === undefined) {
@@ -165,8 +173,41 @@
         const labelText   = getLabelText(el);
         const accessibleName = getAccessibleName(el);
 
+        // Extract icon classes from <i>, <span>, or <svg> children.
+        const iconClasses = (() => {
+            const icons = el.querySelectorAll("i, span, svg, [class*='icon'], [class*='fa-']");
+            const classes = new Set();
+            icons.forEach(icon => {
+                if (typeof icon.className === 'string' && icon.className) {
+                    icon.className.split(/\s+/).forEach(c => {
+                        if (c.includes('icon') || c.includes('fa-')) classes.add(c);
+                    });
+                }
+            });
+            return Array.from(classes).join(' ');
+        })();
+
+        // Capture up to 8 levels of ancestor tags.
+        const ancestors = [];
+        let p = el.parentElement;
+        while (p && ancestors.length < 8) {
+            ancestors.push(p.tagName.toLowerCase());
+            p = p.parentElement;
+        }
+
+        // Build canonical name: context -> core_name [METADATA]
+        const name = (() => {
+            const core = accessibleName || visibleText || el.id || el.getAttribute('name') || tag;
+            let n = core.slice(0, 80);
+            if (!vis) n += ' [HIDDEN]';
+            if (inShadow) n += ' [SHADOW_DOM]';
+            if (el.disabled) n += ' [DISABLED]';
+            return n;
+        })();
+
         elements.push({
             id:             eid,
+            name:           name,
             xpath:          buildXPath(el),
             tag:            tag,
             input_type:     el.type || '',
@@ -180,12 +221,16 @@
             name_attr:      el.getAttribute('name') || '',
             html_id:        el.id || '',
             class_name:     (typeof el.className === 'string' ? el.className : '') || '',
+            icon_classes:   iconClasses,
             role:           el.getAttribute('role') || '',
             value:          (el.value !== undefined ? el.value : '') || '',
             accessible_name: accessibleName,
+            ancestors:      ancestors,
             is_visible:     vis,
             is_disabled:    el.disabled || el.getAttribute('aria-disabled') === 'true',
             is_hidden:      !vis,
+            is_select:      tag === 'select',
+            is_contenteditable: el.contentEditable === 'true' || el.getAttribute('contenteditable') === 'true',
             is_editable:    !el.disabled && !el.readOnly &&
                             (tag === 'input' || tag === 'textarea' ||
                              el.getAttribute('contenteditable') === 'true' ||

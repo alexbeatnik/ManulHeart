@@ -68,16 +68,20 @@ STEP 7: Data extraction from web table
 STEP 8: Paginated table interaction
     SCROLL DOWN
     CLICK on the '2' link
+    WAIT 2
     CHECK the checkbox for '7'
     CLICK on the '4' link
+    WAIT 2
     CHECK the checkbox for '17'
 
 STEP 9: Scrolling dropdown
     SCROLL DOWN
     CLICK the 'Scrolling DropDown' element
+    WAIT 1
     # "SCROLL DOWN inside the list" targets the first dropdown-style
     # scroll container and sets scrollTop = scrollHeight.
     SCROLL DOWN inside the list
+    WAIT 1
     CLICK the 'Item 100' element
     # VERIFY that 'Item 100' is present
 
@@ -93,7 +97,7 @@ STEP 10: Shadow DOM input
 STEP 11: Final validation
     # A multi-assertion VERIFY — all quoted tokens must be present
     # in the visible page text for this step to pass.
-    # VERIFY that 'Mega Manul' is present
+    VERIFY that 'Mega Manul' is present
     VERIFY that 'Japan' is present
     VERIFY that 'Dropped!' is present
     VERIFY that 'Item 100' is present

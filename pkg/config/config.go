@@ -11,6 +11,9 @@ type Config struct {
 	// Example: "http://127.0.0.1:9222"
 	CDPEndpoint string
 
+	// Headless runs the browser in headless mode.
+	Headless bool
+
 	// Verbose enables verbose logging.
 	Verbose bool
 

@@ -26,6 +26,8 @@ type ElementSnapshot struct {
 	// ID is the engine-assigned numeric identifier stored on el.__manulId,
 	// allocated from window.__manulIdCounter by the in-page JS probe.
 	ID int `json:"id"`
+	// Name is the display name (e.g. "Login button [SHADOW_DOM]").
+	Name string `json:"name,omitempty"`
 	// XPath is the deterministic full XPath computed in-page.
 	XPath string `json:"xpath"`
 	// Tag is the lowercase HTML tag name.
@@ -57,10 +59,14 @@ type ElementSnapshot struct {
 	HTMLId string `json:"html_id,omitempty"`
 	// ClassName is the class attribute string.
 	ClassName string `json:"class_name,omitempty"`
+	// IconClasses is a space-separated list of classes from icon children.
+	IconClasses string `json:"icon_classes,omitempty"`
 	// Role is the explicit or inferred ARIA role.
 	Role string `json:"role,omitempty"`
 	// Value is the current value for input/select elements.
 	Value string `json:"value,omitempty"`
+	// Ancestors holds the tag names of top 8 parents.
+	Ancestors []string `json:"ancestors,omitempty"`
 
 	// -- State ----------------------------------------------------------
 
@@ -72,6 +78,10 @@ type ElementSnapshot struct {
 	IsHidden bool `json:"is_hidden"`
 	// IsEditable reports whether the element accepts text input.
 	IsEditable bool `json:"is_editable"`
+	// IsSelect reports whether the element is a native <select>.
+	IsSelect bool `json:"is_select"`
+	// IsContentEditable reports whether the element has contenteditable="true".
+	IsContentEditable bool `json:"is_contenteditable"`
 	// IsChecked reports whether the element (checkbox/radio) is checked.
 	IsChecked bool `json:"is_checked"`
 	// IsInShadow reports whether the element is inside a shadow DOM.
@@ -122,8 +132,7 @@ func (e *ElementSnapshot) IsInteractive(mode string) bool {
 		return e.IsEditable || e.Tag == "input" || e.Tag == "textarea" ||
 			e.Role == "textbox" || e.Role == "spinbutton" || e.Role == "slider"
 	case "checkbox":
-		return (e.Tag == "input" && e.InputType == "checkbox") ||
-			(e.Tag == "input" && e.InputType == "radio") ||
+		return (e.Tag == "input" && (e.InputType == "checkbox" || e.InputType == "radio")) ||
 			e.Role == "checkbox" || e.Role == "radio"
 	case "select":
 		return e.Tag == "select" || e.Role == "listbox" || e.Role == "combobox"
@@ -147,6 +156,7 @@ func (e *ElementSnapshot) AllTextSignals() []string {
 		norm(e.DataTestID),
 		norm(e.NameAttr),
 		norm(e.Value),
+		norm(e.IconClasses),
 	} {
 		if s != "" && !seen[s] {
 			seen[s] = true

@@ -338,9 +338,11 @@ func (c *Conn) SetChecked(ctx context.Context, id int, xpath string, checked boo
 					} else {
 						el.checked = %[3]v;
 					}
-					el.dispatchEvent(new Event('click', { bubbles: true }));
-					el.dispatchEvent(new Event('input', { bubbles: true }));
-					el.dispatchEvent(new Event('change', { bubbles: true }));
+					// Fire a full sequence of events
+					const events = ['mousedown', 'mouseup', 'click', 'input', 'change'];
+					events.forEach(evt => {
+						el.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
+					});
 				}
 			}
 		}
@@ -369,10 +371,31 @@ func ScrollPage(ctx context.Context, c *Conn, direction, container string) error
 	}
 	js := fmt.Sprintf(`window.scrollBy(0, %d);`, amount)
 	if container != "" {
-		// A rudimentary xpath selection.
+		// A more robust selection: find the element, and if it's not scrollable, look for a scrollable child.
 		js = fmt.Sprintf(`
-			var el = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-			if (el) el.scrollBy(0, %d);
+			(() => {
+				var el = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+				if (!el) return;
+				
+				const isScrollable = (node) => {
+					const cs = window.getComputedStyle(node);
+					const hasOverflow = (cs.overflowY === 'auto' || cs.overflowY === 'scroll');
+					return hasOverflow && node.scrollHeight > node.clientHeight;
+				};
+
+				// Find the scrollable element (itself or deeply nested)
+				var target = el;
+				if (!isScrollable(el)) {
+					var all = el.querySelectorAll('*');
+					for(var i=0; i<all.length; i++) {
+						if (isScrollable(all[i])) {
+							target = all[i];
+							// Don't break! Find the MOST deeply nested scrollable child (usually the one people mean)
+						}
+					}
+				}
+				target.scrollBy({ top: %d, behavior: 'auto' });
+			})()
 		`, container, amount)
 	}
 	_, err := Evaluate(ctx, c, js)

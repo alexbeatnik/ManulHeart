@@ -210,9 +210,9 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		} else if cmd.Type == dsl.CmdClick {
 			mode = dsl.ModeClickable
 		} else if cmd.Type == dsl.CmdCheck || cmd.Type == dsl.CmdUncheck {
-			mode = "checkbox"
+			mode = dsl.ModeCheckbox
 		} else if cmd.Type == dsl.CmdSelect {
-			mode = "select"
+			mode = dsl.ModeSelect
 		}
 
 		targetPath := rt.resolveVariables(cmd.Target)
@@ -226,26 +226,49 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			break
 		}
 
-		ranked := scorer.Rank(targetPath, cmd.TypeHint, string(mode), elements, 5, anchor)
+		// Restrictive modes (input, checkbox, select) need special handling
+		// to support "Click/Check X" when X is a label or nearby table cell.
+		isRestrictive := mode == dsl.ModeInput || mode == dsl.ModeCheckbox || mode == dsl.ModeSelect
 		
-		// Implicit Anchor Fallback:
-		// If 1) we are in a restrictive mode (input, checkbox, select)
-		// AND 2) nothing was found or the best result is penalized (-50,000)
-		// AND 3) targetPath is not empty
-		// THEN try resolving targetPath as a generic anchor and find the restrictive element NEAR it.
-		isRestrictive := mode == dsl.ModeInput || mode == "checkbox" || mode == "select"
-		if isRestrictive && targetPath != "" && (len(ranked) == 0 || ranked[0].Explain.Score.TagSemantics < -1000) {
-			anchorRanked := scorer.Rank(targetPath, "", string(dsl.ModeNone), elements, 1, anchor)
-			if len(anchorRanked) > 0 && anchorRanked[0].Explain.Score.Total > ThresholdAmbiguous {
-				rt.logger.Info("Target %q is not a %s, using as proximity anchor...", targetPath, mode)
-				newAnchor := &scorer.AnchorContext{
-					Rect:  anchorRanked[0].Element.Rect,
-					XPath: anchorRanked[0].Element.XPath,
-					Words: scorer.SignificantWords(anchorRanked[0].Element.VisibleText),
+		var ranked []scorer.RankedCandidate
+		if isRestrictive && targetPath != "" {
+			// Pass 1: Try direct resolution first (high threshold)
+			selfRanked := scorer.Rank(targetPath, cmd.TypeHint, string(mode), elements, 5, anchor)
+			if len(selfRanked) > 0 && selfRanked[0].Explain.Score.Total > 0.15 {
+				ranked = selfRanked
+			} else {
+				// Pass 2: Find what the user actually meant by the text (ignoring tag semantics)
+				anchorRanked := scorer.Rank(targetPath, cmd.TypeHint, string(dsl.ModeNone), elements, 5, anchor)
+				if len(anchorRanked) > 0 {
+					topAnchor := anchorRanked[0]
+					
+					// If the top anchor itself is already interactive, use it
+					if topAnchor.Element.IsInteractive(string(mode)) {
+						ranked = anchorRanked
+					} else {
+						// Pass 3: Use the found anchor to find the interactive element nearby.
+						rt.logger.Info("Target %q is not a %s. Using it as anchor to find nearby %s...", targetPath, mode, mode)
+						newAnchor := &scorer.AnchorContext{
+							Rect:  topAnchor.Element.Rect,
+							XPath: topAnchor.Element.XPath,
+							Words: scorer.SignificantWords(topAnchor.Element.VisibleText),
+						}
+						// Search for ANY such element near the anchor
+						rankedFallback := scorer.Rank("", cmd.TypeHint, string(mode), elements, 5, newAnchor)
+						if len(rankedFallback) > 0 && rankedFallback[0].Explain.Score.ProximityScore > 0.05 {
+							ranked = rankedFallback
+						} else {
+							// fallback failed to find anything truly NEAR. Use the anchor.
+							ranked = anchorRanked
+						}
+					}
 				}
-				// Re-rank with "" query (ANY such element) near the new anchor.
-				ranked = scorer.Rank("", cmd.TypeHint, string(mode), elements, 5, newAnchor)
 			}
+		}
+
+		// Standard resolution if not already handled by restrictive fallback
+		if len(ranked) == 0 {
+			ranked = scorer.Rank(targetPath, cmd.TypeHint, string(mode), elements, 5, anchor)
 		}
 
 		if len(ranked) == 0 {
@@ -265,8 +288,8 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		}
 
 		winner := best.Element
-		rt.logger.Info("Target '%s' resolved to element: ID=%d Tag=%s XPath=%s Score=%.3f", 
-			targetPath, winner.ID, winner.Tag, winner.XPath, best.Explain.Score.Total)
+		rt.logger.Info("Target '%s' resolved to: %s (ID=%d, Score=%.3f)", 
+			targetPath, winner.Name, winner.ID, best.Explain.Score.Total)
 		
 		if rt.cfg.ExplainMode {
 			rt.logger.Info("  Breakdown: Text=%.2f, Attr=%.2f, Sem=%.2f, Prox=%.2f",
@@ -291,14 +314,14 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			if e != nil {
 				err = fmt.Errorf("center calc: %w", e)
 			} else {
-				err = rt.page.Click(ctx, x, y)
-				if err == nil {
-					// A click may trigger navigation (e.g. Login button).
-					// Brief pause lets the browser begin the navigation so
-					// WaitForLoad does not see stale readyState=="complete".
-					time.Sleep(300 * time.Millisecond)
-					_ = rt.page.WaitForLoad(ctx)
-				}
+					// Perform interaction
+					_ = rt.page.ScrollIntoView(ctx, winner.ID, winner.XPath)
+					err = rt.page.Click(ctx, x, y)
+					if err == nil {
+						// A click may trigger navigation or AJAX update.
+						time.Sleep(500 * time.Millisecond)
+						_ = rt.page.WaitForLoad(ctx)
+					}
 			}
 		case dsl.CmdDoubleClick:
 			x, y, e := rt.page.GetElementCenter(ctx, winner.ID, winner.XPath)
@@ -326,20 +349,52 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			err = rt.page.SetChecked(ctx, winner.ID, winner.XPath, checked)
 		case dsl.CmdSelect:
 			val := rt.resolveVariables(cmd.Value)
-			js := fmt.Sprintf(`(() => {
-				const el = document.evaluate("%s", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-				if (!el) return;
-				for (let opt of el.options) {
-					if (opt.text === "%s" || opt.value === "%s") {
-						el.value = opt.value;
-						el.dispatchEvent(new Event('change', {bubbles: true}));
-						return;
+			_ = rt.page.ScrollIntoView(ctx, winner.ID, winner.XPath)
+			
+			// Detect if it's a native select or custom dropdown
+			if winner.Tag == "select" {
+				js := fmt.Sprintf(`(() => {
+					const el = document.evaluate("%s", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+					if (!el) return;
+					for (let opt of el.options) {
+						if (opt.text.trim() === "%s" || opt.value === "%s") {
+							el.value = opt.value;
+							el.dispatchEvent(new Event('change', {bubbles: true}));
+							return;
+						}
+					}
+				})()`, strings.ReplaceAll(winner.XPath, `"`, `\"`),
+					strings.ReplaceAll(val, `"`, `\"`),
+					strings.ReplaceAll(val, `"`, `\"`))
+				_, err = rt.page.EvalJS(ctx, js)
+			} else {
+				// Custom dropdown: Click then search for the option text
+				_ = rt.page.Click(ctx, winner.Rect.Left + winner.Rect.Width/2, winner.Rect.Top + winner.Rect.Height/2)
+				time.Sleep(300 * time.Millisecond)
+				
+				// Re-probe to find the option that appeared
+				raw, _ := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
+				elements, _ := heuristics.ParseProbeResult(raw)
+				
+				// Exclude the container itself and hidden elements from option search
+				var candidates []dom.ElementSnapshot
+				for _, e := range elements {
+					if e.ID != winner.ID && e.IsVisible && e.Tag != "input" { 
+						candidates = append(candidates, e)
 					}
 				}
-			})()`, strings.ReplaceAll(winner.XPath, `"`, `\"`),
-				strings.ReplaceAll(val, `"`, `\"`),
-				strings.ReplaceAll(val, `"`, `\"`))
-			_, err = rt.page.EvalJS(ctx, js)
+				
+				rankedOpt := scorer.Rank(val, "", "clickable", candidates, 1, nil)
+				if len(rankedOpt) > 0 {
+					opt := rankedOpt[0].Element
+					rt.logger.Info("Selected option %q (Tag=%s ID=%d)", val, opt.Tag, opt.ID)
+					_ = rt.page.ScrollIntoView(ctx, opt.ID, opt.XPath)
+					cx, cy, _ := rt.page.GetElementCenter(ctx, opt.ID, opt.XPath)
+					err = rt.page.Click(ctx, cx, cy)
+				} else {
+					err = fmt.Errorf("could not find option %q after clicking %q", val, winner.Tag)
+				}
+			}
 		}
 
 	case dsl.CmdDrag:
@@ -415,17 +470,33 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		rt.logger.Info("Extracted '%s' into {%s}", extracted, cmd.ExtractVar)
 
 	case dsl.CmdScroll:
+		containerID := ""
+		if cmd.ScrollContainer != "" {
+			raw, _ := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
+			elements, _ := heuristics.ParseProbeResult(raw)
+			ranked := scorer.Rank(cmd.ScrollContainer, "", "none", elements, 1, nil)
+			if len(ranked) > 0 {
+				containerID = ranked[0].Element.XPath
+			}
+		}
+
 		if scroller, ok := rt.page.(interface {
 			ScrollPage(context.Context, string, string) error
 		}); ok {
-			err = scroller.ScrollPage(ctx, cmd.ScrollDirection, cmd.ScrollContainer)
+			err = scroller.ScrollPage(ctx, cmd.ScrollDirection, containerID)
 		} else {
 			// fallback via EvalJS
 			amount := 500
 			if cmd.ScrollDirection == "up" {
 				amount = -500
 			}
-			_, err = rt.page.EvalJS(ctx, fmt.Sprintf("window.scrollBy(0, %d)", amount))
+			js := fmt.Sprintf("window.scrollBy(0, %d)", amount)
+			if containerID != "" {
+				js = fmt.Sprintf(`
+					(document.evaluate("%s", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue).scrollBy(0, %d)
+				`, strings.ReplaceAll(containerID, `"`, `\"`), amount)
+			}
+			_, err = rt.page.EvalJS(ctx, js)
 		}
 
 	case dsl.CmdVerify:
