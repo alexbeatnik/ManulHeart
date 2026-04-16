@@ -1,4 +1,7 @@
 ([target, hint]) => {
+    target = (target || '').toLowerCase();
+    hint = (hint || '').toLowerCase();
+    
     var ALL_TAGS = 'div, span, p, h1, h2, h3, h4, h5, h6, li, dd, dt, '
         + 'strong, b, i, em, label, a, button, td, th, article, section';
     var hintWords = hint ? hint.split(/\s+/).filter(function(w) { return w.length > 1; }) : [];
@@ -136,12 +139,37 @@
         for (var ei = 0; ei < allEls.length; ei++) {
             var txt = (allEls[ei].innerText || '').trim().toLowerCase();
             if (!txt || txt.length > 200) continue;
-            if (txt === target || txt.includes(target)) {
+            
+            var matchAllWords = true;
+            if (targetWords.length === 0) matchAllWords = false;
+            for (var wi = 0; wi < targetWords.length; wi++) {
+                if (!txt.includes(targetWords[wi])) {
+                    matchAllWords = false;
+                    break;
+                }
+            }
+
+            if (txt === target || txt.includes(target) || matchAllWords) {
                 var kids = allEls[ei].querySelectorAll(ALL_TAGS);
                 var leafKids = Array.from(kids).filter(function(k) {
-                    return (k.innerText || '').trim().toLowerCase().includes(target);
+                    var kt = (k.innerText || '').trim().toLowerCase();
+                    if (!kt) return false;
+                    var kw = true;
+                    for (var ki = 0; ki < targetWords.length; ki++) {
+                       if (!kt.includes(targetWords[ki])) kw = false;
+                    }
+                    return kt.includes(target) || kw;
                 });
                 if (leafKids.length > 0) return leafKids[leafKids.length - 1].innerText.trim();
+                
+                // If the target matched the parent but no children had the target words,
+                // perhaps a child holds the value we want (like "3.3%"). 
+                // Return the text of the LAST child if it exists, otherwise the parent's text.
+                if (kids.length > 0) {
+                    var lastChildText = (kids[kids.length - 1].innerText || '').trim();
+                    if (lastChildText && lastChildText.length < 50) return lastChildText;
+                }
+                
                 return allEls[ei].innerText.trim();
             }
         }

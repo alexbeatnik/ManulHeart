@@ -225,13 +225,14 @@
 
     const pageText = (() => {
         let t = (document.body ? document.body.innerText : '') + ' ';
-        document.querySelectorAll('[aria-label],[placeholder],[title],[aria-valuetext]').forEach(el => {
+        document.querySelectorAll('[aria-label],[placeholder],[title],[aria-valuetext],input,textarea,select').forEach(el => {
             const cs = window.getComputedStyle(el);
             if (cs.display === 'none' || cs.visibility === 'hidden') return;
             t += ' ' + (el.getAttribute('aria-label') || '');
             t += ' ' + (el.getAttribute('placeholder') || '');
             t += ' ' + (el.getAttribute('title') || '');
             t += ' ' + (el.getAttribute('aria-valuetext') || '');
+            if (typeof el.value === 'string') t += ' ' + el.value;
         });
         return t.toLowerCase();
     })();

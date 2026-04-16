@@ -37,15 +37,15 @@ type Page interface {
 	// Click performs a left-click at the given viewport coordinates.
 	Click(ctx context.Context, x, y float64) error
 
-	// FocusByXPath focuses the element at the given XPath.
-	FocusByXPath(ctx context.Context, xpath string) error
+	// Focus focuses the element resolved by ID or XPath.
+	Focus(ctx context.Context, id int, xpath string) error
 
-	// SetInputValue sets the value of an input element at the given XPath,
+	// SetInputValue sets the value of an input element at the given ID or XPath,
 	// dispatching the appropriate input/change events.
-	SetInputValue(ctx context.Context, xpath, value string) error
+	SetInputValue(ctx context.Context, id int, xpath, value string) error
 
-	// ScrollIntoView scrolls the element at the given XPath into the viewport.
-	ScrollIntoView(ctx context.Context, xpath string) error
+	// ScrollIntoView scrolls the element at the given ID or XPath into the viewport.
+	ScrollIntoView(ctx context.Context, id int, xpath string) error
 
 	// ScrollPage scrolls the page or a container by the viewport height.
 	// direction is "down" or "up". container is a CSS selector (empty = window).
@@ -63,8 +63,8 @@ type Page interface {
 	// DragAndDrop simulates a drag from (fromX, fromY) to (toX, toY).
 	DragAndDrop(ctx context.Context, fromX, fromY, toX, toY float64) error
 
-	// SetFileInput sets file paths on a file input element at the given XPath.
-	SetFileInput(ctx context.Context, xpath string, filePaths []string) error
+	// SetFileInput sets file paths on a file input element at the given ID or XPath.
+	SetFileInput(ctx context.Context, id int, xpath string, filePaths []string) error
 
 	// Screenshot captures a PNG screenshot of the current page.
 	Screenshot(ctx context.Context) ([]byte, error)
@@ -73,10 +73,10 @@ type Page interface {
 	WaitForResponse(ctx context.Context, urlPattern string, timeout time.Duration) error
 
 	// HighlightElement injects a temporary border highlight for debugging.
-	HighlightElement(ctx context.Context, xpath string, durationMS int) error
+	HighlightElement(ctx context.Context, id int, xpath string, durationMS int) error
 
 	// GetElementCenter returns the center viewport coordinates of an element.
-	GetElementCenter(ctx context.Context, xpath string) (float64, float64, error)
+	GetElementCenter(ctx context.Context, id int, xpath string) (float64, float64, error)
 
 	// DispatchKey dispatches a keyboard event. key is the key name (e.g. "Enter").
 	// modifiers is a bitmask: 1=Alt, 2=Ctrl, 4=Meta, 8=Shift.

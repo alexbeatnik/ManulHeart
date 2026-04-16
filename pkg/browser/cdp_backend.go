@@ -127,16 +127,16 @@ func (p *CDPPage) Click(ctx context.Context, x, y float64) error {
 	return cdp.Click(ctx, p.conn, x, y)
 }
 
-func (p *CDPPage) FocusByXPath(ctx context.Context, xpath string) error {
-	return cdp.FocusByXPath(ctx, p.conn, xpath)
+func (p *CDPPage) Focus(ctx context.Context, id int, xpath string) error {
+	return p.conn.Focus(ctx, id, xpath)
 }
 
-func (p *CDPPage) SetInputValue(ctx context.Context, xpath, value string) error {
-	return cdp.SetInputValue(ctx, p.conn, xpath, value)
+func (p *CDPPage) SetInputValue(ctx context.Context, id int, xpath, value string) error {
+	return p.conn.SetInputValue(ctx, id, xpath, value)
 }
 
-func (p *CDPPage) ScrollIntoView(ctx context.Context, xpath string) error {
-	return cdp.ScrollIntoView(ctx, p.conn, xpath)
+func (p *CDPPage) ScrollIntoView(ctx context.Context, id int, xpath string) error {
+	return p.conn.ScrollIntoView(ctx, id, xpath)
 }
 
 func (p *CDPPage) ScrollPage(ctx context.Context, direction, container string) error {
@@ -159,8 +159,8 @@ func (p *CDPPage) DragAndDrop(ctx context.Context, fromX, fromY, toX, toY float6
 	return cdp.DragAndDrop(ctx, p.conn, fromX, fromY, toX, toY)
 }
 
-func (p *CDPPage) SetFileInput(ctx context.Context, xpath string, filePaths []string) error {
-	return cdp.SetFileInput(ctx, p.conn, xpath, filePaths)
+func (p *CDPPage) SetFileInput(ctx context.Context, id int, xpath string, filePaths []string) error {
+	return p.conn.SetFileInput(ctx, id, xpath, filePaths)
 }
 
 func (p *CDPPage) Screenshot(ctx context.Context) ([]byte, error) {
@@ -171,12 +171,12 @@ func (p *CDPPage) WaitForResponse(ctx context.Context, urlPattern string, timeou
 	return cdp.WaitForResponse(ctx, p.conn, urlPattern, timeout)
 }
 
-func (p *CDPPage) HighlightElement(ctx context.Context, xpath string, durationMS int) error {
-	return cdp.HighlightElement(ctx, p.conn, xpath, durationMS)
+func (p *CDPPage) HighlightElement(ctx context.Context, id int, xpath string, durationMS int) error {
+	return p.conn.HighlightElement(ctx, id, xpath, durationMS)
 }
 
-func (p *CDPPage) GetElementCenter(ctx context.Context, xpath string) (float64, float64, error) {
-	return cdp.GetElementCenter(ctx, p.conn, xpath)
+func (p *CDPPage) GetElementCenter(ctx context.Context, id int, xpath string) (float64, float64, error) {
+	return p.conn.GetElementCenter(ctx, id, xpath)
 }
 
 func (p *CDPPage) DispatchKey(ctx context.Context, key string, modifiers int) error {

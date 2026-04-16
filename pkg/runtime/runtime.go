@@ -20,6 +20,14 @@ import (
 	"github.com/manulengineer/manulheart/pkg/utils"
 )
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+
 // Runtime executes ManulHeart DSL hunts against a live browser page.
 type Runtime struct {
 	cfg    config.Config
@@ -163,7 +171,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 		}
 		fallthrough
 
-	case dsl.CmdClick, dsl.CmdFill, dsl.CmdType, dsl.CmdHover:
+	case dsl.CmdClick, dsl.CmdFill, dsl.CmdType, dsl.CmdHover, dsl.CmdCheck, dsl.CmdUncheck, dsl.CmdSelect, dsl.CmdDoubleClick, dsl.CmdRightClick:
 		// Target resolution needed for interaction
 		raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
 		if errProbe != nil {
@@ -182,6 +190,10 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 			mode = dsl.ModeInput
 		} else if cmd.Type == dsl.CmdClick {
 			mode = dsl.ModeClickable
+		} else if cmd.Type == dsl.CmdCheck || cmd.Type == dsl.CmdUncheck {
+			mode = "checkbox"
+		} else if cmd.Type == dsl.CmdSelect {
+			mode = "select"
 		}
 
 		targetPath := rt.resolveVariables(cmd.Target)
@@ -206,6 +218,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 		}
 
 		winner := ranked[0].Element
+		rt.logger.Info("Target '%s' resolved to element: ID=%d Tag=%s XPath=%s", targetPath, winner.ID, winner.Tag, winner.XPath)
 
 		// Perform action
 		switch cmd.Type {
@@ -216,9 +229,9 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 				// but we keep it for robustness if fallthrough happened.
 				val = rt.resolveVariables(cmd.SetValue)
 			}
-			err = rt.page.SetInputValue(ctx, winner.XPath, val)
+			err = rt.page.SetInputValue(ctx, winner.ID, winner.XPath, val)
 		case dsl.CmdClick:
-			x, y, e := rt.page.GetElementCenter(ctx, winner.XPath)
+			x, y, e := rt.page.GetElementCenter(ctx, winner.ID, winner.XPath)
 			if e != nil {
 				err = fmt.Errorf("center calc: %w", e)
 			} else {
@@ -232,21 +245,21 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 				}
 			}
 		case dsl.CmdDoubleClick:
-			x, y, e := rt.page.GetElementCenter(ctx, winner.XPath)
+			x, y, e := rt.page.GetElementCenter(ctx, winner.ID, winner.XPath)
 			if e != nil {
 				err = fmt.Errorf("center calc: %w", e)
 			} else {
 				err = rt.page.DoubleClick(ctx, x, y)
 			}
 		case dsl.CmdRightClick:
-			x, y, e := rt.page.GetElementCenter(ctx, winner.XPath)
+			x, y, e := rt.page.GetElementCenter(ctx, winner.ID, winner.XPath)
 			if e != nil {
 				err = fmt.Errorf("center calc: %w", e)
 			} else {
 				err = rt.page.RightClick(ctx, x, y)
 			}
 		case dsl.CmdHover:
-			x, y, e := rt.page.GetElementCenter(ctx, winner.XPath)
+			x, y, e := rt.page.GetElementCenter(ctx, winner.ID, winner.XPath)
 			if e != nil {
 				err = fmt.Errorf("center calc: %w", e)
 			} else {
@@ -274,6 +287,57 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 				strings.ReplaceAll(val, `"`, `\"`))
 			_, err = rt.page.EvalJS(ctx, js)
 		}
+
+	case dsl.CmdDrag:
+		raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
+		if errProbe != nil {
+			err = fmt.Errorf("probe failed: %w", errProbe)
+			break
+		}
+		elements, errParse := heuristics.ParseProbeResult(raw)
+		if errParse != nil {
+			err = fmt.Errorf("parse probe failed: %w", errParse)
+			break
+		}
+
+		sourcePath := rt.resolveVariables(cmd.DragSource)
+		rankedSrc := scorer.Rank(sourcePath, cmd.TypeHint, string(dsl.ModeClickable), elements, 5, nil)
+		if len(rankedSrc) == 0 {
+			err = fmt.Errorf("drag source not found: %q", sourcePath)
+			break
+		}
+		for _, r := range rankedSrc {
+			res.RankedCandidates = append(res.RankedCandidates, r.Explain)
+		}
+		srcEl := rankedSrc[0].Element
+
+		x1, y1, errSrc := rt.page.GetElementCenter(ctx, srcEl.ID, srcEl.XPath)
+		if errSrc != nil {
+			err = fmt.Errorf("source center calc failed: %w", errSrc)
+			break
+		}
+
+		dropPath := rt.resolveVariables(cmd.DragTarget)
+		rankedDest := scorer.Rank(dropPath, "", string(dsl.ModeClickable), elements, 5, nil)
+		if len(rankedDest) == 0 {
+			err = fmt.Errorf("drag destination not found: %q", dropPath)
+			break
+		}
+		for _, r := range rankedDest {
+			res.RankedCandidates = append(res.RankedCandidates, r.Explain)
+		}
+		destEl := rankedDest[0].Element
+
+		x2, y2, errDest := rt.page.GetElementCenter(ctx, destEl.ID, destEl.XPath)
+		if errDest != nil {
+			err = fmt.Errorf("destination center calc failed: %w", errDest)
+			break
+		}
+
+		rt.logger.Info("Target '%s' resolved to element: ID=%d Tag=%s XPath=%s", sourcePath, srcEl.ID, srcEl.Tag, srcEl.XPath)
+		rt.logger.Info("Target '%s' resolved to element: ID=%d Tag=%s XPath=%s", dropPath, destEl.ID, destEl.Tag, destEl.XPath)
+
+		err = rt.page.DragAndDrop(ctx, x1, y1, x2, y2)
 
 	case dsl.CmdExtract:
 		// Use dedicated extraction probe which handles tables/text nodes
@@ -335,6 +399,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (explain
 			}
 		} else {
 			if !present {
+				rt.logger.Error("VERIFY FAILED. pageText sample: %s", pageText[:min(500, len(pageText))])
 				err = fmt.Errorf("verification failed: '%s' is not present", target)
 			}
 		}

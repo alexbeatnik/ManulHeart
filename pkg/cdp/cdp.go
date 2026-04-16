@@ -231,44 +231,75 @@ func DragAndDrop(ctx context.Context, c *Conn, fromX, fromY, toX, toY float64) e
 	return err
 }
 
-// FocusByXPath focuses an element resolved by the given XPath.
-func FocusByXPath(ctx context.Context, c *Conn, xpath string) error {
+// Focus focuses the element resolved by ID or XPath.
+func (c *Conn) Focus(ctx context.Context, id int, xpath string) error {
 	js := fmt.Sprintf(`
-		var el = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+		var el = (window.__manulReg && window.__manulReg[%d]) || document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
 		if (el) el.focus();
-	`, xpath)
+	`, id, xpath)
 	_, err := Evaluate(ctx, c, js)
 	return err
 }
 
-// SetInputValue sets the value of an input element resolved by XPath.
+// SetInputValue sets the value of an input element resolved by ID or XPath.
 // Uses the native HTMLInputElement/HTMLTextAreaElement value setter to
 // bypass framework-level overrides (React, Vue, etc.) that intercept
 // the value property on individual elements.
-func SetInputValue(ctx context.Context, c *Conn, xpath, value string) error {
+func (c *Conn) SetInputValue(ctx context.Context, id int, xpath, value string) error {
 	js := fmt.Sprintf(`
-		var el = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+		var el = (window.__manulReg && window.__manulReg[%[1]d]) || document.evaluate(%[2]q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
 		if (el) {
+			var targetEl = el;
+			if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA' && el.tagName !== 'SELECT' && el.getAttribute('contenteditable') !== 'true') {
+				if (el.tagName === 'LABEL' && el.htmlFor) {
+					targetEl = document.getElementById(el.htmlFor) || targetEl;
+				} else {
+					var child = el.querySelector('input, textarea, select');
+					if (child) {
+						targetEl = child;
+					} else if (el.nextElementSibling) {
+						var next = el.nextElementSibling.matches('input, textarea, select') ? el.nextElementSibling : el.nextElementSibling.querySelector('input, textarea, select');
+						if (next) targetEl = next;
+					} else if (el.parentElement && el.parentElement.nextElementSibling) {
+						var nextParent = el.parentElement.nextElementSibling;
+						var pChild = nextParent.matches('input, textarea, select') ? nextParent : nextParent.querySelector('input, textarea, select');
+						if (pChild) targetEl = pChild;
+					}
+				}
+			}
+			el = targetEl;
+
 			// Use the native value setter so React/Vue/Angular state updates fire.
-			var proto = el instanceof HTMLTextAreaElement
-				? HTMLTextAreaElement.prototype
-				: HTMLInputElement.prototype;
-			var nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-			nativeSetter.call(el, %q);
+			var proto = Object.getPrototypeOf(el);
+			var nativeSetter = null;
+			while (proto && proto !== Object.prototype) {
+				var desc = Object.getOwnPropertyDescriptor(proto, 'value');
+				if (desc && desc.set) {
+					nativeSetter = desc.set;
+					break;
+				}
+				proto = Object.getPrototypeOf(proto);
+			}
+			if (nativeSetter) {
+				nativeSetter.call(el, %[3]q);
+			} else {
+				el.value = %[3]q;
+			}
 			el.dispatchEvent(new Event('input', { bubbles: true }));
 			el.dispatchEvent(new Event('change', { bubbles: true }));
+			console.log("SetInputValue:", el.tagName, el.id, "to", el.value);
 		}
-	`, xpath, value)
+	`, id, xpath, value)
 	_, err := Evaluate(ctx, c, js)
 	return err
 }
 
-// ScrollIntoView scrolls a given XPath element into the viewport.
-func ScrollIntoView(ctx context.Context, c *Conn, xpath string) error {
+// ScrollIntoView scrolls the element resolved by ID or XPath into the viewport.
+func (c *Conn) ScrollIntoView(ctx context.Context, id int, xpath string) error {
 	js := fmt.Sprintf(`
-		var el = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+		var el = (window.__manulReg && window.__manulReg[%d]) || document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
 		if (el) el.scrollIntoView({block: "center", inline: "center"});
-	`, xpath)
+	`, id, xpath)
 	_, err := Evaluate(ctx, c, js)
 	return err
 }
@@ -293,10 +324,50 @@ func ScrollPage(ctx context.Context, c *Conn, direction, container string) error
 	return err
 }
 
-// SetFileInput sets the file path(s) on a file input resolved by XPath.
-func SetFileInput(ctx context.Context, c *Conn, xpath string, filePaths []string) error {
-	// Requires DOM node ID resolution to call DOM.setFileInputFiles
-	return fmt.Errorf("cdp.SetFileInput: not yet implemented (requires DOM objectId)")
+// SetFileInput sets the file paths on a file input element resolved by ID or XPath.
+func (c *Conn) SetFileInput(ctx context.Context, id int, xpath string, filePaths []string) error {
+	// First resolve the backend node ID for DOM.setFileInputFiles
+	js := fmt.Sprintf(`(function() {
+		var el = (window.__manulReg && window.__manulReg[%d]) || document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+		return el;
+	})()`, id, xpath)
+	
+	val, err := Evaluate(ctx, c, js)
+	if err != nil {
+		return err
+	}
+	
+	// val is a map[string]interface{} from Evaluate/CallFunctionOn
+	obj, ok := val.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("SetFileInput: failed to resolve element to CDP node")
+	}
+	
+	objectId, ok := obj["objectId"].(string)
+	if !ok {
+		return fmt.Errorf("SetFileInput: element has no objectId")
+	}
+	
+	// Get the backend node ID
+	rawRes, err := c.Call(ctx, "DOM.requestNode", map[string]interface{}{
+		"objectId": objectId,
+	})
+	if err != nil {
+		return err
+	}
+	
+	var res struct {
+		NodeId int `json:"nodeId"`
+	}
+	if err := json.Unmarshal(rawRes, &res); err != nil {
+		return fmt.Errorf("SetFileInput: unmarshal requestNode: %w", err)
+	}
+	
+	_, err = c.Call(ctx, "DOM.setFileInputFiles", map[string]interface{}{
+		"nodeId": res.NodeId,
+		"files":  filePaths,
+	})
+	return err
 }
 
 // Screenshot captures a PNG screenshot of the current viewport.
@@ -354,31 +425,32 @@ func WaitForResponse(ctx context.Context, c *Conn, urlPattern string, timeout ti
 	}
 }
 
-// HighlightElement draws a debug overlay on the element resolved by XPath.
-func HighlightElement(ctx context.Context, c *Conn, xpath string, durationMS int) error {
-	// Use JS to draw an outline
+// HighlightElement injects a temporary border highlight for debugging.
+func (c *Conn) HighlightElement(ctx context.Context, id int, xpath string, durationMS int) error {
 	js := fmt.Sprintf(`
-		var el = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+		var el = (window.__manulReg && window.__manulReg[%d]) || document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
 		if (el) {
 			var old = el.style.outline;
-			el.style.outline = "2px solid red";
+			el.style.outline = '4px solid #ff4444';
 			setTimeout(() => { el.style.outline = old; }, %d);
 		}
-	`, xpath, durationMS)
+	`, id, xpath, durationMS)
 	_, err := Evaluate(ctx, c, js)
 	return err
 }
 
-// GetElementCenter returns the centre coordinates of an element resolved by XPath.
-func GetElementCenter(ctx context.Context, c *Conn, xpath string) (x, y float64, err error) {
+// GetElementCenter returns the centre coordinates of an element resolved by ID or XPath.
+func (c *Conn) GetElementCenter(ctx context.Context, id int, xpath string) (x, y float64, err error) {
 	js := fmt.Sprintf(`
-		var el = document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+		var el = (window.__manulReg && window.__manulReg[%d]) || document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
 		if (!el) {
 			throw new Error("Element not found");
 		}
+		el.scrollIntoView({behavior: 'instant', block: 'center', inline: 'center'});
 		var rect = el.getBoundingClientRect();
+		// If it's still outside, we might need a small delay, but instant scroll usually is synchronous.
 		JSON.stringify({x: rect.x + rect.width/2, y: rect.y + rect.height/2});
-	`, xpath)
+	`, id, xpath)
 	
 	val, err := Evaluate(ctx, c, js)
 	if err != nil {

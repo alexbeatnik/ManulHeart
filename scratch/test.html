@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<html><body><input type="text" id="myinput" value=""><script>
+  let el = document.getElementById("myinput");
+  let proto = Object.getPrototypeOf(el);
+  let d = Object.getOwnPropertyDescriptor(proto, 'value');
+  console.log("Descriptor:", d ? typeof d.set : "undefined");
+</script></body></html>

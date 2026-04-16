@@ -381,7 +381,8 @@ func scoreTagSemantics(mode string, el *dom.ElementSnapshot) float64 {
 		if el.IsEditable {
 			return 0.3
 		}
-		return 0.0
+		// Strict penalty for non-inputs in input mode
+		return -50000.0
 
 	case "checkbox":
 		if tag == "input" && (el.InputType == "checkbox" || el.InputType == "radio") {
