@@ -1,0 +1,45 @@
+@context: Exercises new ManulHeart features — EXTRACT, SET, SCROLL, PRESS, VERIFY SOFTLY, control flow
+@title: Feature Sampler
+
+@var: {username} = standard_user
+@var: {password} = secret_sauce
+
+STEP 1: Login with variables
+    NAVIGATE to 'https://www.saucedemo.com/'
+    VERIFY that 'Swag Labs' is present
+    Fill 'Username' field with '{username}'
+    Fill 'Password' field with '{password}'
+    Click the 'Login' button
+    VERIFY that 'Products' is present
+
+STEP 2: SET and VERIFY SOFTLY
+    SET {greeting} = hello world
+    VERIFY SOFTLY that 'this text will never appear' is present
+    VERIFY that 'Products' is present
+
+STEP 3: SCROLL the products list
+    SCROLL DOWN
+    VERIFY that 'Products' is present
+
+STEP 4: EXTRACT a product name
+    EXTRACT the 'Sauce Labs Bolt T-Shirt' into {product}
+    VERIFY that 'Sauce Labs Bolt T-Shirt' is present
+
+STEP 5: Add to cart and complete checkout
+    Click 'Add to cart' button NEAR 'Sauce Labs Bolt T-Shirt'
+    VERIFY that 'Remove' is present
+    Click the 'cart' link
+    VERIFY that 'Sauce Labs Bolt T-Shirt' is present
+    Click 'Checkout' button
+    Fill 'First Name' field with 'Test'
+    Fill 'Last Name' field with 'User'
+    Fill 'Zip/Postal Code' field with '12345'
+    Click 'Continue' button
+    VERIFY that 'Payment Information' is present
+    Click 'Finish' button
+    VERIFY that 'Thank you for your order!' is present
+
+STEP 6: PRESS Escape to dismiss (no-op but exercises key dispatch)
+    PRESS Escape
+
+DONE.

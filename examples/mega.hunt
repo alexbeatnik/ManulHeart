@@ -1,0 +1,106 @@
+@context: Automation Practice Gauntlet (testautomationpractice.blogspot.com). Includes text inputs, radio/checkboxes, dropdowns, date pickers, drag-and-drop, dynamic tables with pagination, and Shadow DOM.
+@title: complex_ui_full_inspection
+
+
+STEP 1: Navigate to practice page
+    NAVIGATE to https://testautomationpractice.blogspot.com/
+
+STEP 2: Text inputs
+    # Fill detects the "input" interaction mode from keywords like
+    # "fill", "type", "enter". The engine resolves the target by
+    # heuristic scoring — quoted text gets the strongest signal.
+    FILL 'Name' field with 'Mega Manul'
+    FILL 'Email' field with 'mega@manul.ai'
+    FILL 'Phone' field with '9876543210'
+    # Adding "textarea" outside the quotes acts as an element-type hint,
+    # boosting the score for <textarea> tags over <input> tags.
+    FILL 'Address' field with 'Selenium Avenue, 42, AI City'
+    VERIFY that 'Mega Manul' is present
+
+STEP 3: Radio button and checkboxes
+    # Including "radio button" or "checkbox" outside the target quotes
+    # triggers strict mode scoring: non-matching element types get a
+    # heavy penalty (-50,000), preventing accidental clicks on <td> or
+    # <label> elements that share the same text.
+    CLICK the radio button for 'Male'
+    VERIFY that 'Male' is checked
+    CHECK the checkbox for 'Monday'
+    VERIFY that 'Monday' is checked
+    CHECK the checkbox for 'Tuesday'
+    VERIFY that 'Tuesday' is checked
+    CHECK the checkbox for 'Thursday'
+    VERIFY that 'Thursday' is checked
+
+STEP 4: Selection lists
+    # "Select ... from ... dropdown" uses Playwright's select_option()
+    # for native <select> elements. If the target is a custom div-based
+    # dropdown, the engine gracefully falls back to click().
+    SELECT 'Japan' from the 'Country' dropdown
+    VERIFY that 'Japan' is present
+    SELECT 'Blue' from the 'Colors' dropdown
+
+STEP 5: Date picker and interactive buttons
+    FILL 'Date Picker 1' field with '12/31/2026'
+    SCROLL DOWN
+    CLICK the 'START' button
+    # DOUBLE CLICK is detected as a "clickable" mode and uses
+    # Playwright's dblclick() instead of click().
+    DOUBLE CLICK the 'Copy Text' button
+    VERIFY that 'Hello World!' is present
+
+STEP 6: Drag and drop
+    # Drag-and-drop resolves two elements (source and destination)
+    # and uses Playwright's drag_to(). Both targets are quoted.
+    DRAG the element 'Drag me to my target' and drop it into 'Drop here'
+    VERIFY that 'Dropped!' is present
+
+STEP 7: Data extraction from web table
+    SCROLL DOWN
+    # EXTRACT captures text into runtime variables {chrome_cpu}, etc.
+    # These variables live in engine memory and can be referenced in
+    # later steps with {placeholder} syntax.
+    EXTRACT the 'CPU of Chrome' into {chrome_cpu}
+    EXTRACT the 'CPU of Firefox' into {firefox_cpu}
+    EXTRACT the 'Price of Master In Selenium' into {book_price}
+    EXTRACT the 'Price of Selenium' into {selenium_price}
+    VERIFY that '3000' is present
+
+STEP 8: Paginated table interaction
+    SCROLL DOWN
+    CLICK on the '2' link
+    WAIT 2
+    CHECK the checkbox for '7'
+    CLICK on the '4' link
+    WAIT 2
+    CHECK the checkbox for '17'
+
+STEP 9: Scrolling dropdown
+    SCROLL DOWN
+    CLICK the 'Scrolling DropDown' element
+    WAIT 1
+    # "SCROLL DOWN inside the list" targets the first dropdown-style
+    # scroll container and sets scrollTop = scrollHeight.
+    SCROLL DOWN inside the list
+    WAIT 1
+    CLICK the 'Item 100' element
+    # VERIFY that 'Item 100' is present
+
+STEP 10: Shadow DOM input
+    # Shadow DOM elements are discovered by the TreeWalker in
+    # SNAPSHOT_JS. Interactions use JS fallback helpers
+    # (window.manulClick, window.manulType) when Playwright's
+    # native locators cannot reach inside the shadow root.
+    SCROLL DOWN
+    TYPE 'Shadow Boss' into the 'Shadow Root' field
+    VERIFY that 'Shadow Boss' is present
+
+STEP 11: Final validation
+    # A multi-assertion VERIFY — all quoted tokens must be present
+    # in the visible page text for this step to pass.
+    VERIFY that 'Mega Manul' is present
+    VERIFY that 'Japan' is present
+    VERIFY that 'Dropped!' is present
+    VERIFY that 'Item 100' is present
+    VERIFY that 'Shadow Boss' is present
+    WAIT 30
+DONE.

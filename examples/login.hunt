@@ -1,0 +1,17 @@
+@context: Example login flow demonstrating ManulHeart DSL execution
+@title: Login Flow Example
+
+STEP 1: Navigate to the application
+    NAVIGATE to 'https://the-internet.herokuapp.com/login'
+    VERIFY that 'Login Page' is present
+
+STEP 2: Enter credentials and submit
+    Fill 'Username' field with 'tomsmith'
+    Fill 'Password' field with 'SuperSecretPassword!'
+    Click the 'Login' button
+
+STEP 3: Verify successful login
+    VERIFY that 'You logged into a secure area!' is present
+    VERIFY that 'Login Page' is NOT present
+
+DONE.
