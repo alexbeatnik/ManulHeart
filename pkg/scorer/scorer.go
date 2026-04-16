@@ -133,7 +133,11 @@ func Score(query, typeHint, mode string, el *dom.ElementSnapshot, anchor *Anchor
 	containerPenalty := 1.0
 	if mode != "none" && mode != "locate" {
 		tag := strings.ToLower(el.Tag)
-		if tag == "div" || tag == "td" || tag == "th" || tag == "li" || tag == "section" || tag == "span" {
+		role := strings.ToLower(el.Role)
+		interactiveRole := role == "button" || role == "link" || role == "menuitem" || role == "tab" ||
+			role == "checkbox" || role == "radio" || role == "switch" || role == "textbox" ||
+			role == "combobox" || role == "listbox"
+		if (tag == "div" || tag == "td" || tag == "th" || tag == "li" || tag == "section" || tag == "span") && !interactiveRole {
 			containerPenalty = 0.6
 		}
 	}
@@ -174,9 +178,9 @@ func Rank(query, typeHint, mode string, elements []dom.ElementSnapshot, topN int
 	q := norm(query)
 
 	type scored struct {
-		elem  dom.ElementSnapshot
-		bd    explain.ScoreBreakdown
-		idx   int // original DOM position for stable tie-breaking
+		elem dom.ElementSnapshot
+		bd   explain.ScoreBreakdown
+		idx  int // original DOM position for stable tie-breaking
 	}
 
 	all := make([]scored, 0, len(elements))
@@ -307,10 +311,10 @@ func scoreAria(q string, el *dom.ElementSnapshot) float64 {
 		return 0.0
 	}
 	if el.NormAriaLabel == q {
-		return 0.75
+		return 1.0
 	}
 	if strings.Contains(el.NormAriaLabel, q) {
-		return 0.45
+		return 0.55
 	}
 	return 0.0
 }
@@ -381,9 +385,9 @@ func scoreTagSemantics(mode string, el *dom.ElementSnapshot) float64 {
 	case "input":
 		if tag == "input" || tag == "textarea" {
 			if el.InputType == "password" {
-				return 0.55
+				return 0.6
 			}
-			return 0.5
+			return 0.56
 		}
 		if role == "textbox" || role == "spinbutton" || role == "combobox" {
 			return 0.4
@@ -416,10 +420,16 @@ func scoreTagSemantics(mode string, el *dom.ElementSnapshot) float64 {
 
 	default: // clickable
 		if tag == "button" || tag == "a" || tag == "summary" {
-			return 0.4
+			return 0.45
+		}
+		if tag == "input" && (el.InputType == "checkbox" || el.InputType == "radio") {
+			return 0.33
 		}
 		if role == "button" || role == "link" || role == "menuitem" || role == "tab" {
 			return 0.35
+		}
+		if role == "checkbox" || role == "radio" || role == "switch" {
+			return 0.32
 		}
 		if tag == "input" && (el.InputType == "submit" || el.InputType == "button") {
 			return 0.35
@@ -442,10 +452,10 @@ func scoreTypeHint(hint string, el *dom.ElementSnapshot) float64 {
 	switch hint {
 	case "button":
 		if tag == "button" || (tag == "input" && (el.InputType == "submit" || el.InputType == "button")) {
-			return 0.4
+			return 0.45
 		}
 		if role == "button" {
-			return 0.35
+			return 0.4
 		}
 	case "link":
 		if tag == "a" || role == "link" {
@@ -457,18 +467,20 @@ func scoreTypeHint(hint string, el *dom.ElementSnapshot) float64 {
 		}
 	case "checkbox":
 		if tag == "input" && el.InputType == "checkbox" {
-			return 0.4
+			return 0.7
 		}
 		if role == "checkbox" {
-			return 0.35
+			return 0.7
 		}
+		return -0.6
 	case "radio":
 		if tag == "input" && el.InputType == "radio" {
-			return 0.4
+			return 0.7
 		}
 		if role == "radio" {
-			return 0.35
+			return 0.7
 		}
+		return -0.6
 	case "dropdown", "select":
 		if tag == "select" || role == "listbox" || role == "combobox" {
 			return 0.4

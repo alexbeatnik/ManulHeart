@@ -43,7 +43,7 @@ type Page interface {
 	// SetInputValue sets the value of an input element at the given ID or XPath,
 	// dispatching the appropriate input/change events.
 	SetInputValue(ctx context.Context, id int, xpath, value string) error
-	
+
 	// SetChecked sets the checked state of a checkbox or radio element.
 	SetChecked(ctx context.Context, id int, xpath string, checked bool) error
 
@@ -51,7 +51,8 @@ type Page interface {
 	ScrollIntoView(ctx context.Context, id int, xpath string) error
 
 	// ScrollPage scrolls the page or a container by the viewport height.
-	// direction is "down" or "up". container is a CSS selector (empty = window).
+	// direction is "down" or "up". container is an optional locator string
+	// understood by the backend (CDP accepts XPath and CSS selectors; empty = window).
 	ScrollPage(ctx context.Context, direction, container string) error
 
 	// DoubleClick performs a double-click at the given viewport coordinates.

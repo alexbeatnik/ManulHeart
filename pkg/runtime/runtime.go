@@ -27,10 +27,13 @@ func min(a, b int) int {
 	return b
 }
 
-
 const (
-	ThresholdHighConfidence = 0.112 // strong heuristic match
-	ThresholdAmbiguous      = 0.03  // minimum for heuristic choice
+	ThresholdHighConfidence = 0.15 // strong heuristic match
+	ThresholdAmbiguous      = 0.03 // minimum for heuristic choice
+	ThresholdRunnerUpGap    = 0.02
+	ThresholdPass3Total     = 0.12
+	ThresholdPass3Proximity = 0.18
+	ThresholdPass3Gap       = 0.04
 )
 
 // Runtime executes ManulHeart DSL hunts against a live browser page.
@@ -39,6 +42,8 @@ type Runtime struct {
 	page   browser.Page
 	logger *utils.Logger
 	vars   *ScopedVariables
+
+	cachedElements []dom.ElementSnapshot
 }
 
 // New creates a new Runtime bound to the given Config, Page, and Logger.
@@ -155,10 +160,14 @@ func (rt *Runtime) resolveAnchor(ctx context.Context, label string, elements []d
 func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res explain.ExecutionResult, err error) {
 	start := time.Now()
 	res = explain.ExecutionResult{
-		Step:        cmd.Raw,
-		CommandType: string(cmd.Type),
+		Step:            cmd.Raw,
+		CommandType:     string(cmd.Type),
+		ActionPerformed: strings.ToLower(string(cmd.Type)),
 	}
 	defer func() {
+		if pageURL, urlErr := rt.page.CurrentURL(ctx); urlErr == nil {
+			res.PageURL = pageURL
+		}
 		res.Duration = time.Since(start)
 		res.DurationMS = res.Duration.Milliseconds()
 	}()
@@ -166,42 +175,54 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 	switch cmd.Type {
 	case dsl.CmdNavigate:
 		url := rt.resolveVariables(cmd.URL)
+		res.ActionValue = url
 		err = rt.page.Navigate(ctx, url)
 		if err == nil {
 			// Navigation started, wait for it to complete.
 			// Brief pause helps CDP catch up before we check readyState.
-			time.Sleep(300 * time.Millisecond)
-			_ = rt.page.WaitForLoad(ctx)
+			if waitErr := rt.page.Wait(ctx, 300*time.Millisecond); waitErr != nil {
+				err = waitErr
+				break
+			}
+			if waitErr := rt.page.WaitForLoad(ctx); waitErr != nil {
+				err = waitErr
+				break
+			}
+			rt.invalidateSnapshot()
 			rt.autoAnnotateNavigate(ctx, url)
 		}
 
 	case dsl.CmdWait:
-		time.Sleep(time.Duration(cmd.WaitSeconds * float64(time.Second)))
+		err = rt.page.Wait(ctx, time.Duration(cmd.WaitSeconds*float64(time.Second)))
 
 	case dsl.CmdPrint:
 		text := rt.resolveVariables(cmd.PrintText)
+		res.ActionValue = text
 		rt.logger.Info("PRINT: %s", text)
+
+	case dsl.CmdWaitForResponse:
+		pattern := rt.resolveVariables(cmd.WaitResponseURL)
+		res.ActionValue = pattern
+		err = rt.page.WaitForResponse(ctx, pattern, rt.cfg.DefaultTimeout)
 
 	case dsl.CmdSet:
 		if cmd.SetVar != "" {
 			val := rt.resolveVariables(cmd.SetValue)
+			res.ActionValue = val
 			rt.vars.Set(cmd.SetVar, val, LevelRow)
 			break
 		}
 		fallthrough
 
-	case dsl.CmdClick, dsl.CmdFill, dsl.CmdType, dsl.CmdHover, dsl.CmdCheck, dsl.CmdUncheck, dsl.CmdSelect, dsl.CmdDoubleClick, dsl.CmdRightClick:
+	case dsl.CmdClick, dsl.CmdFill, dsl.CmdType, dsl.CmdHover, dsl.CmdCheck, dsl.CmdUncheck, dsl.CmdSelect, dsl.CmdDoubleClick, dsl.CmdRightClick, dsl.CmdUploadFile:
 		// Target resolution needed for interaction
-		raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
-		if errProbe != nil {
-			err = fmt.Errorf("probe failed: %w", errProbe)
+		res.TargetRequired = true
+		elements, errSnapshot := rt.loadSnapshot(ctx)
+		if errSnapshot != nil {
+			err = errSnapshot
 			break
 		}
-		elements, errParse := heuristics.ParseProbeResult(raw)
-		if errParse != nil {
-			err = fmt.Errorf("parse probe failed: %w", errParse)
-			break
-		}
+		res.CandidatesConsidered = len(elements)
 
 		// Figure out interaction mode
 		mode := dsl.ModeNone
@@ -213,12 +234,16 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			mode = dsl.ModeCheckbox
 		} else if cmd.Type == dsl.CmdSelect {
 			mode = dsl.ModeSelect
+		} else if cmd.Type == dsl.CmdUploadFile {
+			mode = dsl.ModeClickable
 		}
 
 		targetPath := rt.resolveVariables(cmd.Target)
 		if cmd.Type == dsl.CmdSet {
 			targetPath = rt.resolveVariables(cmd.SetVar)
 		}
+		res.TargetQuery = targetPath
+		res.TypeHint = cmd.TypeHint
 
 		anchor, errAnchor := rt.resolveAnchor(ctx, cmd.NearAnchor, elements)
 		if errAnchor != nil {
@@ -229,22 +254,25 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		// Restrictive modes (input, checkbox, select) need special handling
 		// to support "Click/Check X" when X is a label or nearby table cell.
 		isRestrictive := mode == dsl.ModeInput || mode == dsl.ModeCheckbox || mode == dsl.ModeSelect
-		
+
 		var ranked []scorer.RankedCandidate
+		resolutionStrategy := "standard"
 		if isRestrictive && targetPath != "" {
 			// Pass 1: Try direct resolution first (high threshold)
 			selfRanked := scorer.Rank(targetPath, cmd.TypeHint, string(mode), elements, 5, anchor)
-			if len(selfRanked) > 0 && selfRanked[0].Explain.Score.Total > 0.15 {
+			if len(selfRanked) > 0 && selfRanked[0].Explain.Score.Total >= ThresholdHighConfidence {
 				ranked = selfRanked
+				resolutionStrategy = "restrictive-pass1"
 			} else {
 				// Pass 2: Find what the user actually meant by the text (ignoring tag semantics)
 				anchorRanked := scorer.Rank(targetPath, cmd.TypeHint, string(dsl.ModeNone), elements, 5, anchor)
 				if len(anchorRanked) > 0 {
 					topAnchor := anchorRanked[0]
-					
+
 					// If the top anchor itself is already interactive, use it
 					if topAnchor.Element.IsInteractive(string(mode)) {
 						ranked = anchorRanked
+						resolutionStrategy = "restrictive-pass2"
 					} else {
 						// Pass 3: Use the found anchor to find the interactive element nearby.
 						rt.logger.Info("Target %q is not a %s. Using it as anchor to find nearby %s...", targetPath, mode, mode)
@@ -255,11 +283,13 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 						}
 						// Search for ANY such element near the anchor
 						rankedFallback := scorer.Rank("", cmd.TypeHint, string(mode), elements, 5, newAnchor)
-						if len(rankedFallback) > 0 && rankedFallback[0].Explain.Score.ProximityScore > 0.05 {
+						if pass3CandidateAcceptable(rankedFallback) {
 							ranked = rankedFallback
+							resolutionStrategy = "restrictive-pass3"
 						} else {
 							// fallback failed to find anything truly NEAR. Use the anchor.
 							ranked = anchorRanked
+							resolutionStrategy = "restrictive-anchor"
 						}
 					}
 				}
@@ -269,6 +299,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		// Standard resolution if not already handled by restrictive fallback
 		if len(ranked) == 0 {
 			ranked = scorer.Rank(targetPath, cmd.TypeHint, string(mode), elements, 5, anchor)
+			resolutionStrategy = "standard"
 		}
 
 		if len(ranked) == 0 {
@@ -277,9 +308,23 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		}
 
 		best := ranked[0]
-		if best.Explain.Score.Total < ThresholdAmbiguous {
-			err = fmt.Errorf("target resolution too ambiguous (confidence %.3f < %.3f)", best.Explain.Score.Total, ThresholdAmbiguous)
+		if selectionIsAmbiguous(ranked) {
+			runnerUp := 0.0
+			if len(ranked) > 1 {
+				runnerUp = ranked[1].Explain.Score.Total
+			}
+			err = fmt.Errorf("target resolution too ambiguous (confidence %.3f, runner-up %.3f)", best.Explain.Score.Total, runnerUp)
 			break
+		}
+		appendRankedCandidates(&res, ranked, 5)
+		res.WinnerXPath = best.Element.XPath
+		res.WinnerScore = best.Explain.Score.Total
+		res.ProbeMetadata = map[string]any{
+			"resolution_strategy": resolutionStrategy,
+			"interaction_mode":    string(mode),
+		}
+		if cmd.NearAnchor != "" {
+			res.ProbeMetadata["near_anchor"] = cmd.NearAnchor
 		}
 
 		// Anti-phantom guard for inputs/selects (soft warning for now)
@@ -288,9 +333,9 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		}
 
 		winner := best.Element
-		rt.logger.Info("Target '%s' resolved to: %s (ID=%d, Score=%.3f)", 
+		rt.logger.Info("Target '%s' resolved to: %s (ID=%d, Score=%.3f)",
 			targetPath, winner.Name, winner.ID, best.Explain.Score.Total)
-		
+
 		if rt.cfg.ExplainMode {
 			rt.logger.Info("  Breakdown: Text=%.2f, Attr=%.2f, Sem=%.2f, Prox=%.2f",
 				best.Explain.Score.NormalizedTextMatch,
@@ -308,20 +353,28 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 				// but we keep it for robustness if fallthrough happened.
 				val = rt.resolveVariables(cmd.SetValue)
 			}
+			res.ActionValue = val
 			err = rt.page.SetInputValue(ctx, winner.ID, winner.XPath, val)
+			if err == nil {
+				rt.invalidateSnapshot()
+			}
 		case dsl.CmdClick:
 			x, y, e := rt.page.GetElementCenter(ctx, winner.ID, winner.XPath)
 			if e != nil {
 				err = fmt.Errorf("center calc: %w", e)
 			} else {
-					// Perform interaction
-					_ = rt.page.ScrollIntoView(ctx, winner.ID, winner.XPath)
-					err = rt.page.Click(ctx, x, y)
-					if err == nil {
-						// A click may trigger navigation or AJAX update.
-						time.Sleep(500 * time.Millisecond)
-						_ = rt.page.WaitForLoad(ctx)
+				// Perform interaction
+				_ = rt.page.ScrollIntoView(ctx, winner.ID, winner.XPath)
+				err = rt.page.Click(ctx, x, y)
+				if err == nil {
+					// A click may trigger navigation or AJAX update.
+					if waitErr := rt.page.Wait(ctx, 500*time.Millisecond); waitErr != nil {
+						err = waitErr
+						break
 					}
+					rt.invalidateSnapshot()
+					_ = rt.page.WaitForLoad(ctx)
+				}
 			}
 		case dsl.CmdDoubleClick:
 			x, y, e := rt.page.GetElementCenter(ctx, winner.ID, winner.XPath)
@@ -347,10 +400,14 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		case dsl.CmdCheck, dsl.CmdUncheck:
 			checked := cmd.Type == dsl.CmdCheck
 			err = rt.page.SetChecked(ctx, winner.ID, winner.XPath, checked)
+			if err == nil {
+				rt.invalidateSnapshot()
+			}
 		case dsl.CmdSelect:
 			val := rt.resolveVariables(cmd.Value)
+			res.ActionValue = val
 			_ = rt.page.ScrollIntoView(ctx, winner.ID, winner.XPath)
-			
+
 			// Detect if it's a native select or custom dropdown
 			if winner.Tag == "select" {
 				js := fmt.Sprintf(`(() => {
@@ -367,23 +424,30 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 					strings.ReplaceAll(val, `"`, `\"`),
 					strings.ReplaceAll(val, `"`, `\"`))
 				_, err = rt.page.EvalJS(ctx, js)
+				if err == nil {
+					rt.invalidateSnapshot()
+				}
 			} else {
 				// Custom dropdown: Click then search for the option text
-				_ = rt.page.Click(ctx, winner.Rect.Left + winner.Rect.Width/2, winner.Rect.Top + winner.Rect.Height/2)
-				time.Sleep(300 * time.Millisecond)
-				
+				_ = rt.page.Click(ctx, winner.Rect.Left+winner.Rect.Width/2, winner.Rect.Top+winner.Rect.Height/2)
+				rt.invalidateSnapshot()
+				if waitErr := rt.page.Wait(ctx, 300*time.Millisecond); waitErr != nil {
+					err = waitErr
+					break
+				}
+
 				// Re-probe to find the option that appeared
 				raw, _ := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
 				elements, _ := heuristics.ParseProbeResult(raw)
-				
+
 				// Exclude the container itself and hidden elements from option search
 				var candidates []dom.ElementSnapshot
 				for _, e := range elements {
-					if e.ID != winner.ID && e.IsVisible && e.Tag != "input" { 
+					if e.ID != winner.ID && e.IsVisible && e.Tag != "input" {
 						candidates = append(candidates, e)
 					}
 				}
-				
+
 				rankedOpt := scorer.Rank(val, "", "clickable", candidates, 1, nil)
 				if len(rankedOpt) > 0 {
 					opt := rankedOpt[0].Element
@@ -391,21 +455,29 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 					_ = rt.page.ScrollIntoView(ctx, opt.ID, opt.XPath)
 					cx, cy, _ := rt.page.GetElementCenter(ctx, opt.ID, opt.XPath)
 					err = rt.page.Click(ctx, cx, cy)
+					if err == nil {
+						rt.invalidateSnapshot()
+					}
 				} else {
 					err = fmt.Errorf("could not find option %q after clicking %q", val, winner.Tag)
 				}
 			}
+		case dsl.CmdUploadFile:
+			filePath := rt.resolveVariables(cmd.UploadFilePath)
+			if filePath == "" {
+				filePath = rt.resolveVariables(cmd.UploadFile)
+			}
+			res.ActionValue = filePath
+			err = rt.page.SetFileInput(ctx, winner.ID, winner.XPath, []string{filePath})
+			if err == nil {
+				rt.invalidateSnapshot()
+			}
 		}
 
 	case dsl.CmdDrag:
-		raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
-		if errProbe != nil {
-			err = fmt.Errorf("probe failed: %w", errProbe)
-			break
-		}
-		elements, errParse := heuristics.ParseProbeResult(raw)
-		if errParse != nil {
-			err = fmt.Errorf("parse probe failed: %w", errParse)
+		elements, errSnapshot := rt.loadSnapshot(ctx)
+		if errSnapshot != nil {
+			err = errSnapshot
 			break
 		}
 
@@ -447,19 +519,24 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		rt.logger.Info("Target '%s' resolved to element: ID=%d Tag=%s XPath=%s", dropPath, destEl.ID, destEl.Tag, destEl.XPath)
 
 		err = rt.page.DragAndDrop(ctx, x1, y1, x2, y2)
+		if err == nil {
+			rt.invalidateSnapshot()
+		}
 
 	case dsl.CmdExtract:
 		// Use dedicated extraction probe which handles tables/text nodes
 		target := rt.resolveVariables(cmd.Target)
+		res.TargetRequired = true
+		res.TargetQuery = target
 		hint := "" // we could extract hint from cmd if needed
 		params := []string{target, hint}
-		
+
 		val, errProbe := rt.page.CallProbe(ctx, heuristics.BuildExtractProbe(), params)
 		if errProbe != nil {
 			err = errProbe
 			break
 		}
-		
+
 		extracted := strings.Trim(string(val), "\"") // Unquote JSON string if needed
 
 		if extracted == "" || extracted == "null" {
@@ -467,15 +544,21 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			break
 		}
 		rt.vars.Set(cmd.ExtractVar, extracted, LevelRow)
+		res.ActionValue = extracted
 		rt.logger.Info("Extracted '%s' into {%s}", extracted, cmd.ExtractVar)
 
 	case dsl.CmdScroll:
 		containerID := ""
 		if cmd.ScrollContainer != "" {
-			raw, _ := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
-			elements, _ := heuristics.ParseProbeResult(raw)
+			res.TargetRequired = true
+			res.TargetQuery = cmd.ScrollContainer
+			elements, _ := rt.loadSnapshot(ctx)
+			res.CandidatesConsidered = len(elements)
 			ranked := scorer.Rank(cmd.ScrollContainer, "", "none", elements, 1, nil)
 			if len(ranked) > 0 {
+				appendRankedCandidates(&res, ranked, 1)
+				res.WinnerXPath = ranked[0].Element.XPath
+				res.WinnerScore = ranked[0].Explain.Score.Total
 				containerID = ranked[0].Element.XPath
 			}
 		}
@@ -498,10 +581,14 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			}
 			_, err = rt.page.EvalJS(ctx, js)
 		}
+		if err == nil {
+			rt.invalidateSnapshot()
+		}
 
 	case dsl.CmdVerify:
 		// Lightweight text presence check via dedicated probe with a small retry loop
 		target := rt.resolveVariables(cmd.VerifyText)
+		res.TargetQuery = target
 		var present bool
 		var pageText string
 		deadline := time.Now().Add(2 * time.Second)
@@ -515,7 +602,13 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			if present || time.Now().After(deadline) {
 				break
 			}
-			time.Sleep(200 * time.Millisecond)
+			if waitErr := rt.page.Wait(ctx, 200*time.Millisecond); waitErr != nil {
+				err = waitErr
+				break
+			}
+		}
+		if err != nil {
+			break
 		}
 
 		if cmd.VerifyNegated {
@@ -531,15 +624,22 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 
 	case dsl.CmdVerifyField:
 		// Full element resolution for attribute-specific verification
-		raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
-		if errProbe != nil {
-			err = errProbe
+		res.TargetRequired = true
+		elements, errSnapshot := rt.loadSnapshot(ctx)
+		if errSnapshot != nil {
+			err = errSnapshot
 			break
 		}
-		elements, _ := heuristics.ParseProbeResult(raw)
+		res.CandidatesConsidered = len(elements)
 		target := rt.resolveVariables(cmd.VerifyText)
+		res.TargetQuery = target
 		ranked := scorer.Rank(target, "", "none", elements, 1, nil)
 		present := len(ranked) > 0 && ranked[0].Explain.Score.Total > 0.3
+		if len(ranked) > 0 {
+			appendRankedCandidates(&res, ranked, 1)
+			res.WinnerXPath = ranked[0].Element.XPath
+			res.WinnerScore = ranked[0].Explain.Score.Total
+		}
 		if !present {
 			err = fmt.Errorf("verification failed: target field '%s' not found", target)
 		} else if cmd.VerifyState != "" {
@@ -653,12 +753,11 @@ func (rt *Runtime) evaluateCondition(ctx context.Context, cond string) (bool, er
 			if start != -1 && end != -1 && start < end {
 				target = cond[start+1 : end]
 			}
-			
-			raw, err := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
+
+			elements, err := rt.loadSnapshot(ctx)
 			if err != nil {
 				return false, err
 			}
-			elements, _ := heuristics.ParseProbeResult(raw)
 			ranked := scorer.Rank(target, "", "clickable", elements, 1, nil)
 			found := len(ranked) > 0 && ranked[0].Explain.Score.Total > 0.2
 			if neg {
@@ -678,11 +777,10 @@ func (rt *Runtime) evaluateCondition(ctx context.Context, cond string) (bool, er
 			target = cond[start+1 : end]
 		}
 
-		raw, err := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
+		elements, err := rt.loadSnapshot(ctx)
 		if err != nil {
 			return false, err
 		}
-		elements, _ := heuristics.ParseProbeResult(raw)
 		ranked := scorer.Rank(target, "", "none", elements, 1, nil)
 		found := len(ranked) > 0 && ranked[0].Explain.Score.Total > 0.2
 		if neg {
@@ -756,4 +854,63 @@ func (rt *Runtime) autoAnnotateNavigate(ctx context.Context, url string) {
 	// In a real implementation, this would write to the hunt file.
 	// For now, we log it.
 	rt.logger.Info("📍 Auto-Nav: %s", url)
+}
+
+func (rt *Runtime) loadSnapshot(ctx context.Context) ([]dom.ElementSnapshot, error) {
+	if !rt.cfg.DisableCache && rt.cachedElements != nil {
+		return rt.cachedElements, nil
+	}
+	raw, err := rt.page.CallProbe(ctx, heuristics.BuildSnapshotProbe(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("probe failed: %w", err)
+	}
+	elements, err := heuristics.ParseProbeResult(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse probe failed: %w", err)
+	}
+	if !rt.cfg.DisableCache {
+		rt.cachedElements = elements
+	}
+	return elements, nil
+}
+
+func (rt *Runtime) invalidateSnapshot() {
+	rt.cachedElements = nil
+}
+
+func appendRankedCandidates(res *explain.ExecutionResult, ranked []scorer.RankedCandidate, limit int) {
+	if limit <= 0 || len(ranked) < limit {
+		limit = len(ranked)
+	}
+	for i := 0; i < limit; i++ {
+		res.RankedCandidates = append(res.RankedCandidates, ranked[i].Explain)
+	}
+}
+
+func selectionIsAmbiguous(ranked []scorer.RankedCandidate) bool {
+	if len(ranked) == 0 {
+		return true
+	}
+	best := ranked[0].Explain.Score.Total
+	if best < ThresholdAmbiguous {
+		return true
+	}
+	if len(ranked) == 1 {
+		return false
+	}
+	return best < ThresholdHighConfidence && best-ranked[1].Explain.Score.Total < ThresholdRunnerUpGap
+}
+
+func pass3CandidateAcceptable(ranked []scorer.RankedCandidate) bool {
+	if len(ranked) == 0 {
+		return false
+	}
+	best := ranked[0].Explain.Score
+	if best.Total < ThresholdPass3Total || best.ProximityScore < ThresholdPass3Proximity {
+		return false
+	}
+	if len(ranked) == 1 {
+		return true
+	}
+	return best.Total-ranked[1].Explain.Score.Total >= ThresholdPass3Gap
 }

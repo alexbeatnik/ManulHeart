@@ -15,11 +15,13 @@ import (
 type MockPage struct {
 	URL      string
 	Elements []dom.ElementSnapshot
-	
+
 	// Record of interaction calls
 	Clicks       []Point
 	Inputs       map[string]string // xpath -> value
+	FileInputs   map[string][]string
 	LastNavigate string
+	ProbeCalls   int
 }
 
 type Point struct {
@@ -37,6 +39,7 @@ func (m *MockPage) EvalJS(ctx context.Context, expr string) ([]byte, error) {
 }
 
 func (m *MockPage) CallProbe(ctx context.Context, fn string, arg any) ([]byte, error) {
+	m.ProbeCalls++
 	// If it's a data extraction probe, we simulate the logic:
 	// Find element matching the target text from arg and return its value/text.
 	if strings.Contains(fn, "classified") && strings.Contains(fn, "allTables") { // Simple detection for extract_data.js
@@ -79,7 +82,9 @@ func (m *MockPage) SetInputValue(ctx context.Context, id int, xpath, value strin
 	return nil
 }
 
-func (m *MockPage) SetChecked(ctx context.Context, id int, xpath string, checked bool) error { return nil }
+func (m *MockPage) SetChecked(ctx context.Context, id int, xpath string, checked bool) error {
+	return nil
+}
 
 func (m *MockPage) ScrollIntoView(ctx context.Context, id int, xpath string) error { return nil }
 
@@ -93,13 +98,24 @@ func (m *MockPage) Hover(ctx context.Context, x, y float64) error { return nil }
 
 func (m *MockPage) DragAndDrop(ctx context.Context, fX, fY, tX, tY float64) error { return nil }
 
-func (m *MockPage) SetFileInput(ctx context.Context, id int, xpath string, paths []string) error { return nil }
+func (m *MockPage) SetFileInput(ctx context.Context, id int, xpath string, paths []string) error {
+	if m.FileInputs == nil {
+		m.FileInputs = make(map[string][]string)
+	}
+	copyPaths := append([]string(nil), paths...)
+	m.FileInputs[xpath] = copyPaths
+	return nil
+}
 
 func (m *MockPage) Screenshot(ctx context.Context) ([]byte, error) { return nil, nil }
 
-func (m *MockPage) WaitForResponse(ctx context.Context, pattern string, timeout time.Duration) error { return nil }
+func (m *MockPage) WaitForResponse(ctx context.Context, pattern string, timeout time.Duration) error {
+	return nil
+}
 
-func (m *MockPage) HighlightElement(ctx context.Context, id int, xpath string, duration int) error { return nil }
+func (m *MockPage) HighlightElement(ctx context.Context, id int, xpath string, duration int) error {
+	return nil
+}
 
 func (m *MockPage) GetElementCenter(ctx context.Context, id int, xpath string) (float64, float64, error) {
 	for _, el := range m.Elements {
