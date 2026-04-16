@@ -26,6 +26,8 @@ type AnchorContext struct {
 	Rect dom.Rect
 	// XPath is the XPath of the anchor element (for DOM ancestry affinity).
 	XPath string
+	// FrameIndex is the frame the anchor belongs to.
+	FrameIndex int
 	// Words are the significant words extracted from the anchor's visible text,
 	// used to match candidate attributes like id/class/data-qa.
 	Words []string
@@ -510,6 +512,9 @@ func scoreDepth(el *dom.ElementSnapshot) float64 {
 // This helps card/list layouts prefer the button in the same product card
 // over a slightly closer button in an adjacent card.
 func scoreNear(el *dom.ElementSnapshot, anchor *AnchorContext) float64 {
+	if el.FrameIndex != anchor.FrameIndex {
+		return 0.0
+	}
 	const threshold = 500.0
 	cx := el.Rect.Left + el.Rect.Width/2
 	cy := el.Rect.Top + el.Rect.Height/2

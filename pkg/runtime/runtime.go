@@ -141,14 +141,18 @@ func (rt *Runtime) RunStep(ctx context.Context, rawStep string) (*StepResult, er
 }
 
 func (rt *Runtime) resolveAnchor(ctx context.Context, label string, elements []dom.ElementSnapshot) (*scorer.AnchorContext, error) {
+	if label == "" {
+		return nil, nil
+	}
 	winner, err := rt.resolveStructuralAnchor(label, elements)
 	if err != nil {
 		return nil, err
 	}
 	return &scorer.AnchorContext{
-		Rect:  winner.Rect,
-		XPath: winner.XPath,
-		Words: scorer.SignificantWords(winner.VisibleText),
+		Rect:       winner.Rect,
+		XPath:      winner.XPath,
+		FrameIndex: winner.FrameIndex,
+		Words:      scorer.SignificantWords(winner.VisibleText),
 	}, nil
 }
 

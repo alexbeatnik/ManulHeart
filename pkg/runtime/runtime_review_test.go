@@ -120,6 +120,120 @@ func TestRuntime_SnapshotCacheUsedForRepeatedReadOnlyLookups(t *testing.T) {
 	}
 }
 
+func TestRuntime_DisableCacheForcesFreshSnapshotProbe(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/button[1]", Tag: "button", VisibleText: "Save", IsVisible: true},
+		},
+	}
+	mock.Elements[0].Normalize()
+
+	rt := New(config.Config{DisableCache: true}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	ctx := context.Background()
+
+	matched, err := rt.evaluateCondition(ctx, "button 'Save' exists")
+	if err != nil {
+		t.Fatalf("first evaluateCondition failed: %v", err)
+	}
+	if !matched {
+		t.Fatal("expected first condition to match")
+	}
+	matched, err = rt.evaluateCondition(ctx, "text 'Save' is present")
+	if err != nil {
+		t.Fatalf("second evaluateCondition failed: %v", err)
+	}
+	if !matched {
+		t.Fatal("expected second condition to match")
+	}
+	if mock.ProbeCalls != 2 {
+		t.Fatalf("ProbeCalls = %d, want 2 with cache disabled", mock.ProbeCalls)
+	}
+}
+
+func TestRuntime_NavigateInvalidatesSnapshotCache(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/button[1]", Tag: "button", VisibleText: "Save", IsVisible: true},
+		},
+	}
+	mock.Elements[0].Normalize()
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	ctx := context.Background()
+
+	matched, err := rt.evaluateCondition(ctx, "button 'Save' exists")
+	if err != nil {
+		t.Fatalf("initial evaluateCondition failed: %v", err)
+	}
+	if !matched {
+		t.Fatal("expected initial condition to match")
+	}
+	if mock.ProbeCalls != 1 {
+		t.Fatalf("ProbeCalls after first read = %d, want 1", mock.ProbeCalls)
+	}
+
+	_, err = rt.executeCommand(ctx, dsl.Command{Type: dsl.CmdNavigate, Raw: "NAVIGATE to https://example.com/dashboard", URL: "https://example.com/dashboard"})
+	if err != nil {
+		t.Fatalf("navigate failed: %v", err)
+	}
+
+	matched, err = rt.evaluateCondition(ctx, "button 'Save' exists")
+	if err != nil {
+		t.Fatalf("post-navigate evaluateCondition failed: %v", err)
+	}
+	if !matched {
+		t.Fatal("expected post-navigate condition to match")
+	}
+	if mock.ProbeCalls != 2 {
+		t.Fatalf("ProbeCalls after navigate = %d, want 2 because navigation should invalidate cache", mock.ProbeCalls)
+	}
+	if mock.LastNavigate != "https://example.com/dashboard" {
+		t.Fatalf("LastNavigate = %q, want https://example.com/dashboard", mock.LastNavigate)
+	}
+}
+
+func TestRuntime_ClickInvalidatesSnapshotCache(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/button[1]", Tag: "button", VisibleText: "Save", IsVisible: true, Rect: dom.Rect{Top: 10, Left: 20, Width: 100, Height: 30}},
+		},
+	}
+	mock.Elements[0].Normalize()
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	ctx := context.Background()
+
+	matched, err := rt.evaluateCondition(ctx, "button 'Save' exists")
+	if err != nil {
+		t.Fatalf("initial evaluateCondition failed: %v", err)
+	}
+	if !matched {
+		t.Fatal("expected initial condition to match")
+	}
+	if mock.ProbeCalls != 1 {
+		t.Fatalf("ProbeCalls after first read = %d, want 1", mock.ProbeCalls)
+	}
+
+	_, err = rt.executeCommand(ctx, dsl.Command{Type: dsl.CmdClick, Raw: "CLICK the 'Save' button", Target: "Save", TypeHint: "button"})
+	if err != nil {
+		t.Fatalf("click failed: %v", err)
+	}
+
+	matched, err = rt.evaluateCondition(ctx, "button 'Save' exists")
+	if err != nil {
+		t.Fatalf("post-click evaluateCondition failed: %v", err)
+	}
+	if !matched {
+		t.Fatal("expected post-click condition to match")
+	}
+	if mock.ProbeCalls != 2 {
+		t.Fatalf("ProbeCalls after click = %d, want 2 because click should invalidate cache", mock.ProbeCalls)
+	}
+	if len(mock.Clicks) != 1 {
+		t.Fatalf("expected 1 click, got %d", len(mock.Clicks))
+	}
+}
+
 func TestResolveRestrictiveCandidatesPrefersAnchorWithNearbyControl(t *testing.T) {
 	elements := []dom.ElementSnapshot{
 		{ID: 1, XPath: "/html/body/div[1]/table[1]/tbody[1]/tr[1]/td[1]", Tag: "td", VisibleText: "7", IsVisible: true, Rect: dom.Rect{Top: 100, Left: 100, Width: 30, Height: 20}},
@@ -331,6 +445,40 @@ func TestRuntime_ClickNearAnchorSameCardBeatsCloserNeighbor(t *testing.T) {
 	}
 	if res.ProbeMetadata["near_anchor"] != "Sauce Labs Fleece Jacket" {
 		t.Fatalf("near_anchor metadata = %v, want Sauce Labs Fleece Jacket", res.ProbeMetadata["near_anchor"])
+	}
+}
+
+func TestRuntime_ClickNearAnchorPrefersCandidateInSameFrame(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/span[1]", Tag: "span", VisibleText: "Widget Controls", IsVisible: true, FrameIndex: 1, Rect: dom.Rect{Top: 100, Left: 100, Width: 120, Height: 20}},
+			{ID: 2, XPath: "/html/body/button[1]", Tag: "button", VisibleText: "Save", HTMLId: "main_save", IsVisible: true, FrameIndex: 0, Rect: dom.Rect{Top: 105, Left: 230, Width: 80, Height: 24}},
+			{ID: 3, XPath: "/html/body/button[2]", Tag: "button", VisibleText: "Save", HTMLId: "iframe_save", IsVisible: true, FrameIndex: 1, Rect: dom.Rect{Top: 105, Left: 230, Width: 80, Height: 24}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:       dsl.CmdClick,
+		Raw:        "CLICK the 'Save' button NEAR 'Widget Controls'",
+		Target:     "Save",
+		TypeHint:   "button",
+		NearAnchor: "Widget Controls",
+	})
+	if err != nil {
+		t.Fatalf("click with iframe near anchor failed: %v", err)
+	}
+	if res.WinnerXPath != "/html/body/button[2]" {
+		t.Fatalf("WinnerXPath = %q, want same-frame iframe button xpath", res.WinnerXPath)
+	}
+	if len(mock.Clicks) != 1 {
+		t.Fatalf("expected 1 click, got %d", len(mock.Clicks))
+	}
+	if mock.Clicks[0].X != 270 || mock.Clicks[0].Y != 117 {
+		t.Fatalf("clicked (%v,%v), want iframe button center (270,117)", mock.Clicks[0].X, mock.Clicks[0].Y)
 	}
 }
 

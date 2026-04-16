@@ -34,6 +34,9 @@ type ElementSnapshot struct {
 	Tag string `json:"tag"`
 	// InputType is the value of the `type` attribute for input elements.
 	InputType string `json:"input_type,omitempty"`
+	// FrameIndex is the zero-based frame index this element belongs to.
+	// 0 is the main document; positive values refer to embedded frames.
+	FrameIndex int `json:"frame_index,omitempty"`
 
 	// -- Text signals ---------------------------------------------------
 
