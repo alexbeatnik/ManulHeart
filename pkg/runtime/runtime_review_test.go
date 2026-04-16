@@ -363,6 +363,139 @@ func TestRuntime_ClickNearAnchorFailsWhenAnchorMissing(t *testing.T) {
 	}
 }
 
+func TestRuntime_ClickOnHeaderPrefersHeaderCandidate(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/header[1]/a[1]", Tag: "a", VisibleText: "Login", Ancestors: []string{"header", "body", "html"}, IsVisible: true, Rect: dom.Rect{Top: 20, Left: 20, Width: 80, Height: 24}},
+			{ID: 2, XPath: "/html/body/main[1]/a[1]", Tag: "a", VisibleText: "Login", Ancestors: []string{"main", "body", "html"}, IsVisible: true, Rect: dom.Rect{Top: 420, Left: 20, Width: 80, Height: 24}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:     dsl.CmdClick,
+		Raw:      "CLICK the 'Login' link ON HEADER",
+		Target:   "Login",
+		TypeHint: "link",
+		OnRegion: "HEADER",
+	})
+	if err != nil {
+		t.Fatalf("click on header failed: %v", err)
+	}
+	if res.WinnerXPath != "/html/body/header[1]/a[1]" {
+		t.Fatalf("WinnerXPath = %q, want header link xpath", res.WinnerXPath)
+	}
+	if res.ProbeMetadata["on_region"] != "HEADER" {
+		t.Fatalf("on_region metadata = %v, want HEADER", res.ProbeMetadata["on_region"])
+	}
+	if len(mock.Clicks) != 1 {
+		t.Fatalf("expected 1 click, got %d", len(mock.Clicks))
+	}
+	if mock.Clicks[0].X != 60 || mock.Clicks[0].Y != 32 {
+		t.Fatalf("clicked (%v,%v), want header link center (60,32)", mock.Clicks[0].X, mock.Clicks[0].Y)
+	}
+}
+
+func TestRuntime_ClickOnFooterPrefersFooterCandidate(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/footer[1]/a[1]", Tag: "a", VisibleText: "Privacy Policy", Ancestors: []string{"footer", "body", "html"}, IsVisible: true, Rect: dom.Rect{Top: 930, Left: 20, Width: 120, Height: 24}},
+			{ID: 2, XPath: "/html/body/main[1]/a[1]", Tag: "a", VisibleText: "Privacy Policy", Ancestors: []string{"main", "body", "html"}, IsVisible: true, Rect: dom.Rect{Top: 80, Left: 20, Width: 120, Height: 24}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:     dsl.CmdClick,
+		Raw:      "CLICK the 'Privacy Policy' link ON FOOTER",
+		Target:   "Privacy Policy",
+		TypeHint: "link",
+		OnRegion: "FOOTER",
+	})
+	if err != nil {
+		t.Fatalf("click on footer failed: %v", err)
+	}
+	if res.WinnerXPath != "/html/body/footer[1]/a[1]" {
+		t.Fatalf("WinnerXPath = %q, want footer link xpath", res.WinnerXPath)
+	}
+	if len(mock.Clicks) != 1 {
+		t.Fatalf("expected 1 click, got %d", len(mock.Clicks))
+	}
+	if mock.Clicks[0].X != 80 || mock.Clicks[0].Y != 942 {
+		t.Fatalf("clicked (%v,%v), want footer link center (80,942)", mock.Clicks[0].X, mock.Clicks[0].Y)
+	}
+}
+
+func TestRuntime_ClickInsideRowChoosesCandidateFromMatchingRow(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/table[1]/tbody[1]/tr[1]/td[1]", Tag: "td", VisibleText: "Jane", IsVisible: true, Rect: dom.Rect{Top: 120, Left: 40, Width: 80, Height: 24}},
+			{ID: 2, XPath: "/html/body/table[1]/tbody[1]/tr[1]/td[4]/button[1]", Tag: "button", VisibleText: "Delete", IsVisible: true, Rect: dom.Rect{Top: 120, Left: 260, Width: 80, Height: 24}},
+			{ID: 3, XPath: "/html/body/table[1]/tbody[1]/tr[2]/td[1]", Tag: "td", VisibleText: "John", IsVisible: true, Rect: dom.Rect{Top: 180, Left: 40, Width: 80, Height: 24}},
+			{ID: 4, XPath: "/html/body/table[1]/tbody[1]/tr[2]/td[4]/button[1]", Tag: "button", VisibleText: "Delete", IsVisible: true, Rect: dom.Rect{Top: 180, Left: 260, Width: 80, Height: 24}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:          dsl.CmdClick,
+		Raw:           "CLICK the 'Delete' button INSIDE 'Actions' row with 'John'",
+		Target:        "Delete",
+		TypeHint:      "button",
+		InsideRowText: "John",
+	})
+	if err != nil {
+		t.Fatalf("click inside row failed: %v", err)
+	}
+	if res.WinnerXPath != "/html/body/table[1]/tbody[1]/tr[2]/td[4]/button[1]" {
+		t.Fatalf("WinnerXPath = %q, want John row button xpath", res.WinnerXPath)
+	}
+	if res.ProbeMetadata["inside_row_text"] != "John" {
+		t.Fatalf("inside_row_text metadata = %v, want John", res.ProbeMetadata["inside_row_text"])
+	}
+}
+
+func TestRuntime_ClickInsideContainerChoosesDescendant(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/section[1]", Tag: "section", VisibleText: "Checkout Summary", IsVisible: true, Rect: dom.Rect{Top: 100, Left: 40, Width: 320, Height: 180}},
+			{ID: 2, XPath: "/html/body/div[1]/section[1]/button[1]", Tag: "button", VisibleText: "Edit", IsVisible: true, Rect: dom.Rect{Top: 220, Left: 60, Width: 80, Height: 24}},
+			{ID: 3, XPath: "/html/body/div[1]/section[2]", Tag: "section", VisibleText: "Shipping", IsVisible: true, Rect: dom.Rect{Top: 320, Left: 40, Width: 320, Height: 180}},
+			{ID: 4, XPath: "/html/body/div[1]/section[2]/button[1]", Tag: "button", VisibleText: "Edit", IsVisible: true, Rect: dom.Rect{Top: 440, Left: 60, Width: 80, Height: 24}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:            dsl.CmdClick,
+		Raw:             "CLICK the 'Edit' button INSIDE 'Checkout Summary'",
+		Target:          "Edit",
+		TypeHint:        "button",
+		InsideContainer: "Checkout Summary",
+	})
+	if err != nil {
+		t.Fatalf("click inside container failed: %v", err)
+	}
+	if res.WinnerXPath != "/html/body/div[1]/section[1]/button[1]" {
+		t.Fatalf("WinnerXPath = %q, want checkout summary button xpath", res.WinnerXPath)
+	}
+	if res.ProbeMetadata["inside_container"] != "Checkout Summary" {
+		t.Fatalf("inside_container metadata = %v, want Checkout Summary", res.ProbeMetadata["inside_container"])
+	}
+}
+
 func TestRuntime_FillPrefersInputByLabelOverMatchingButtonText(t *testing.T) {
 	mock := &MockPage{
 		Elements: []dom.ElementSnapshot{

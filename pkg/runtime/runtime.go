@@ -141,21 +141,28 @@ func (rt *Runtime) RunStep(ctx context.Context, rawStep string) (*StepResult, er
 }
 
 func (rt *Runtime) resolveAnchor(ctx context.Context, label string, elements []dom.ElementSnapshot) (*scorer.AnchorContext, error) {
-	if label == "" {
-		return nil, nil
+	winner, err := rt.resolveStructuralAnchor(label, elements)
+	if err != nil {
+		return nil, err
 	}
-	label = rt.resolveVariables(label)
-	// Anchor resolution uses "none" mode to allow matching any structural element (div, span, etc.)
-	ranked := scorer.Rank(label, "", string(dsl.ModeNone), elements, 1, nil)
-	if len(ranked) == 0 || ranked[0].Explain.Score.Total < ThresholdAmbiguous {
-		return nil, fmt.Errorf("near anchor not found: %q", label)
-	}
-	winner := ranked[0].Element
 	return &scorer.AnchorContext{
 		Rect:  winner.Rect,
 		XPath: winner.XPath,
 		Words: scorer.SignificantWords(winner.VisibleText),
 	}, nil
+}
+
+func (rt *Runtime) resolveStructuralAnchor(label string, elements []dom.ElementSnapshot) (dom.ElementSnapshot, error) {
+	if label == "" {
+		return dom.ElementSnapshot{}, fmt.Errorf("anchor label is empty")
+	}
+	label = rt.resolveVariables(label)
+	// Anchor resolution uses "none" mode to allow matching any structural element (div, span, etc.)
+	ranked := scorer.Rank(label, "", string(dsl.ModeNone), elements, 1, nil)
+	if len(ranked) == 0 || ranked[0].Explain.Score.Total < ThresholdAmbiguous {
+		return dom.ElementSnapshot{}, fmt.Errorf("near anchor not found: %q", label)
+	}
+	return ranked[0].Element, nil
 }
 
 // executeCommand runs a single DSL command and returns its execution result.
@@ -323,6 +330,12 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			break
 		}
 
+		candidateElements, contextualStrategy, contextErr := rt.applyContextualFilters(cmd, elements)
+		if contextErr != nil {
+			err = contextErr
+			break
+		}
+
 		// Restrictive modes (input, checkbox, select) need special handling
 		// to support "Click/Check X" when X is a label or nearby table cell.
 		isRestrictive := mode == dsl.ModeInput || mode == dsl.ModeCheckbox || mode == dsl.ModeSelect
@@ -330,13 +343,16 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		var ranked []scorer.RankedCandidate
 		resolutionStrategy := "standard"
 		if isRestrictive && targetPath != "" {
-			ranked, resolutionStrategy = resolveRestrictiveCandidates(targetPath, cmd.TypeHint, mode, elements, anchor, rt.logger)
+			ranked, resolutionStrategy = resolveRestrictiveCandidates(targetPath, cmd.TypeHint, mode, candidateElements, anchor, rt.logger)
 		}
 
 		// Standard resolution if not already handled by restrictive fallback
 		if len(ranked) == 0 {
-			ranked = scorer.Rank(targetPath, cmd.TypeHint, string(mode), elements, 5, anchor)
+			ranked = scorer.Rank(targetPath, cmd.TypeHint, string(mode), candidateElements, 5, anchor)
 			resolutionStrategy = "standard"
+		}
+		if contextualStrategy != "" {
+			resolutionStrategy = contextualStrategy + "+" + resolutionStrategy
 		}
 
 		if len(ranked) == 0 {
@@ -362,6 +378,15 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		}
 		if cmd.NearAnchor != "" {
 			res.ProbeMetadata["near_anchor"] = cmd.NearAnchor
+		}
+		if cmd.OnRegion != "" {
+			res.ProbeMetadata["on_region"] = cmd.OnRegion
+		}
+		if cmd.InsideContainer != "" {
+			res.ProbeMetadata["inside_container"] = cmd.InsideContainer
+		}
+		if cmd.InsideRowText != "" {
+			res.ProbeMetadata["inside_row_text"] = cmd.InsideRowText
 		}
 
 		// Anti-phantom guard for inputs/selects (soft warning for now)
@@ -1034,6 +1059,48 @@ func resolveRestrictiveCandidates(targetPath, typeHint string, mode dsl.Interact
 	return anchorRanked, "restrictive-anchor"
 }
 
+func (rt *Runtime) applyContextualFilters(cmd dsl.Command, elements []dom.ElementSnapshot) ([]dom.ElementSnapshot, string, error) {
+	filtered := elements
+	var strategies []string
+
+	if cmd.OnRegion != "" {
+		regionFiltered := filterRegionCandidates(cmd.OnRegion, filtered)
+		if len(regionFiltered) == 0 {
+			return nil, "", fmt.Errorf("no candidates found in region %q", cmd.OnRegion)
+		}
+		filtered = regionFiltered
+		strategies = append(strategies, "on-"+normalizeContextLabel(cmd.OnRegion))
+	}
+
+	if cmd.InsideRowText != "" {
+		rowAnchor, err := rt.resolveStructuralAnchor(cmd.InsideRowText, filtered)
+		if err != nil {
+			return nil, "", fmt.Errorf("inside row anchor not found: %q", cmd.InsideRowText)
+		}
+		rowFiltered := candidatesInSameRow(rowAnchor, filtered)
+		if len(rowFiltered) == 0 {
+			return nil, "", fmt.Errorf("no candidates found inside row %q", cmd.InsideRowText)
+		}
+		filtered = rowFiltered
+		strategies = append(strategies, "inside-row")
+	}
+
+	if cmd.InsideContainer != "" {
+		containerAnchor, err := rt.resolveStructuralAnchor(cmd.InsideContainer, filtered)
+		if err != nil {
+			return nil, "", fmt.Errorf("inside container not found: %q", cmd.InsideContainer)
+		}
+		containerFiltered := descendantsOf(containerAnchor, filtered)
+		if len(containerFiltered) == 0 {
+			return nil, "", fmt.Errorf("no candidates found inside container %q", cmd.InsideContainer)
+		}
+		filtered = containerFiltered
+		strategies = append(strategies, "inside-container")
+	}
+
+	return filtered, strings.Join(strategies, "+"), nil
+}
+
 func checkboxCandidatesInSameRow(anchor dom.ElementSnapshot, elements []dom.ElementSnapshot) []dom.ElementSnapshot {
 	rowPrefix := rowXPathPrefix(anchor.XPath)
 	if rowPrefix == "" {
@@ -1045,6 +1112,34 @@ func checkboxCandidatesInSameRow(anchor dom.ElementSnapshot, elements []dom.Elem
 			continue
 		}
 		if strings.HasPrefix(element.XPath, rowPrefix+"/") {
+			out = append(out, element)
+		}
+	}
+	return out
+}
+
+func candidatesInSameRow(anchor dom.ElementSnapshot, elements []dom.ElementSnapshot) []dom.ElementSnapshot {
+	rowPrefix := rowXPathPrefix(anchor.XPath)
+	if rowPrefix == "" {
+		return nil
+	}
+	var out []dom.ElementSnapshot
+	for _, element := range elements {
+		if strings.HasPrefix(element.XPath, rowPrefix+"/") {
+			out = append(out, element)
+		}
+	}
+	return out
+}
+
+func descendantsOf(container dom.ElementSnapshot, elements []dom.ElementSnapshot) []dom.ElementSnapshot {
+	prefix := strings.TrimRight(container.XPath, "/") + "/"
+	var out []dom.ElementSnapshot
+	for _, element := range elements {
+		if element.XPath == container.XPath {
+			continue
+		}
+		if strings.HasPrefix(element.XPath, prefix) {
 			out = append(out, element)
 		}
 	}
@@ -1064,6 +1159,63 @@ func rowXPathPrefix(xpath string) string {
 		}
 	}
 	return ""
+}
+
+func filterRegionCandidates(region string, elements []dom.ElementSnapshot) []dom.ElementSnapshot {
+	viewportHeight := inferredViewportHeight(elements)
+	var out []dom.ElementSnapshot
+	for _, element := range elements {
+		if elementMatchesRegion(region, element, viewportHeight) {
+			out = append(out, element)
+		}
+	}
+	return out
+}
+
+func inferredViewportHeight(elements []dom.ElementSnapshot) float64 {
+	maxBottom := 0.0
+	for _, element := range elements {
+		bottom := element.Rect.Top + element.Rect.Height
+		if bottom > maxBottom {
+			maxBottom = bottom
+		}
+	}
+	if maxBottom <= 0 {
+		return 1000
+	}
+	return maxBottom
+}
+
+func elementMatchesRegion(region string, el dom.ElementSnapshot, viewportHeight float64) bool {
+	region = normalizeContextLabel(region)
+	if viewportHeight <= 0 {
+		viewportHeight = 1000
+	}
+	bottom := el.Rect.Top + el.Rect.Height
+	switch region {
+	case "header":
+		for _, ancestor := range el.Ancestors {
+			ancestor = normalizeContextLabel(ancestor)
+			if ancestor == "header" || ancestor == "nav" {
+				return true
+			}
+		}
+		return el.Rect.Top >= 0 && el.Rect.Top <= viewportHeight*0.15
+	case "footer":
+		for _, ancestor := range el.Ancestors {
+			ancestor = normalizeContextLabel(ancestor)
+			if ancestor == "footer" {
+				return true
+			}
+		}
+		return bottom >= viewportHeight*0.85
+	default:
+		return true
+	}
+}
+
+func normalizeContextLabel(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), "-")
 }
 
 func isGenericListContainer(query string) bool {
