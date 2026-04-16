@@ -69,9 +69,9 @@ func (m *MockPage) Click(ctx context.Context, x, y float64) error {
 	return nil
 }
 
-func (m *MockPage) FocusByXPath(ctx context.Context, xpath string) error { return nil }
+func (m *MockPage) Focus(ctx context.Context, id int, xpath string) error { return nil }
 
-func (m *MockPage) SetInputValue(ctx context.Context, xpath, value string) error {
+func (m *MockPage) SetInputValue(ctx context.Context, id int, xpath, value string) error {
 	if m.Inputs == nil {
 		m.Inputs = make(map[string]string)
 	}
@@ -79,7 +79,9 @@ func (m *MockPage) SetInputValue(ctx context.Context, xpath, value string) error
 	return nil
 }
 
-func (m *MockPage) ScrollIntoView(ctx context.Context, xpath string) error { return nil }
+func (m *MockPage) SetChecked(ctx context.Context, id int, xpath string, checked bool) error { return nil }
+
+func (m *MockPage) ScrollIntoView(ctx context.Context, id int, xpath string) error { return nil }
 
 func (m *MockPage) ScrollPage(ctx context.Context, direction, container string) error { return nil }
 
@@ -91,21 +93,21 @@ func (m *MockPage) Hover(ctx context.Context, x, y float64) error { return nil }
 
 func (m *MockPage) DragAndDrop(ctx context.Context, fX, fY, tX, tY float64) error { return nil }
 
-func (m *MockPage) SetFileInput(ctx context.Context, xpath string, paths []string) error { return nil }
+func (m *MockPage) SetFileInput(ctx context.Context, id int, xpath string, paths []string) error { return nil }
 
 func (m *MockPage) Screenshot(ctx context.Context) ([]byte, error) { return nil, nil }
 
 func (m *MockPage) WaitForResponse(ctx context.Context, pattern string, timeout time.Duration) error { return nil }
 
-func (m *MockPage) HighlightElement(ctx context.Context, xpath string, duration int) error { return nil }
+func (m *MockPage) HighlightElement(ctx context.Context, id int, xpath string, duration int) error { return nil }
 
-func (m *MockPage) GetElementCenter(ctx context.Context, xpath string) (float64, float64, error) {
+func (m *MockPage) GetElementCenter(ctx context.Context, id int, xpath string) (float64, float64, error) {
 	for _, el := range m.Elements {
-		if el.XPath == xpath {
+		if el.XPath == xpath || el.ID == id {
 			return el.Rect.Left + el.Rect.Width/2, el.Rect.Top + el.Rect.Height/2, nil
 		}
 	}
-	return 0, 0, fmt.Errorf("element not found: %s", xpath)
+	return 0, 0, fmt.Errorf("element not found: %s (ID=%d)", xpath, id)
 }
 
 func (m *MockPage) DispatchKey(ctx context.Context, key string, mods int) error { return nil }
