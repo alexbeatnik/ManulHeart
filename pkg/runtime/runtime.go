@@ -147,7 +147,7 @@ func (rt *Runtime) resolveAnchor(ctx context.Context, label string, elements []d
 	label = rt.resolveVariables(label)
 	// Anchor resolution uses "none" mode to allow matching any structural element (div, span, etc.)
 	ranked := scorer.Rank(label, "", string(dsl.ModeNone), elements, 1, nil)
-	if len(ranked) == 0 {
+	if len(ranked) == 0 || ranked[0].Explain.Score.Total < ThresholdAmbiguous {
 		return nil, fmt.Errorf("near anchor not found: %q", label)
 	}
 	winner := ranked[0].Element

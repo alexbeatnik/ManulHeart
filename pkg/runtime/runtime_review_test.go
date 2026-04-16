@@ -297,6 +297,72 @@ func TestRuntime_ClickNearAnchorChoosesClosestCandidate(t *testing.T) {
 	}
 }
 
+func TestRuntime_ClickNearAnchorSameCardBeatsCloserNeighbor(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/div[4]/div[1]/a/div[1]", Tag: "div", VisibleText: "Sauce Labs Fleece Jacket", IsVisible: true, Rect: dom.Rect{Top: 100, Left: 420, Width: 140, Height: 30}},
+			{ID: 2, XPath: "/html/body/div[1]/div[4]/div[2]/button[1]", Tag: "button", VisibleText: "Add to cart", HTMLId: "add-to-cart-sauce-labs-fleece-jacket", IsVisible: true, Rect: dom.Rect{Top: 112, Left: 565, Width: 105, Height: 30}},
+			{ID: 3, XPath: "/html/body/div[1]/div[3]/div[2]/button[1]", Tag: "button", VisibleText: "Add to cart", HTMLId: "add-to-cart-sauce-labs-backpack", IsVisible: true, Rect: dom.Rect{Top: 106, Left: 360, Width: 105, Height: 30}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:       dsl.CmdClick,
+		Raw:        "CLICK the 'Add to cart' button NEAR 'Sauce Labs Fleece Jacket'",
+		Target:     "Add to cart",
+		TypeHint:   "button",
+		NearAnchor: "Sauce Labs Fleece Jacket",
+	})
+	if err != nil {
+		t.Fatalf("click with near anchor failed: %v", err)
+	}
+	if len(mock.Clicks) != 1 {
+		t.Fatalf("expected 1 click, got %d", len(mock.Clicks))
+	}
+	if res.WinnerXPath != "/html/body/div[1]/div[4]/div[2]/button[1]" {
+		t.Fatalf("WinnerXPath = %q, want same-card button xpath", res.WinnerXPath)
+	}
+	if mock.Clicks[0].X != 617.5 || mock.Clicks[0].Y != 127 {
+		t.Fatalf("clicked (%v,%v), want center of same-card button (617.5,127)", mock.Clicks[0].X, mock.Clicks[0].Y)
+	}
+	if res.ProbeMetadata["near_anchor"] != "Sauce Labs Fleece Jacket" {
+		t.Fatalf("near_anchor metadata = %v, want Sauce Labs Fleece Jacket", res.ProbeMetadata["near_anchor"])
+	}
+}
+
+func TestRuntime_ClickNearAnchorFailsWhenAnchorMissing(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/button[1]", Tag: "button", VisibleText: "Save", IsVisible: true, Rect: dom.Rect{Top: 40, Left: 40, Width: 90, Height: 30}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	_, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:       dsl.CmdClick,
+		Raw:        "CLICK the 'Save' button NEAR 'Missing Anchor'",
+		Target:     "Save",
+		TypeHint:   "button",
+		NearAnchor: "Missing Anchor",
+	})
+	if err == nil {
+		t.Fatal("expected click with missing near anchor to fail")
+	}
+	if got := err.Error(); !strings.Contains(got, `near anchor not found: "Missing Anchor"`) {
+		t.Fatalf("error = %q, want missing near anchor message", got)
+	}
+	if len(mock.Clicks) != 0 {
+		t.Fatalf("expected no click when near anchor is missing, got %d", len(mock.Clicks))
+	}
+}
+
 func TestRuntime_FillPrefersInputByLabelOverMatchingButtonText(t *testing.T) {
 	mock := &MockPage{
 		Elements: []dom.ElementSnapshot{
@@ -329,6 +395,35 @@ func TestRuntime_FillPrefersInputByLabelOverMatchingButtonText(t *testing.T) {
 	}
 	if _, clickedButton := mock.Inputs["/html/body/div[1]/button[1]"]; clickedButton {
 		t.Fatal("did not expect non-input candidate to be used for fill")
+	}
+}
+
+func TestRuntime_FillUsesPlaceholderWhenNoLabelExists(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/button[1]", Tag: "button", VisibleText: "Search Products", IsVisible: true, Rect: dom.Rect{Top: 20, Left: 20, Width: 150, Height: 32}},
+			{ID: 2, XPath: "/html/body/div[1]/input[1]", Tag: "input", InputType: "text", Placeholder: "Search Products", IsVisible: true, IsEditable: true, Rect: dom.Rect{Top: 70, Left: 20, Width: 240, Height: 32}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:   dsl.CmdFill,
+		Raw:    "FILL 'Search Products' field with 'backpack'",
+		Target: "Search Products",
+		Value:  "backpack",
+	})
+	if err != nil {
+		t.Fatalf("fill failed: %v", err)
+	}
+	if got := mock.Inputs["/html/body/div[1]/input[1]"]; got != "backpack" {
+		t.Fatalf("input value = %q, want backpack", got)
+	}
+	if res.WinnerXPath != "/html/body/div[1]/input[1]" {
+		t.Fatalf("WinnerXPath = %q, want placeholder-matched input", res.WinnerXPath)
 	}
 }
 
@@ -397,6 +492,38 @@ func TestRuntime_SelectPrefersNativeSelectOverMatchingButton(t *testing.T) {
 	}
 	if res.ActionValue != "Japan" {
 		t.Fatalf("ActionValue = %q, want Japan", res.ActionValue)
+	}
+}
+
+func TestRuntime_CheckPrefersRoleCheckboxOverMatchingButtonText(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/button[1]", Tag: "button", VisibleText: "Email Alerts", IsVisible: true, Rect: dom.Rect{Top: 20, Left: 20, Width: 140, Height: 32}},
+			{ID: 2, XPath: "/html/body/div[1]/div[1]", Tag: "div", Role: "checkbox", AriaLabel: "Email Alerts", IsVisible: true, Rect: dom.Rect{Top: 70, Left: 20, Width: 28, Height: 28}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:     dsl.CmdCheck,
+		Raw:      "CHECK the checkbox for 'Email Alerts'",
+		Target:   "Email Alerts",
+		TypeHint: "checkbox",
+	})
+	if err != nil {
+		t.Fatalf("check failed: %v", err)
+	}
+	if !mock.Elements[1].IsChecked {
+		t.Fatal("expected role=checkbox candidate to be checked")
+	}
+	if res.WinnerXPath != "/html/body/div[1]/div[1]" {
+		t.Fatalf("WinnerXPath = %q, want role checkbox xpath", res.WinnerXPath)
+	}
+	if res.ProbeMetadata["interaction_mode"] != string(dsl.ModeCheckbox) {
+		t.Fatalf("interaction_mode = %v, want %s", res.ProbeMetadata["interaction_mode"], dsl.ModeCheckbox)
 	}
 }
 
