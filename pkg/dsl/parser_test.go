@@ -261,6 +261,38 @@ func TestParseCallGoWithArgsPrefixAndToAlias(t *testing.T) {
 	}
 }
 
+func TestParseCallGoNoArgs(t *testing.T) {
+	cmd := mustParseLine(t, `CALL GO helpers.noop`)
+	if cmd.Type != CmdCallGo {
+		t.Fatalf("type = %s, want %s", cmd.Type, CmdCallGo)
+	}
+	if cmd.GoCallName != "helpers.noop" {
+		t.Fatalf("GoCallName = %q, want helpers.noop", cmd.GoCallName)
+	}
+	if len(cmd.GoCallArgs) != 0 {
+		t.Fatalf("GoCallArgs = %v, want none", cmd.GoCallArgs)
+	}
+	if cmd.GoCallResultVar != "" {
+		t.Fatalf("GoCallResultVar = %q, want empty", cmd.GoCallResultVar)
+	}
+}
+
+func TestParseCallGoNoArgsWithInto(t *testing.T) {
+	cmd := mustParseLine(t, `CALL GO helpers.get_value into {result}`)
+	if cmd.Type != CmdCallGo {
+		t.Fatalf("type = %s, want %s", cmd.Type, CmdCallGo)
+	}
+	if cmd.GoCallName != "helpers.get_value" {
+		t.Fatalf("GoCallName = %q, want helpers.get_value", cmd.GoCallName)
+	}
+	if len(cmd.GoCallArgs) != 0 {
+		t.Fatalf("GoCallArgs = %v, want none", cmd.GoCallArgs)
+	}
+	if cmd.GoCallResultVar != "result" {
+		t.Fatalf("GoCallResultVar = %q, want result", cmd.GoCallResultVar)
+	}
+}
+
 func TestParseCallStepStillUsesExistingSemantics(t *testing.T) {
 	cmd := mustParseLine(t, "CALL Login Flow")
 	if cmd.Type != CmdCallStep {

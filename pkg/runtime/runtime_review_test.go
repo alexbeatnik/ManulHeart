@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/manulengineer/manulheart/pkg/config"
@@ -293,6 +294,137 @@ func TestRuntime_ClickNearAnchorChoosesClosestCandidate(t *testing.T) {
 	}
 	if mock.Clicks[0].X != 212 || mock.Clicks[0].Y != 112 {
 		t.Fatalf("clicked (%v,%v), want center of near candidate (212,112)", mock.Clicks[0].X, mock.Clicks[0].Y)
+	}
+}
+
+func TestRuntime_FillPrefersInputByLabelOverMatchingButtonText(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/button[1]", Tag: "button", VisibleText: "Email Address", IsVisible: true, Rect: dom.Rect{Top: 20, Left: 20, Width: 140, Height: 32}},
+			{ID: 2, XPath: "/html/body/div[1]/input[1]", Tag: "input", InputType: "text", LabelText: "Email Address", IsVisible: true, IsEditable: true, Rect: dom.Rect{Top: 70, Left: 20, Width: 220, Height: 32}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:   dsl.CmdFill,
+		Raw:    "FILL 'Email Address' field with 'alex@manul.dev'",
+		Target: "Email Address",
+		Value:  "alex@manul.dev",
+	})
+	if err != nil {
+		t.Fatalf("fill failed: %v", err)
+	}
+	if got := mock.Inputs["/html/body/div[1]/input[1]"]; got != "alex@manul.dev" {
+		t.Fatalf("input value = %q, want alex@manul.dev", got)
+	}
+	if res.WinnerXPath != "/html/body/div[1]/input[1]" {
+		t.Fatalf("WinnerXPath = %q, want input xpath", res.WinnerXPath)
+	}
+	if res.ProbeMetadata["interaction_mode"] != string(dsl.ModeInput) {
+		t.Fatalf("interaction_mode = %v, want %s", res.ProbeMetadata["interaction_mode"], dsl.ModeInput)
+	}
+	if _, clickedButton := mock.Inputs["/html/body/div[1]/button[1]"]; clickedButton {
+		t.Fatal("did not expect non-input candidate to be used for fill")
+	}
+}
+
+func TestRuntime_FillPrefersVisibleInputOverHiddenExactMatch(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/input[1]", Tag: "input", InputType: "text", Placeholder: "Search", IsVisible: false, IsHidden: true, IsEditable: true, Rect: dom.Rect{Top: 20, Left: 20, Width: 200, Height: 32}},
+			{ID: 2, XPath: "/html/body/div[1]/input[2]", Tag: "input", InputType: "text", Placeholder: "Search", IsVisible: true, IsEditable: true, Rect: dom.Rect{Top: 80, Left: 20, Width: 200, Height: 32}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:   dsl.CmdFill,
+		Raw:    "FILL 'Search' field with 'golang'",
+		Target: "Search",
+		Value:  "golang",
+	})
+	if err != nil {
+		t.Fatalf("fill failed: %v", err)
+	}
+	if got := mock.Inputs["/html/body/div[1]/input[2]"]; got != "golang" {
+		t.Fatalf("visible input value = %q, want golang", got)
+	}
+	if _, hiddenUsed := mock.Inputs["/html/body/div[1]/input[1]"]; hiddenUsed {
+		t.Fatal("did not expect hidden exact-match input to be used")
+	}
+	if res.WinnerXPath != "/html/body/div[1]/input[2]" {
+		t.Fatalf("WinnerXPath = %q, want visible input xpath", res.WinnerXPath)
+	}
+}
+
+func TestRuntime_SelectPrefersNativeSelectOverMatchingButton(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/button[1]", Tag: "button", VisibleText: "Country", IsVisible: true, Rect: dom.Rect{Top: 20, Left: 20, Width: 120, Height: 32}},
+			{ID: 2, XPath: "/html/body/div[1]/select[1]", Tag: "select", IsSelect: true, LabelText: "Country", IsVisible: true, Rect: dom.Rect{Top: 80, Left: 20, Width: 180, Height: 32}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:     dsl.CmdSelect,
+		Raw:      "SELECT 'Japan' from the 'Country' dropdown",
+		Target:   "Country",
+		TypeHint: "dropdown",
+		Value:    "Japan",
+	})
+	if err != nil {
+		t.Fatalf("select failed: %v", err)
+	}
+	if res.WinnerXPath != "/html/body/div[1]/select[1]" {
+		t.Fatalf("WinnerXPath = %q, want native select xpath", res.WinnerXPath)
+	}
+	if res.ProbeMetadata["interaction_mode"] != string(dsl.ModeSelect) {
+		t.Fatalf("interaction_mode = %v, want %s", res.ProbeMetadata["interaction_mode"], dsl.ModeSelect)
+	}
+	if len(mock.Clicks) != 0 {
+		t.Fatalf("expected native select path to avoid click fallback, got %d clicks", len(mock.Clicks))
+	}
+	if res.ActionValue != "Japan" {
+		t.Fatalf("ActionValue = %q, want Japan", res.ActionValue)
+	}
+}
+
+func TestRuntime_ClickFailsForAmbiguousLowConfidenceCandidates(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/button[1]", Tag: "button", ClassName: "alpha-trigger", IsVisible: true, Rect: dom.Rect{Top: 20, Left: 20, Width: 120, Height: 32}},
+			{ID: 2, XPath: "/html/body/div[1]/button[2]", Tag: "button", ClassName: "alpha-launch", IsVisible: true, Rect: dom.Rect{Top: 20, Left: 180, Width: 120, Height: 32}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	_, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:   dsl.CmdClick,
+		Raw:    "CLICK 'alpha'",
+		Target: "alpha",
+	})
+	if err == nil {
+		t.Fatal("expected low-confidence ambiguous resolution to fail")
+	}
+	if got := err.Error(); !strings.Contains(got, "target resolution too ambiguous") {
+		t.Fatalf("error = %q, want ambiguous resolution message", got)
+	}
+	if len(mock.Clicks) != 0 {
+		t.Fatalf("expected no click on ambiguous resolution, got %d", len(mock.Clicks))
 	}
 }
 
