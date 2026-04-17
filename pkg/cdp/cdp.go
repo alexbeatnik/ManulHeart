@@ -483,13 +483,8 @@ func ScrollPage(ctx context.Context, c *Conn, direction, container string) error
 				document.querySelector('[class*="dropdown"]');
 			if (!target) return false;
 			target.scrollBy({ top: %d, behavior: 'auto' });
-			if (%d > 0) {
-				target.scrollTop = target.scrollHeight;
-			} else {
-				target.scrollTop = 0;
-			}
 			return true;
-		})()`, amount, amount)
+		})()`, amount)
 		_, err := Evaluate(ctx, c, js)
 		return err
 	}

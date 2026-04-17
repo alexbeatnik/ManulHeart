@@ -309,7 +309,7 @@ func TestRuntime_CheckThenVerifyCheckedPasses(t *testing.T) {
 	mock := &MockPage{
 		Elements: []dom.ElementSnapshot{
 			{ID: 1, XPath: "/html/body/table[1]/tr[1]/td[1]", Tag: "td", VisibleText: "7", IsVisible: true, Rect: dom.Rect{Top: 100, Left: 100, Width: 30, Height: 20}},
-			{ID: 2, XPath: "/html/body/table[1]/tr[1]/td[4]/input[1]", Tag: "input", InputType: "checkbox", LabelText: "Select", IsVisible: true, IsChecked: false, Rect: dom.Rect{Top: 100, Left: 180, Width: 20, Height: 20}},
+			{ID: 2, XPath: "/html/body/table[1]/tr[1]/td[4]/input[1]", Tag: "input", InputType: "checkbox", AriaLabel: "7", LabelText: "7", IsVisible: true, IsChecked: false, Rect: dom.Rect{Top: 100, Left: 180, Width: 20, Height: 20}},
 		},
 	}
 	for i := range mock.Elements {
@@ -335,7 +335,7 @@ func TestRuntime_ReconcileStickyCheckboxStateReappliesVisibleRow(t *testing.T) {
 	mock := &MockPage{
 		Elements: []dom.ElementSnapshot{
 			{ID: 1, XPath: "/html/body/table[1]/tr[1]/td[1]", Tag: "td", VisibleText: "7", IsVisible: true, Rect: dom.Rect{Top: 100, Left: 100, Width: 30, Height: 20}},
-			{ID: 2, XPath: "/html/body/table[1]/tr[1]/td[4]/input[1]", Tag: "input", InputType: "checkbox", LabelText: "Select", IsVisible: true, IsChecked: false, Rect: dom.Rect{Top: 100, Left: 180, Width: 20, Height: 20}},
+			{ID: 2, XPath: "/html/body/table[1]/tr[1]/td[4]/input[1]", Tag: "input", InputType: "checkbox", AriaLabel: "7", LabelText: "7", IsVisible: true, IsChecked: false, Rect: dom.Rect{Top: 100, Left: 180, Width: 20, Height: 20}},
 		},
 	}
 	for i := range mock.Elements {

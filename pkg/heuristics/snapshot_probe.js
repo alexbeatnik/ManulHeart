@@ -223,7 +223,6 @@
             xpath:          buildXPath(el),
             tag:            tag,
             input_type:     el.type || '',
-            frame_index:    0,
             visible_text:   visibleText,
             aria_label:     el.getAttribute('aria-label') || '',
             placeholder:    el.getAttribute('placeholder') || '',

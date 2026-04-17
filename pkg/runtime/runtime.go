@@ -1036,9 +1036,10 @@ func resolveRestrictiveCandidates(targetPath, typeHint string, mode dsl.Interact
 		}
 
 		newAnchor := &scorer.AnchorContext{
-			Rect:  anchorCandidate.Element.Rect,
-			XPath: anchorCandidate.Element.XPath,
-			Words: scorer.SignificantWords(anchorCandidate.Element.VisibleText),
+			Rect:       anchorCandidate.Element.Rect,
+			XPath:      anchorCandidate.Element.XPath,
+			FrameIndex: anchorCandidate.Element.FrameIndex,
+			Words:      scorer.SignificantWords(anchorCandidate.Element.VisibleText),
 		}
 		if mode == dsl.ModeCheckbox {
 			rowScoped := checkboxCandidatesInSameRow(anchorCandidate.Element, elements)
@@ -1356,12 +1357,7 @@ func verifyRankedCandidateAcceptable(state string, ranked []scorer.RankedCandida
 	if len(ranked) == 0 {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(state)) {
-	case "checked", "unchecked", "selected":
-		return true
-	default:
-		return ranked[0].Explain.Score.Total > 0.3
-	}
+	return ranked[0].Explain.Score.Total > 0.3
 }
 
 func (rt *Runtime) ensureCheckboxTargetState(ctx context.Context, target string, desired bool, initialRanked []scorer.RankedCandidate) error {
@@ -1453,11 +1449,14 @@ func (rt *Runtime) reconcileStickyCheckboxStates(ctx context.Context) error {
 	if len(rt.stickyCheckboxStates) == 0 {
 		return nil
 	}
+	states := rt.stickyCheckboxStates
+	rt.stickyCheckboxStates = nil
 	elements, err := rt.loadSnapshot(ctx)
 	if err != nil {
+		rt.stickyCheckboxStates = states
 		return err
 	}
-	for target, desired := range rt.stickyCheckboxStates {
+	for target, desired := range states {
 		ranked := rankForVerifyState(target, "checked", elements, nil)
 		if !verifyRankedCandidateAcceptable("checked", ranked) {
 			continue
@@ -1487,7 +1486,7 @@ func (rt *Runtime) tryClickNearbyDropdownControl(ctx context.Context, anchor dom
 			if (!node) return false;
 			const rect = node.getBoundingClientRect();
 			const cs = window.getComputedStyle(node);
-			return cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0 && rect.width >= 0 && rect.height >= 0;
+			return cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
 		};
 
 		let root = anchor.closest('.widget, .form-group, section, article, aside, div') || anchor.parentElement || anchor;
