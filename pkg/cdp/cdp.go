@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/manulengineer/manulheart/pkg/core"
 )
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -476,7 +478,7 @@ func ScrollPage(ctx context.Context, c *Conn, direction, container string) error
 		amount = -500
 	}
 	containerLower := strings.ToLower(strings.TrimSpace(container))
-	if containerLower == "list" || containerLower == "dropdown" || containerLower == "dropdown list" || containerLower == "listbox" {
+	if containerLower == string(core.ScrollStrategyGenericList) {
 		js := fmt.Sprintf(`(() => {
 			const target = document.querySelector('#dropdown') ||
 				document.querySelector('[role="listbox"]') ||

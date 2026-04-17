@@ -19,6 +19,7 @@ import (
 	"github.com/manulengineer/manulheart/pkg/heuristics"
 	"github.com/manulengineer/manulheart/pkg/scorer"
 	"github.com/manulengineer/manulheart/pkg/utils"
+	"github.com/manulengineer/manulheart/pkg/core"
 )
 
 func min(a, b int) int {
@@ -656,7 +657,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			res.TargetRequired = true
 			res.TargetQuery = cmd.ScrollContainer
 			if isGenericListContainer(cmd.ScrollContainer) {
-				containerID = "list"
+				containerID = string(core.ScrollStrategyGenericList)
 				res.ProbeMetadata = map[string]any{"scroll_strategy": "dropdown-list"}
 			} else {
 				elements, _ := rt.loadSnapshot(ctx)
@@ -699,7 +700,10 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		res.TargetQuery = target
 		var present bool
 		var pageText string
-		deadline := time.Now().Add(2 * time.Second)
+		deadline := time.Now().Add(rt.cfg.DefaultTimeout)
+		if dlat, ok := ctx.Deadline(); ok && dlat.Before(deadline) {
+			deadline = dlat
+		}
 
 		for {
 			raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildVisibleTextProbe(), nil)
@@ -735,7 +739,10 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		res.TargetRequired = true
 		target := rt.resolveVariables(cmd.VerifyText)
 		res.TargetQuery = target
-		verifyDeadline := time.Now().Add(2 * time.Second)
+		verifyDeadline := time.Now().Add(rt.cfg.DefaultTimeout)
+		if deadline, ok := ctx.Deadline(); ok && deadline.Before(verifyDeadline) {
+			verifyDeadline = deadline
+		}
 		stateVerified := false
 		lastFound := false
 		lastStateValue := false
