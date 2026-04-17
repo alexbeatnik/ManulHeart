@@ -50,6 +50,18 @@ defer w.Close()
 res, err := w.Run(ctx, hunt)
 ```
 
+> **Essential `MockPage` element fields — do not omit:**
+> - `IsVisible: true` — the visibility pre-filter drops hidden elements before
+>   scoring. An element without this field defaults to `false` and is silently
+>   excluded, causing "cannot resolve element" with no obvious cause.
+> - `Rect: dom.Rect{...}` — required by the proximity scorer and the
+>   `NEAR`/`INSIDE` Euclidean-distance path. A zero `Rect` causes the scorer
+>   to produce a flat zero for the proximity channel and can change rankings
+>   unexpectedly.
+>
+> If your test's target is never resolved but the element is clearly in
+> `Elements`, check these two fields first.
+
 ### `httptest` + `gorilla/websocket` — fake CDP
 
 For `pkg/cdp` tests. See `startMockCDP` in
