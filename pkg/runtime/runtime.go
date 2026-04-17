@@ -454,10 +454,8 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			res.ProbeMetadata["inside_row_text"] = cmd.InsideRowText
 		}
 
-		// Anti-phantom guard for inputs/selects (soft warning for now)
-		if !rt.passesAntiPhantomGuard(string(mode), targetPath, best.Element) {
-			rt.logger.ActionDetail("👻", "ANTI-PHANTOM GUARD: heuristic choice %q for target %q has low keyword correlation.", best.Element.Tag, targetPath)
-		}
+		// Anti-phantom guard for inputs/selects (soft warning; logging is inside the helper).
+		rt.passesAntiPhantomGuard(string(mode), targetPath, best.Element)
 
 		winner := best.Element
 		conf := best.Explain.Score.Total

@@ -60,7 +60,11 @@ func (l *Logger) WithLevel(level LogLevel) *Logger {
 
 // WithPrefix returns a child Logger sharing the parent's writers and mutex,
 // with prefix prepended to every line. Safe for concurrent use alongside siblings.
+// If parent is nil, a default stdout/info logger is used as the base.
 func WithPrefix(parent *Logger, prefix string) *Logger {
+	if parent == nil {
+		parent = NewLogger(nil)
+	}
 	return &Logger{
 		mu:     parent.mu,
 		out:    parent.out,
