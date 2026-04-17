@@ -167,3 +167,36 @@ When generating automation logic:
 * Use **quoted strings** for target labels (`'Login'`) to ensure high scoring priority.
 * For tables, use **text identifiers** (`CHECK the checkbox for 'Item ID'`) – let the 3-pass targeting handle the proximity to the actual checkbox input.
 * For custom dropdowns, the engine automatically falls back from `select_option` to `click()` on the resolved target.
+
+## Parallel execution (Go API)
+
+The CLI is still single-threaded; the worker pool is a Go API. Typical use:
+
+```go
+alloc := worker.NewPortAllocator(9222, 9321)
+pool, _ := worker.NewPool(worker.PoolOptions{
+    Concurrency: 4,
+    Config:      config.Default(),
+    Allocator:   alloc,
+    FailFast:    false,
+})
+results, firstErr := pool.Run(ctx, hunts)
+```
+
+- Order preserved: `results[i]` corresponds to `hunts[i]`.
+- Use `report.GenerateIndex(summaries, outDir)` for an aggregate `index.html`.
+- Per-worker logs are prefixed `[wN] ` via `utils.WithPrefix`.
+- Per-hunt report filenames carry an atomic sequence counter — never collide.
+
+## Testing expectations
+
+- **Default to `-race`:** `go test -race ./...`. CI runs race on every package.
+- **Worker tests use `AdoptWorker`:** `pkg/worker/worker_test.go` dispatches 16
+  hunts across 16 adopted workers with `MockPage`. That is the canonical
+  pattern for verifying "no state bleed" when adding new Runtime state.
+- **CDP tests use an in-process `httptest` WebSocket echo server:** see
+  `pkg/cdp/conn_test.go`. Any new CDP transport feature must be tested there
+  before shipping.
+- **Never introduce `time.Sleep` in production paths.** The codebase has zero
+  such calls today; adding one will be flagged in review. Use
+  `select { case <-ctx.Done(): ... case <-time.After(...): ... }` instead.
