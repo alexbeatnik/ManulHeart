@@ -90,9 +90,9 @@ func TestPool_ParallelExecutionNoStateBleed(t *testing.T) {
 		}
 	}
 
-	// Drive workers manually instead of using Pool.Run, because Pool.Run
-	// always invokes NewWorker (which launches Chrome). Pool's job-dispatch
-	// semantics are exercised separately in TestPool_DispatchSemantics.
+	// Drive workers manually instead of using Pool.Run to avoid launching
+	// Chrome. Pool.Run dispatch semantics are covered in pool_run_test.go
+	// via the injected WorkerFactory.
 	var wg sync.WaitGroup
 	errs := make(chan error, nHunts)
 	for i := 0; i < nHunts; i++ {

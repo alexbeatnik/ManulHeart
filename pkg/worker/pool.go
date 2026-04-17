@@ -13,6 +13,12 @@ import (
 	"github.com/manulengineer/manulheart/pkg/utils"
 )
 
+// WorkerFactory constructs a Worker given a context and Options. The default
+// factory (used when PoolOptions.Factory is nil) is NewWorker, which launches
+// a real Chrome process. Override in tests to inject mock pages via AdoptWorker
+// and avoid Chrome launches.
+type WorkerFactory func(ctx context.Context, opts Options) (*Worker, error)
+
 // PoolOptions configures a WorkerPool.
 type PoolOptions struct {
 	// Concurrency is the maximum number of Workers (and Chrome processes)
@@ -37,6 +43,10 @@ type PoolOptions struct {
 	// causing other in-flight workers to abort their current step.
 	// When false, all hunts run to completion regardless of failures.
 	FailFast bool
+
+	// Factory constructs Workers for the pool. If nil, NewWorker is used.
+	// Override in tests to inject mock pages via AdoptWorker.
+	Factory WorkerFactory
 }
 
 // PoolResult bundles a hunt's outcome with the worker that ran it.
@@ -104,6 +114,11 @@ func (p *WorkerPool) Run(ctx context.Context, hunts []*dsl.Hunt) ([]PoolResult, 
 		}
 	}
 
+	factory := p.opts.Factory
+	if factory == nil {
+		factory = NewWorker
+	}
+
 	concurrency := p.opts.Concurrency
 	if concurrency > len(hunts) {
 		concurrency = len(hunts)
@@ -114,7 +129,7 @@ func (p *WorkerPool) Run(ctx context.Context, hunts []*dsl.Hunt) ([]PoolResult, 
 		workerSlot := w + 1
 		go func() {
 			defer wg.Done()
-			worker, err := NewWorker(runCtx, Options{
+			worker, err := factory(runCtx, Options{
 				ID:            workerSlot,
 				Config:        p.opts.Config,
 				Logger:        p.opts.Logger,
@@ -122,17 +137,11 @@ func (p *WorkerPool) Run(ctx context.Context, hunts []*dsl.Hunt) ([]PoolResult, 
 				ChromeOptions: p.opts.ChromeOptions,
 			})
 			if err != nil {
-				// Mark every job this worker would have run as failed so
-				// the caller doesn't block waiting for them.
+				// Don't drain the jobs channel — let other successfully-spawned
+				// workers continue at reduced concurrency. Draining would race
+				// with healthy goroutines and prevent them from processing hunts.
 				err = fmt.Errorf("pool: spawn worker %d: %w", workerSlot, err)
 				recordErr(err)
-				for idx := range jobs {
-					results[idx] = PoolResult{
-						WorkerID: workerSlot,
-						Hunt:     hunts[idx],
-						Err:      err,
-					}
-				}
 				return
 			}
 			defer worker.Close()
@@ -160,5 +169,14 @@ func (p *WorkerPool) Run(ctx context.Context, hunts []*dsl.Hunt) ([]PoolResult, 
 	}
 
 	wg.Wait()
+	// Backfill any hunts that were never processed because all workers
+	// failed to spawn before draining the jobs channel.
+	if firstErr != nil {
+		for i := range results {
+			if results[i].Hunt == nil {
+				results[i] = PoolResult{WorkerID: 0, Hunt: hunts[i], Err: firstErr}
+			}
+		}
+	}
 	return results, firstErr
 }

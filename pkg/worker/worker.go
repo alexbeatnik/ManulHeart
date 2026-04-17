@@ -162,7 +162,7 @@ func (w *Worker) Page() browser.Page { return w.page }
 // Run executes a parsed hunt against the worker's page.
 func (w *Worker) Run(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntResult, error) {
 	if w == nil || w.runtime == nil {
-		return nil, errors.New("worker: zero-value Worker; use NewWorker")
+		return nil, errors.New("worker: zero-value Worker; use NewWorker or AdoptWorker")
 	}
 	return w.runtime.RunHunt(ctx, hunt)
 }
