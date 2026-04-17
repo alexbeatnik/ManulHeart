@@ -1364,7 +1364,12 @@ func verifyRankedCandidateAcceptable(state string, ranked []scorer.RankedCandida
 	if len(ranked) == 0 {
 		return false
 	}
-	return ranked[0].Explain.Score.Total > 0.3
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "checked", "unchecked", "selected":
+		return !selectionIsAmbiguous(ranked)
+	default:
+		return ranked[0].Explain.Score.Total > 0.3
+	}
 }
 
 func (rt *Runtime) ensureCheckboxTargetState(ctx context.Context, target string, desired bool, initialRanked []scorer.RankedCandidate) error {

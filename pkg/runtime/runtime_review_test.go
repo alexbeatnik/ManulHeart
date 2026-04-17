@@ -1001,6 +1001,73 @@ func TestRuntime_CheckPrefersRoleCheckboxOverMatchingButtonText(t *testing.T) {
 	}
 }
 
+func TestRuntime_CheckPassesForLowConfidenceRoleCheckbox(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/span[1]", Tag: "span", Role: "checkbox", AriaLabel: "Select Home", IsVisible: true, Rect: dom.Rect{Top: 70, Left: 20, Width: 16, Height: 16}},
+			{ID: 2, XPath: "/html/body/div[1]/span[2]", Tag: "span", VisibleText: "Home", IsVisible: true, Rect: dom.Rect{Top: 68, Left: 44, Width: 44, Height: 20}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:     dsl.CmdCheck,
+		Raw:      "CHECK the checkbox for 'Home'",
+		Target:   "Home",
+		TypeHint: "checkbox",
+	})
+	if err != nil {
+		t.Fatalf("check failed: %v", err)
+	}
+	if !mock.Elements[0].IsChecked {
+		t.Fatal("expected low-confidence role checkbox candidate to be checked")
+	}
+	if res.WinnerXPath != "/html/body/div[1]/span[1]" {
+		t.Fatalf("WinnerXPath = %q, want role checkbox xpath", res.WinnerXPath)
+	}
+	if !(res.WinnerScore > ThresholdHighConfidence && res.WinnerScore < 0.3) {
+		t.Fatalf("WinnerScore = %.3f, want low-confidence but acceptable checkbox score", res.WinnerScore)
+	}
+	if res.ProbeMetadata["interaction_mode"] != string(dsl.ModeCheckbox) {
+		t.Fatalf("interaction_mode = %v, want %s", res.ProbeMetadata["interaction_mode"], dsl.ModeCheckbox)
+	}
+	if res.ProbeMetadata["resolution_strategy"] != "restrictive-pass1" {
+		t.Fatalf("resolution_strategy = %v, want restrictive-pass1", res.ProbeMetadata["resolution_strategy"])
+	}
+}
+
+func TestRuntime_VerifyCheckedPassesForLowConfidenceRoleCheckbox(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/span[1]", Tag: "span", Role: "checkbox", AriaLabel: "Select Home", IsVisible: true, IsChecked: true, Rect: dom.Rect{Top: 70, Left: 20, Width: 16, Height: 16}},
+			{ID: 2, XPath: "/html/body/div[1]/span[2]", Tag: "span", VisibleText: "Home", IsVisible: true, Rect: dom.Rect{Top: 68, Left: 44, Width: 44, Height: 20}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:        dsl.CmdVerifyField,
+		Raw:         "VERIFY that 'Home' is checked",
+		VerifyText:  "Home",
+		VerifyState: "checked",
+	})
+	if err != nil {
+		t.Fatalf("verify checked failed: %v", err)
+	}
+	if res.WinnerXPath != "/html/body/div[1]/span[1]" {
+		t.Fatalf("WinnerXPath = %q, want role checkbox xpath", res.WinnerXPath)
+	}
+	if !(res.WinnerScore > ThresholdHighConfidence && res.WinnerScore < 0.3) {
+		t.Fatalf("WinnerScore = %.3f, want low-confidence but acceptable checkbox score", res.WinnerScore)
+	}
+}
+
 func TestRuntime_ClickFailsForAmbiguousLowConfidenceCandidates(t *testing.T) {
 	mock := &MockPage{
 		Elements: []dom.ElementSnapshot{
