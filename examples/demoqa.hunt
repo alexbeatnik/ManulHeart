@@ -43,7 +43,8 @@ STEP 1: Text box form submission
 
 STEP 2: Checkbox tree
     NAVIGATE to https://demoqa.com/checkbox
-    CLICK the 'Expand all' button
+    # DemoQA now renders the tree via rc-tree and no longer exposes the old
+    # toolbar button labeled "Expand all" on this page.
     # "checkbox for 'Home'" — the engine applies strict checkbox mode:
     # non-checkbox elements get a heavy scoring penalty.
     CHECK the checkbox for 'Home'
@@ -78,7 +79,8 @@ STEP 6: Select menu
 
 STEP 7: Date picker
     NAVIGATE to https://demoqa.com/date-picker
-    FILL 'Date Of Birth' field with '01/15/1990'
+    # DemoQA now labels the date input as "Select Date" on this page.
+    FILL 'Select Date' field with '01/15/1990'
     VERIFY that '01/15/1990' is present
 
 STEP 8: Navigation links

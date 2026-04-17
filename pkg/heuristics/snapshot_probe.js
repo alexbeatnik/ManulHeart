@@ -60,7 +60,19 @@
                 .join(' ');
             if (text) return text;
         }
-        // 4. Table column header context for <td>
+        // 4. Fieldset legend context for grouped controls.
+        if (['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName)) {
+            const fieldset = el.closest('fieldset');
+            if (fieldset) {
+                const legend = Array.from(fieldset.children || []).find(child => child.tagName === 'LEGEND')
+                    || fieldset.querySelector('legend');
+                if (legend) {
+                    const legendText = normalize(legend.innerText || legend.textContent);
+                    if (legendText) return legendText;
+                }
+            }
+        }
+        // 5. Table column header context for <td>
         if (el.tagName === 'TD' || el.tagName === 'TH') {
             const tr = el.closest('tr');
             if (tr) {
@@ -236,6 +248,7 @@
                              el.getAttribute('contenteditable') === 'true' ||
                              (el.getAttribute('role') || '') === 'textbox'),
             is_checked:     el.checked || el.getAttribute('aria-checked') === 'true',
+            is_selected:    el.selected || el.getAttribute('aria-selected') === 'true',
             is_in_shadow:   inShadow,
             rect: {
                 top:    rect.top,

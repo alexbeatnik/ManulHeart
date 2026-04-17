@@ -3,6 +3,12 @@
 ## Project Context
 ManulHeart is a deterministic, DSL-first Web Automation Runtime written in Go.
 It drives Chromium via CDP and uses a weighted heuristic Scorer.
+Current documented CLI version: `0.0.0.1`.
+
+## CLI Install Guidance
+- Prefer documenting `manul` as a PATH-visible system command for integrations and editor extensions.
+- Recommended install targets: `~/.local/bin/manul` for user-local installs or `/usr/local/bin/manul` for system-wide installs.
+- Do not describe the repo-local `./manul` binary as the only supported invocation path when the use case is extension-based test execution.
 
 ## Tech Stack
 - **Go 1.21+** (Core engine)

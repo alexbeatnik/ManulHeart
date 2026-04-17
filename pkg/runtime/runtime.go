@@ -7,6 +7,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/manulengineer/manulheart/pkg/heuristics"
 	"github.com/manulengineer/manulheart/pkg/scorer"
 	"github.com/manulengineer/manulheart/pkg/utils"
+	"github.com/manulengineer/manulheart/pkg/core"
 )
 
 func min(a, b int) int {
@@ -43,16 +45,18 @@ type Runtime struct {
 	logger *utils.Logger
 	vars   *ScopedVariables
 
-	cachedElements []dom.ElementSnapshot
+	cachedElements       []dom.ElementSnapshot
+	stickyCheckboxStates map[string]bool
 }
 
 // New creates a new Runtime bound to the given Config, Page, and Logger.
 func New(cfg config.Config, page browser.Page, logger *utils.Logger) *Runtime {
 	return &Runtime{
-		cfg:    cfg,
-		page:   page,
-		logger: logger,
-		vars:   NewScopedVariables(),
+		cfg:                  cfg,
+		page:                 page,
+		logger:               logger,
+		vars:                 NewScopedVariables(),
+		stickyCheckboxStates: make(map[string]bool),
 	}
 }
 
@@ -98,7 +102,7 @@ func (rt *Runtime) runCommands(ctx context.Context, commands []dsl.Command, hunt
 		}
 		if err != nil {
 			failed++
-			rt.logger.Error("step failed: %v", err)
+			rt.logger.Error("step failed (%s): %v", cmd.Raw, err)
 			return passed, failed, err
 		} else {
 			passed++
@@ -142,18 +146,29 @@ func (rt *Runtime) resolveAnchor(ctx context.Context, label string, elements []d
 	if label == "" {
 		return nil, nil
 	}
+	winner, err := rt.resolveStructuralAnchor(label, elements)
+	if err != nil {
+		return nil, err
+	}
+	return &scorer.AnchorContext{
+		Rect:       winner.Rect,
+		XPath:      winner.XPath,
+		FrameIndex: winner.FrameIndex,
+		Words:      scorer.SignificantWords(winner.VisibleText),
+	}, nil
+}
+
+func (rt *Runtime) resolveStructuralAnchor(label string, elements []dom.ElementSnapshot) (dom.ElementSnapshot, error) {
+	if label == "" {
+		return dom.ElementSnapshot{}, fmt.Errorf("anchor label is empty")
+	}
 	label = rt.resolveVariables(label)
 	// Anchor resolution uses "none" mode to allow matching any structural element (div, span, etc.)
 	ranked := scorer.Rank(label, "", string(dsl.ModeNone), elements, 1, nil)
-	if len(ranked) == 0 {
-		return nil, fmt.Errorf("near anchor not found: %q", label)
+	if len(ranked) == 0 || ranked[0].Explain.Score.Total < ThresholdAmbiguous {
+		return dom.ElementSnapshot{}, fmt.Errorf("near anchor not found: %q", label)
 	}
-	winner := ranked[0].Element
-	return &scorer.AnchorContext{
-		Rect:  winner.Rect,
-		XPath: winner.XPath,
-		Words: scorer.SignificantWords(winner.VisibleText),
-	}, nil
+	return ranked[0].Element, nil
 }
 
 // executeCommand runs a single DSL command and returns its execution result.
@@ -205,6 +220,9 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		res.ActionValue = pattern
 		err = rt.page.WaitForResponse(ctx, pattern, rt.cfg.DefaultTimeout)
 
+	case dsl.CmdCallGo:
+		res.ActionValue, res.ProbeMetadata, err = rt.executeCallGo(ctx, cmd)
+
 	case dsl.CmdSet:
 		if cmd.SetVar != "" {
 			val := rt.resolveVariables(cmd.SetValue)
@@ -215,6 +233,18 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		fallthrough
 
 	case dsl.CmdClick, dsl.CmdFill, dsl.CmdType, dsl.CmdHover, dsl.CmdCheck, dsl.CmdUncheck, dsl.CmdSelect, dsl.CmdDoubleClick, dsl.CmdRightClick, dsl.CmdUploadFile:
+		handled, actionValue, metadata, customErr := rt.tryExecuteCustomControl(ctx, cmd)
+		if handled {
+			res.ActionValue = actionValue
+			res.ProbeMetadata = metadata
+			if customErr != nil {
+				err = customErr
+			} else {
+				rt.invalidateSnapshot()
+			}
+			break
+		}
+
 		// Target resolution needed for interaction
 		res.TargetRequired = true
 		elements, errSnapshot := rt.loadSnapshot(ctx)
@@ -245,9 +275,70 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		res.TargetQuery = targetPath
 		res.TypeHint = cmd.TypeHint
 
+		if (cmd.Type == dsl.CmdFill || cmd.Type == dsl.CmdType || cmd.Type == dsl.CmdSet) && isShadowLikeQuery(targetPath) {
+			val := rt.resolveVariables(cmd.Value)
+			if cmd.Type == dsl.CmdSet && cmd.SetValue != "" {
+				val = rt.resolveVariables(cmd.SetValue)
+			}
+			handled, typeErr := rt.trySetShadowInputValue(ctx, targetPath, val)
+			if typeErr != nil {
+				err = typeErr
+				break
+			}
+			if handled {
+				res.ActionValue = val
+				res.ProbeMetadata = map[string]any{"resolution_strategy": "shadow-input-direct"}
+				rt.invalidateSnapshot()
+				if waitErr := rt.page.Wait(ctx, 200*time.Millisecond); waitErr != nil {
+					err = waitErr
+				}
+				break
+			}
+		}
+
+		if cmd.Type == dsl.CmdClick && isDropdownLikeQuery(targetPath) {
+			handled, clickErr := rt.tryClickDropdownTriggerByLabel(ctx, targetPath)
+			if clickErr != nil {
+				err = clickErr
+				break
+			}
+			if handled {
+				res.ActionValue = targetPath
+				res.ProbeMetadata = map[string]any{"resolution_strategy": "dropdown-trigger-direct"}
+				rt.invalidateSnapshot()
+				if waitErr := rt.page.Wait(ctx, 300*time.Millisecond); waitErr != nil {
+					err = waitErr
+				}
+				break
+			}
+		}
+
+		if cmd.Type == dsl.CmdClick && isLikelyDropdownOptionQuery(targetPath) {
+			handled, clickErr := rt.tryClickVisibleDropdownOption(ctx, targetPath)
+			if clickErr != nil {
+				err = clickErr
+				break
+			}
+			if handled {
+				res.ActionValue = targetPath
+				res.ProbeMetadata = map[string]any{"resolution_strategy": "dropdown-option-direct"}
+				rt.invalidateSnapshot()
+				if waitErr := rt.page.Wait(ctx, 200*time.Millisecond); waitErr != nil {
+					err = waitErr
+				}
+				break
+			}
+		}
+
 		anchor, errAnchor := rt.resolveAnchor(ctx, cmd.NearAnchor, elements)
 		if errAnchor != nil {
 			err = errAnchor
+			break
+		}
+
+		candidateElements, contextualStrategy, contextErr := rt.applyContextualFilters(cmd, elements)
+		if contextErr != nil {
+			err = contextErr
 			break
 		}
 
@@ -258,48 +349,17 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		var ranked []scorer.RankedCandidate
 		resolutionStrategy := "standard"
 		if isRestrictive && targetPath != "" {
-			// Pass 1: Try direct resolution first (high threshold)
-			selfRanked := scorer.Rank(targetPath, cmd.TypeHint, string(mode), elements, 5, anchor)
-			if len(selfRanked) > 0 && selfRanked[0].Explain.Score.Total >= ThresholdHighConfidence {
-				ranked = selfRanked
-				resolutionStrategy = "restrictive-pass1"
-			} else {
-				// Pass 2: Find what the user actually meant by the text (ignoring tag semantics)
-				anchorRanked := scorer.Rank(targetPath, cmd.TypeHint, string(dsl.ModeNone), elements, 5, anchor)
-				if len(anchorRanked) > 0 {
-					topAnchor := anchorRanked[0]
-
-					// If the top anchor itself is already interactive, use it
-					if topAnchor.Element.IsInteractive(string(mode)) {
-						ranked = anchorRanked
-						resolutionStrategy = "restrictive-pass2"
-					} else {
-						// Pass 3: Use the found anchor to find the interactive element nearby.
-						rt.logger.Info("Target %q is not a %s. Using it as anchor to find nearby %s...", targetPath, mode, mode)
-						newAnchor := &scorer.AnchorContext{
-							Rect:  topAnchor.Element.Rect,
-							XPath: topAnchor.Element.XPath,
-							Words: scorer.SignificantWords(topAnchor.Element.VisibleText),
-						}
-						// Search for ANY such element near the anchor
-						rankedFallback := scorer.Rank("", cmd.TypeHint, string(mode), elements, 5, newAnchor)
-						if pass3CandidateAcceptable(rankedFallback) {
-							ranked = rankedFallback
-							resolutionStrategy = "restrictive-pass3"
-						} else {
-							// fallback failed to find anything truly NEAR. Use the anchor.
-							ranked = anchorRanked
-							resolutionStrategy = "restrictive-anchor"
-						}
-					}
-				}
-			}
+			ranked, resolutionStrategy = resolveRestrictiveCandidates(targetPath, cmd.TypeHint, mode, candidateElements, anchor, rt.logger)
 		}
 
 		// Standard resolution if not already handled by restrictive fallback
 		if len(ranked) == 0 {
-			ranked = scorer.Rank(targetPath, cmd.TypeHint, string(mode), elements, 5, anchor)
+			ranked = scorer.Rank(targetPath, cmd.TypeHint, string(mode), candidateElements, 5, anchor)
 			resolutionStrategy = "standard"
+		}
+		ranked = collapseNestedDuplicateRankedCandidates(ranked)
+		if contextualStrategy != "" {
+			resolutionStrategy = contextualStrategy + "+" + resolutionStrategy
 		}
 
 		if len(ranked) == 0 {
@@ -325,6 +385,15 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		}
 		if cmd.NearAnchor != "" {
 			res.ProbeMetadata["near_anchor"] = cmd.NearAnchor
+		}
+		if cmd.OnRegion != "" {
+			res.ProbeMetadata["on_region"] = cmd.OnRegion
+		}
+		if cmd.InsideContainer != "" {
+			res.ProbeMetadata["inside_container"] = cmd.InsideContainer
+		}
+		if cmd.InsideRowText != "" {
+			res.ProbeMetadata["inside_row_text"] = cmd.InsideRowText
 		}
 
 		// Anti-phantom guard for inputs/selects (soft warning for now)
@@ -356,9 +425,29 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			res.ActionValue = val
 			err = rt.page.SetInputValue(ctx, winner.ID, winner.XPath, val)
 			if err == nil {
+				if waitErr := rt.page.Wait(ctx, 300*time.Millisecond); waitErr != nil {
+					err = waitErr
+					break
+				}
 				rt.invalidateSnapshot()
 			}
 		case dsl.CmdClick:
+			if isDropdownLikeQuery(targetPath) && !isDropdownLikeElement(winner) {
+				handled, clickErr := rt.tryClickNearbyDropdownControl(ctx, winner)
+				if clickErr != nil {
+					err = clickErr
+					break
+				}
+				if handled {
+					rt.invalidateSnapshot()
+					if waitErr := rt.page.Wait(ctx, 300*time.Millisecond); waitErr != nil {
+						err = waitErr
+					} else if stickyErr := rt.reconcileStickyCheckboxStates(ctx); stickyErr != nil {
+						err = stickyErr
+					}
+					break
+				}
+			}
 			x, y, e := rt.page.GetElementCenter(ctx, winner.ID, winner.XPath)
 			if e != nil {
 				err = fmt.Errorf("center calc: %w", e)
@@ -374,6 +463,9 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 					}
 					rt.invalidateSnapshot()
 					_ = rt.page.WaitForLoad(ctx)
+					if stickyErr := rt.reconcileStickyCheckboxStates(ctx); stickyErr != nil {
+						err = stickyErr
+					}
 				}
 			}
 		case dsl.CmdDoubleClick:
@@ -395,13 +487,25 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			if e != nil {
 				err = fmt.Errorf("center calc: %w", e)
 			} else {
+				_ = rt.page.ScrollIntoView(ctx, winner.ID, winner.XPath)
 				err = rt.page.Hover(ctx, x, y)
+				if err == nil {
+					if waitErr := rt.page.Wait(ctx, 300*time.Millisecond); waitErr != nil {
+						err = waitErr
+						break
+					}
+					rt.invalidateSnapshot()
+				}
 			}
 		case dsl.CmdCheck, dsl.CmdUncheck:
 			checked := cmd.Type == dsl.CmdCheck
 			err = rt.page.SetChecked(ctx, winner.ID, winner.XPath, checked)
 			if err == nil {
+				rt.rememberStickyCheckboxState(targetPath, checked)
 				rt.invalidateSnapshot()
+				if verifyErr := rt.ensureCheckboxTargetState(ctx, targetPath, checked, ranked); verifyErr != nil {
+					err = verifyErr
+				}
 			}
 		case dsl.CmdSelect:
 			val := rt.resolveVariables(cmd.Value)
@@ -552,14 +656,19 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		if cmd.ScrollContainer != "" {
 			res.TargetRequired = true
 			res.TargetQuery = cmd.ScrollContainer
-			elements, _ := rt.loadSnapshot(ctx)
-			res.CandidatesConsidered = len(elements)
-			ranked := scorer.Rank(cmd.ScrollContainer, "", "none", elements, 1, nil)
-			if len(ranked) > 0 {
-				appendRankedCandidates(&res, ranked, 1)
-				res.WinnerXPath = ranked[0].Element.XPath
-				res.WinnerScore = ranked[0].Explain.Score.Total
-				containerID = ranked[0].Element.XPath
+			if isGenericListContainer(cmd.ScrollContainer) {
+				containerID = string(core.ScrollStrategyGenericList)
+				res.ProbeMetadata = map[string]any{"scroll_strategy": "dropdown-list"}
+			} else {
+				elements, _ := rt.loadSnapshot(ctx)
+				res.CandidatesConsidered = len(elements)
+				ranked := scorer.Rank(cmd.ScrollContainer, "", "none", elements, 1, nil)
+				if len(ranked) > 0 {
+					appendRankedCandidates(&res, ranked, 1)
+					res.WinnerXPath = ranked[0].Element.XPath
+					res.WinnerScore = ranked[0].Explain.Score.Total
+					containerID = ranked[0].Element.XPath
+				}
 			}
 		}
 
@@ -591,7 +700,10 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		res.TargetQuery = target
 		var present bool
 		var pageText string
-		deadline := time.Now().Add(2 * time.Second)
+		deadline := time.Now().Add(rt.cfg.DefaultTimeout)
+		if dlat, ok := ctx.Deadline(); ok && dlat.Before(deadline) {
+			deadline = dlat
+		}
 
 		for {
 			raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildVisibleTextProbe(), nil)
@@ -623,28 +735,76 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		}
 
 	case dsl.CmdVerifyField:
-		// Full element resolution for attribute-specific verification
+		// Full element resolution for state-specific verification.
 		res.TargetRequired = true
-		elements, errSnapshot := rt.loadSnapshot(ctx)
-		if errSnapshot != nil {
-			err = errSnapshot
-			break
-		}
-		res.CandidatesConsidered = len(elements)
 		target := rt.resolveVariables(cmd.VerifyText)
 		res.TargetQuery = target
-		ranked := scorer.Rank(target, "", "none", elements, 1, nil)
-		present := len(ranked) > 0 && ranked[0].Explain.Score.Total > 0.3
+		verifyDeadline := time.Now().Add(rt.cfg.DefaultTimeout)
+		if deadline, ok := ctx.Deadline(); ok && deadline.Before(verifyDeadline) {
+			verifyDeadline = deadline
+		}
+		stateVerified := false
+		lastFound := false
+		lastStateValue := false
+		var lastWinner dom.ElementSnapshot
+		var ranked []scorer.RankedCandidate
+
+		for {
+			rt.invalidateSnapshot()
+			elements, errSnapshot := rt.loadSnapshot(ctx)
+			if errSnapshot != nil {
+				err = errSnapshot
+				break
+			}
+			res.CandidatesConsidered = len(elements)
+
+			ranked = rankForVerifyState(target, cmd.VerifyState, elements, rt.logger)
+			lastFound = verifyRankedCandidateAcceptable(cmd.VerifyState, ranked)
+			if lastFound {
+				lastWinner = ranked[0].Element
+				lastStateValue = elementMatchesVerifyState(lastWinner, cmd.VerifyState)
+				verifySatisfied := lastStateValue
+				if cmd.VerifyNegated {
+					verifySatisfied = !verifySatisfied
+				}
+				if verifySatisfied {
+					stateVerified = true
+					break
+				}
+			} else {
+				verifySatisfied := missingElementSatisfiesVerifyState(cmd.VerifyState)
+				if cmd.VerifyNegated {
+					verifySatisfied = !verifySatisfied
+				}
+				if verifySatisfied {
+					stateVerified = true
+					break
+				}
+			}
+
+			if time.Now().After(verifyDeadline) {
+				break
+			}
+			if waitErr := rt.page.Wait(ctx, 200*time.Millisecond); waitErr != nil {
+				err = waitErr
+				break
+			}
+		}
+
 		if len(ranked) > 0 {
 			appendRankedCandidates(&res, ranked, 1)
 			res.WinnerXPath = ranked[0].Element.XPath
 			res.WinnerScore = ranked[0].Explain.Score.Total
 		}
-		if !present {
-			err = fmt.Errorf("verification failed: target field '%s' not found", target)
-		} else if cmd.VerifyState != "" {
-			// verify state (e.g., checked, enabled)
-			// ... logic ...
+		if err != nil {
+			break
+		}
+		if !stateVerified {
+			if !lastFound {
+				err = fmt.Errorf("verification failed: target field '%s' not found for state %q", target, cmd.VerifyState)
+				break
+			}
+			err = fmt.Errorf("verification failed: target '%s' expected state %s, actual state %s", target, expectedVerifyStateDescription(cmd.VerifyState, cmd.VerifyNegated), actualVerifyStateDescription(cmd.VerifyState, lastStateValue))
 		}
 
 	case dsl.CmdIf:
@@ -856,6 +1016,700 @@ func (rt *Runtime) autoAnnotateNavigate(ctx context.Context, url string) {
 	rt.logger.Info("📍 Auto-Nav: %s", url)
 }
 
+func resolveRestrictiveCandidates(targetPath, typeHint string, mode dsl.InteractionMode, elements []dom.ElementSnapshot, anchor *scorer.AnchorContext, logger *utils.Logger) ([]scorer.RankedCandidate, string) {
+	selfRanked := scorer.Rank(targetPath, typeHint, string(mode), elements, 5, anchor)
+	if len(selfRanked) > 0 && selfRanked[0].Explain.Score.Total >= ThresholdHighConfidence {
+		return selfRanked, "restrictive-pass1"
+	}
+
+	anchorRanked := scorer.Rank(targetPath, typeHint, string(dsl.ModeNone), elements, 8, anchor)
+	if len(anchorRanked) == 0 {
+		return nil, "restrictive-pass2"
+	}
+
+	bestScore := -1.0
+	var bestRanked []scorer.RankedCandidate
+	bestStrategy := "restrictive-anchor"
+
+	for _, anchorCandidate := range anchorRanked {
+		if anchorCandidate.Element.IsInteractive(string(mode)) {
+			candidateScore := anchorCandidate.Explain.Score.Total + 0.05
+			if candidateScore > bestScore {
+				bestScore = candidateScore
+				bestRanked = []scorer.RankedCandidate{anchorCandidate}
+				bestStrategy = "restrictive-pass2"
+			}
+			continue
+		}
+
+		newAnchor := &scorer.AnchorContext{
+			Rect:       anchorCandidate.Element.Rect,
+			XPath:      anchorCandidate.Element.XPath,
+			FrameIndex: anchorCandidate.Element.FrameIndex,
+			Words:      scorer.SignificantWords(anchorCandidate.Element.VisibleText),
+		}
+		if mode == dsl.ModeCheckbox {
+			rowScoped := checkboxCandidatesInSameRow(anchorCandidate.Element, elements)
+			if len(rowScoped) > 0 {
+				rowRanked := scorer.Rank("", typeHint, string(mode), rowScoped, 5, newAnchor)
+				if pass3CandidateAcceptable(rowRanked) {
+					candidateScore := rowRanked[0].Explain.Score.Total + anchorCandidate.Explain.Score.Total*0.35 + 0.15
+					if candidateScore > bestScore {
+						bestScore = candidateScore
+						bestRanked = rowRanked
+						bestStrategy = "restrictive-pass3-row"
+					}
+					continue
+				}
+			}
+		}
+		rankedFallback := scorer.Rank("", typeHint, string(mode), elements, 5, newAnchor)
+		if !pass3CandidateAcceptable(rankedFallback) {
+			continue
+		}
+		candidateScore := rankedFallback[0].Explain.Score.Total + anchorCandidate.Explain.Score.Total*0.25
+		if candidateScore > bestScore {
+			bestScore = candidateScore
+			bestRanked = rankedFallback
+			bestStrategy = "restrictive-pass3"
+		}
+	}
+
+	if len(bestRanked) > 0 {
+		if bestStrategy == "restrictive-pass3" && logger != nil {
+			logger.Info("Resolved restrictive target %q via multi-anchor nearby control search.", targetPath)
+		}
+		return bestRanked, bestStrategy
+	}
+
+	return anchorRanked, "restrictive-anchor"
+}
+
+func (rt *Runtime) applyContextualFilters(cmd dsl.Command, elements []dom.ElementSnapshot) ([]dom.ElementSnapshot, string, error) {
+	filtered := elements
+	var strategies []string
+
+	if cmd.OnRegion != "" {
+		regionFiltered := filterRegionCandidates(cmd.OnRegion, filtered)
+		if len(regionFiltered) == 0 {
+			return nil, "", fmt.Errorf("no candidates found in region %q", cmd.OnRegion)
+		}
+		filtered = regionFiltered
+		strategies = append(strategies, "on-"+normalizeContextLabel(cmd.OnRegion))
+	}
+
+	if cmd.InsideRowText != "" {
+		rowAnchor, err := rt.resolveStructuralAnchor(cmd.InsideRowText, filtered)
+		if err != nil {
+			return nil, "", fmt.Errorf("inside row anchor not found: %q", cmd.InsideRowText)
+		}
+		rowFiltered := candidatesInSameRow(rowAnchor, filtered)
+		if len(rowFiltered) == 0 {
+			return nil, "", fmt.Errorf("no candidates found inside row %q", cmd.InsideRowText)
+		}
+		filtered = rowFiltered
+		strategies = append(strategies, "inside-row")
+	}
+
+	if cmd.InsideContainer != "" {
+		containerAnchor, err := rt.resolveStructuralAnchor(cmd.InsideContainer, filtered)
+		if err != nil {
+			return nil, "", fmt.Errorf("inside container not found: %q", cmd.InsideContainer)
+		}
+		containerFiltered := descendantsOf(containerAnchor, filtered)
+		if len(containerFiltered) == 0 {
+			return nil, "", fmt.Errorf("no candidates found inside container %q", cmd.InsideContainer)
+		}
+		filtered = containerFiltered
+		strategies = append(strategies, "inside-container")
+	}
+
+	return filtered, strings.Join(strategies, "+"), nil
+}
+
+func checkboxCandidatesInSameRow(anchor dom.ElementSnapshot, elements []dom.ElementSnapshot) []dom.ElementSnapshot {
+	rowPrefix := rowXPathPrefix(anchor.XPath)
+	if rowPrefix == "" {
+		return nil
+	}
+	var out []dom.ElementSnapshot
+	for _, element := range elements {
+		if !element.IsInteractive(string(dsl.ModeCheckbox)) {
+			continue
+		}
+		if strings.HasPrefix(element.XPath, rowPrefix+"/") {
+			out = append(out, element)
+		}
+	}
+	return out
+}
+
+func candidatesInSameRow(anchor dom.ElementSnapshot, elements []dom.ElementSnapshot) []dom.ElementSnapshot {
+	rowPrefix := rowXPathPrefix(anchor.XPath)
+	if rowPrefix == "" {
+		return nil
+	}
+	var out []dom.ElementSnapshot
+	for _, element := range elements {
+		if strings.HasPrefix(element.XPath, rowPrefix+"/") {
+			out = append(out, element)
+		}
+	}
+	return out
+}
+
+func descendantsOf(container dom.ElementSnapshot, elements []dom.ElementSnapshot) []dom.ElementSnapshot {
+	prefix := strings.TrimRight(container.XPath, "/") + "/"
+	var out []dom.ElementSnapshot
+	for _, element := range elements {
+		if element.XPath == container.XPath {
+			continue
+		}
+		if strings.HasPrefix(element.XPath, prefix) {
+			out = append(out, element)
+		}
+	}
+	return out
+}
+
+func rowXPathPrefix(xpath string) string {
+	parts := strings.Split(strings.Trim(xpath, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	prefix := make([]string, 0, len(parts))
+	for _, part := range parts {
+		prefix = append(prefix, part)
+		if strings.HasPrefix(part, "tr[") {
+			return "/" + strings.Join(prefix, "/")
+		}
+	}
+	return ""
+}
+
+func filterRegionCandidates(region string, elements []dom.ElementSnapshot) []dom.ElementSnapshot {
+	viewportHeight := inferredViewportHeight(elements)
+	var out []dom.ElementSnapshot
+	for _, element := range elements {
+		if elementMatchesRegion(region, element, viewportHeight) {
+			out = append(out, element)
+		}
+	}
+	return out
+}
+
+func inferredViewportHeight(elements []dom.ElementSnapshot) float64 {
+	maxBottom := 0.0
+	for _, element := range elements {
+		bottom := element.Rect.Top + element.Rect.Height
+		if bottom > maxBottom {
+			maxBottom = bottom
+		}
+	}
+	if maxBottom <= 0 {
+		return 1000
+	}
+	return maxBottom
+}
+
+func elementMatchesRegion(region string, el dom.ElementSnapshot, viewportHeight float64) bool {
+	region = normalizeContextLabel(region)
+	if viewportHeight <= 0 {
+		viewportHeight = 1000
+	}
+	bottom := el.Rect.Top + el.Rect.Height
+	switch region {
+	case "header":
+		for _, ancestor := range el.Ancestors {
+			ancestor = normalizeContextLabel(ancestor)
+			if ancestor == "header" || ancestor == "nav" {
+				return true
+			}
+		}
+		return el.Rect.Top >= 0 && el.Rect.Top <= viewportHeight*0.15
+	case "footer":
+		for _, ancestor := range el.Ancestors {
+			ancestor = normalizeContextLabel(ancestor)
+			if ancestor == "footer" {
+				return true
+			}
+		}
+		return bottom >= viewportHeight*0.85
+	default:
+		return true
+	}
+}
+
+func normalizeContextLabel(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), "-")
+}
+
+func isGenericListContainer(query string) bool {
+	lower := strings.ToLower(strings.TrimSpace(query))
+	lower = strings.TrimPrefix(lower, "the ")
+	return lower == "list" || lower == "dropdown" || lower == "dropdown list" || lower == "listbox"
+}
+
+func isDropdownLikeQuery(query string) bool {
+	lower := strings.ToLower(query)
+	return strings.Contains(lower, "dropdown") || strings.Contains(lower, "combo box") || strings.Contains(lower, "combobox")
+}
+
+func isLikelyDropdownOptionQuery(query string) bool {
+	lower := strings.ToLower(strings.TrimSpace(query))
+	return strings.HasPrefix(lower, "item ") || strings.HasPrefix(lower, "option ")
+}
+
+func isShadowLikeQuery(query string) bool {
+	return strings.Contains(strings.ToLower(query), "shadow")
+}
+
+func isDropdownLikeElement(el dom.ElementSnapshot) bool {
+	if el.Tag == "select" || strings.EqualFold(el.Role, "combobox") || strings.EqualFold(el.Role, "listbox") {
+		return true
+	}
+	haystack := strings.ToLower(strings.Join([]string{el.Name, el.HTMLId, el.ClassName, el.Placeholder, el.AriaLabel}, " "))
+	return strings.Contains(haystack, "dropdown") || strings.Contains(haystack, "combo") || strings.Contains(haystack, "select")
+}
+
+func rankForVerifyState(target, state string, elements []dom.ElementSnapshot, logger *utils.Logger) []scorer.RankedCandidate {
+	mode := dsl.ModeNone
+	typeHint := ""
+	switch strings.ToLower(state) {
+	case "checked", "unchecked":
+		mode = dsl.ModeCheckbox
+		typeHint = "checkbox"
+	case "selected":
+		mode = dsl.ModeSelect
+	}
+	if mode != dsl.ModeNone && target != "" {
+		ranked, _ := resolveRestrictiveCandidates(target, typeHint, mode, elements, nil, nil)
+		if len(ranked) > 0 {
+			return ranked
+		}
+	}
+	return scorer.Rank(target, "", "none", elements, 1, nil)
+}
+
+func elementMatchesVerifyState(el dom.ElementSnapshot, state string) bool {
+	switch strings.ToLower(state) {
+	case "checked":
+		return el.IsChecked
+	case "unchecked":
+		return !el.IsChecked
+	case "enabled":
+		return !el.IsDisabled
+	case "disabled":
+		return el.IsDisabled
+	case "visible":
+		return el.IsVisible && !el.IsHidden
+	case "hidden", "disappear":
+		return !el.IsVisible || el.IsHidden
+	case "selected":
+		return el.IsSelected
+	default:
+		return false
+	}
+}
+
+func missingElementSatisfiesVerifyState(state string) bool {
+	switch strings.ToLower(state) {
+	case "hidden", "disappear":
+		return true
+	default:
+		return false
+	}
+}
+
+func expectedVerifyStateDescription(state string, negated bool) string {
+	base := strings.ToLower(strings.TrimSpace(state))
+	if base == "" {
+		base = "present"
+	}
+	if negated {
+		return "NOT " + base
+	}
+	return base
+}
+
+func actualVerifyStateDescription(state string, matches bool) string {
+	base := strings.ToLower(strings.TrimSpace(state))
+	if base == "" {
+		return "unknown"
+	}
+	if matches {
+		return base
+	}
+	switch base {
+	case "checked":
+		return "unchecked"
+	case "unchecked":
+		return "checked"
+	case "enabled":
+		return "disabled"
+	case "disabled":
+		return "enabled"
+	case "visible":
+		return "hidden"
+	case "hidden", "disappear":
+		return "visible"
+	case "selected":
+		return "not selected"
+	default:
+		return "not " + base
+	}
+}
+
+func verifyRankedCandidateAcceptable(state string, ranked []scorer.RankedCandidate) bool {
+	if len(ranked) == 0 {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "checked", "unchecked", "selected":
+		return !selectionIsAmbiguous(ranked)
+	default:
+		return ranked[0].Explain.Score.Total > 0.3
+	}
+}
+
+func (rt *Runtime) ensureCheckboxTargetState(ctx context.Context, target string, desired bool, initialRanked []scorer.RankedCandidate) error {
+	if waitErr := rt.page.Wait(ctx, 150*time.Millisecond); waitErr != nil {
+		return waitErr
+	}
+	rt.invalidateSnapshot()
+	matched, err := rt.checkboxTargetHasState(ctx, target, desired)
+	if err != nil {
+		return err
+	}
+	if matched {
+		return nil
+	}
+
+	retryCandidates, err := rt.collectCheckboxRetryCandidates(ctx, target, initialRanked)
+	if err != nil {
+		return err
+	}
+	tried := map[string]bool{}
+	for _, candidate := range retryCandidates {
+		key := candidate.Element.XPath
+		if key == "" {
+			key = fmt.Sprintf("id:%d", candidate.Element.ID)
+		}
+		if tried[key] {
+			continue
+		}
+		tried[key] = true
+
+		if err := rt.page.SetChecked(ctx, candidate.Element.ID, candidate.Element.XPath, desired); err != nil {
+			continue
+		}
+		if waitErr := rt.page.Wait(ctx, 150*time.Millisecond); waitErr != nil {
+			return waitErr
+		}
+		rt.invalidateSnapshot()
+		matched, err = rt.checkboxTargetHasState(ctx, target, desired)
+		if err != nil {
+			return err
+		}
+		if matched {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("checkbox target %q did not reach checked=%t", target, desired)
+}
+
+func (rt *Runtime) checkboxTargetHasState(ctx context.Context, target string, desired bool) (bool, error) {
+	elements, err := rt.loadSnapshot(ctx)
+	if err != nil {
+		return false, err
+	}
+	ranked := rankForVerifyState(target, "checked", elements, nil)
+	if !verifyRankedCandidateAcceptable("checked", ranked) {
+		return false, nil
+	}
+	return ranked[0].Element.IsChecked == desired, nil
+}
+
+func (rt *Runtime) collectCheckboxRetryCandidates(ctx context.Context, target string, initialRanked []scorer.RankedCandidate) ([]scorer.RankedCandidate, error) {
+	elements, err := rt.loadSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []scorer.RankedCandidate
+	candidates = append(candidates, initialRanked...)
+	if restrictive, _ := resolveRestrictiveCandidates(target, "checkbox", dsl.ModeCheckbox, elements, nil, nil); len(restrictive) > 0 {
+		candidates = append(candidates, restrictive...)
+	}
+	candidates = append(candidates, scorer.Rank(target, "checkbox", string(dsl.ModeCheckbox), elements, 5, nil)...)
+	candidates = append(candidates, scorer.Rank(target, "", string(dsl.ModeNone), elements, 5, nil)...)
+	return candidates, nil
+}
+
+func (rt *Runtime) rememberStickyCheckboxState(target string, checked bool) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return
+	}
+	if rt.stickyCheckboxStates == nil {
+		rt.stickyCheckboxStates = make(map[string]bool)
+	}
+	rt.stickyCheckboxStates[target] = checked
+}
+
+func (rt *Runtime) reconcileStickyCheckboxStates(ctx context.Context) error {
+	if len(rt.stickyCheckboxStates) == 0 {
+		return nil
+	}
+	states := rt.stickyCheckboxStates
+	rt.stickyCheckboxStates = nil
+	elements, err := rt.loadSnapshot(ctx)
+	if err != nil {
+		rt.stickyCheckboxStates = states
+		return err
+	}
+	for target, desired := range states {
+		ranked := rankForVerifyState(target, "checked", elements, nil)
+		if !verifyRankedCandidateAcceptable("checked", ranked) {
+			continue
+		}
+		winner := ranked[0].Element
+		if winner.IsChecked == desired {
+			continue
+		}
+		if err := rt.page.SetChecked(ctx, winner.ID, winner.XPath, desired); err != nil {
+			return err
+		}
+		rt.invalidateSnapshot()
+		elements, err = rt.loadSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (rt *Runtime) tryClickNearbyDropdownControl(ctx context.Context, anchor dom.ElementSnapshot) (bool, error) {
+	js := fmt.Sprintf(`(() => {
+		const anchor = (window.__manulReg && window.__manulReg[%[1]d]) || document.evaluate(%[2]q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+		if (!anchor) return false;
+
+		const isVisible = (node) => {
+			if (!node) return false;
+			const rect = node.getBoundingClientRect();
+			const cs = window.getComputedStyle(node);
+			return cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+		};
+
+		let root = anchor.closest('.widget, .form-group, section, article, aside, div') || anchor.parentElement || anchor;
+		const preferredSelectors = [
+			'#comboBox',
+			'[role="combobox"]',
+			'[id*="combo"]',
+			'[class*="combo"]',
+			'[id*="dropdown"]',
+			'[class*="dropdown"]'
+		];
+		const selectors = [
+			'#comboBox',
+			'[role="combobox"]',
+			'select',
+			'input[list]',
+			'input[type="text"]',
+			'[id*="combo"]',
+			'[class*="combo"]',
+			'[id*="dropdown"]',
+			'[class*="dropdown"]'
+		];
+
+		let target = null;
+		for (const selector of preferredSelectors) {
+			const matches = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+			const preferred = matches.find(node => node.id === 'comboBox' || node.getAttribute('role') === 'combobox' || node.tagName === 'INPUT');
+			if (preferred) {
+				target = preferred;
+				break;
+			}
+		}
+
+		for (const selector of selectors) {
+			if (target) break;
+			const matches = Array.from(root.querySelectorAll(selector)).filter(isVisible);
+			const preferred = matches.find(node => node.id === 'comboBox' || node.getAttribute('role') === 'combobox' || node.tagName === 'SELECT' || node.tagName === 'INPUT');
+			if (preferred) {
+				target = preferred;
+				break;
+			}
+			if (matches.length > 0) {
+				target = matches[0];
+				break;
+			}
+		}
+
+		if (!target && root.parentElement) {
+			root = root.parentElement;
+			for (const selector of selectors) {
+				const candidate = root.querySelector(selector);
+				if (isVisible(candidate)) {
+					target = candidate;
+					break;
+				}
+			}
+		}
+
+		if (!target) return false;
+		target.scrollIntoView({block: 'center', inline: 'center'});
+		if (typeof target.focus === 'function') target.focus();
+		['mousedown', 'mouseup', 'click'].forEach((evt) => {
+			target.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
+		});
+		if (typeof target.click === 'function') target.click();
+		return true;
+	})()`, anchor.ID, anchor.XPath)
+
+	raw, err := rt.page.EvalJS(ctx, js)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(raw)) == "true", nil
+}
+
+func (rt *Runtime) tryClickDropdownTriggerByLabel(ctx context.Context, targetPath string) (bool, error) {
+	js := fmt.Sprintf(`(() => {
+		const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+		const isVisible = (node) => {
+			if (!node) return false;
+			const rect = node.getBoundingClientRect();
+			const cs = window.getComputedStyle(node);
+			return cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+		};
+		const clickNode = (node) => {
+			if (!node) return false;
+			node.scrollIntoView({ block: 'center', inline: 'center' });
+			if (typeof node.focus === 'function') node.focus();
+			['mousedown', 'mouseup', 'click'].forEach((evt) => {
+				node.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
+			});
+			if (typeof node.click === 'function') node.click();
+			return true;
+		};
+
+		const wanted = normalize(%q);
+		const triggerSelectors = ['#comboBox', '[role="combobox"]', 'input[list]', '[id*="combo"]', '[class*="combo"]'];
+		const all = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,label,legend,span,div,p'));
+		const labels = all.filter((node) => normalize(node.innerText) === wanted);
+		for (const label of labels) {
+			let scope = label;
+			for (let depth = 0; depth < 6 && scope; depth += 1) {
+				for (const selector of triggerSelectors) {
+					const local = Array.from(scope.querySelectorAll(selector)).find(isVisible);
+					if (local && clickNode(local)) return true;
+				}
+				let sibling = scope.nextElementSibling;
+				while (sibling) {
+					for (const selector of triggerSelectors) {
+						const siblingMatch = sibling.matches(selector) ? sibling : sibling.querySelector(selector);
+						if (isVisible(siblingMatch) && clickNode(siblingMatch)) return true;
+					}
+					sibling = sibling.nextElementSibling;
+				}
+				scope = scope.parentElement;
+			}
+		}
+
+		for (const selector of triggerSelectors) {
+			const fallback = Array.from(document.querySelectorAll(selector)).find(isVisible);
+			if (fallback && clickNode(fallback)) return true;
+		}
+		return false;
+	})()`, targetPath)
+
+	raw, err := rt.page.EvalJS(ctx, js)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(raw)) == "true", nil
+}
+
+func (rt *Runtime) trySetShadowInputValue(ctx context.Context, targetPath, value string) (bool, error) {
+	js := fmt.Sprintf(`(() => {
+		const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+		const query = normalize(%q);
+		const value = %q;
+		const hosts = [];
+		const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+		while (walker.nextNode()) {
+			const node = walker.currentNode;
+			if (node.shadowRoot) hosts.push(node);
+		}
+		for (const host of hosts) {
+			const nearby = normalize((host.parentElement && host.parentElement.innerText) || host.innerText || host.id || host.className || '');
+			if (query && !nearby.includes('shadow') && !query.includes('shadow')) continue;
+			const control = host.shadowRoot.querySelector('input[type="text"], textarea, input:not([type]), input[type="search"], input[type="email"], input[type="tel"], input[type="url"]');
+			if (!control) continue;
+			host.scrollIntoView({ block: 'center', inline: 'center' });
+			control.focus();
+			control.value = value;
+			control.dispatchEvent(new Event('input', { bubbles: true }));
+			control.dispatchEvent(new Event('change', { bubbles: true }));
+			return true;
+		}
+		return false;
+	})()`, targetPath, value)
+
+	raw, err := rt.page.EvalJS(ctx, js)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(raw)) == "true", nil
+}
+
+func (rt *Runtime) tryClickVisibleDropdownOption(ctx context.Context, targetPath string) (bool, error) {
+	js := fmt.Sprintf(`(() => {
+		const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+		const isVisible = (node) => {
+			if (!node) return false;
+			const rect = node.getBoundingClientRect();
+			const cs = window.getComputedStyle(node);
+			return cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+		};
+
+		const wanted = normalize(%q);
+		let list = document.querySelector('#dropdown') || document.querySelector('[role="listbox"]') || document.querySelector('[class*="dropdown"]');
+		const combo = document.querySelector('#comboBox') || document.querySelector('[role="combobox"]') || document.querySelector('input[list]') || document.querySelector('[id*="combo"]');
+		if ((!list || !isVisible(list)) && combo && isVisible(combo)) {
+			combo.scrollIntoView({ block: 'center', inline: 'center' });
+			if (typeof combo.focus === 'function') combo.focus();
+			['mousedown', 'mouseup', 'click'].forEach((evt) => {
+				combo.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
+			});
+			if (typeof combo.click === 'function') combo.click();
+		}
+		list = document.querySelector('#dropdown') || document.querySelector('[role="listbox"]') || document.querySelector('[class*="dropdown"]');
+		if (!list || !isVisible(list)) return false;
+
+		const candidates = Array.from(list.querySelectorAll('.option, [role="option"], div, li'))
+			.filter(isVisible)
+			.filter((node) => normalize(node.innerText) !== '');
+		const target = candidates.find((node) => normalize(node.innerText) === wanted) ||
+			candidates.find((node) => normalize(node.innerText).includes(wanted));
+		if (!target) return false;
+
+		target.scrollIntoView({ block: 'center', inline: 'nearest' });
+		['mousedown', 'mouseup', 'click'].forEach((evt) => {
+			target.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
+		});
+		if (typeof target.click === 'function') target.click();
+		return true;
+	})()`, targetPath)
+
+	raw, err := rt.page.EvalJS(ctx, js)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(raw)) == "true", nil
+}
+
 func (rt *Runtime) loadSnapshot(ctx context.Context) ([]dom.ElementSnapshot, error) {
 	if !rt.cfg.DisableCache && rt.cachedElements != nil {
 		return rt.cachedElements, nil
@@ -885,6 +1739,111 @@ func appendRankedCandidates(res *explain.ExecutionResult, ranked []scorer.Ranked
 	for i := 0; i < limit; i++ {
 		res.RankedCandidates = append(res.RankedCandidates, ranked[i].Explain)
 	}
+}
+
+func collapseNestedDuplicateRankedCandidates(ranked []scorer.RankedCandidate) []scorer.RankedCandidate {
+	if len(ranked) < 2 {
+		return ranked
+	}
+	collapsed := make([]scorer.RankedCandidate, 0, len(ranked))
+	for _, candidate := range ranked {
+		merged := false
+		for i := range collapsed {
+			if !nestedDuplicateRankedCandidates(collapsed[i], candidate) {
+				continue
+			}
+			if preferMoreSpecificRankedCandidate(candidate, collapsed[i]) {
+				collapsed[i] = candidate
+			}
+			merged = true
+			break
+		}
+		if !merged {
+			collapsed = append(collapsed, candidate)
+		}
+	}
+	for i := range collapsed {
+		collapsed[i].Explain.Rank = i + 1
+		collapsed[i].Explain.Chosen = i == 0
+	}
+	return collapsed
+}
+
+func nestedDuplicateRankedCandidates(existing, candidate scorer.RankedCandidate) bool {
+	if math.Abs(existing.Explain.Score.Total-candidate.Explain.Score.Total) > 0.02 {
+		return false
+	}
+	textA := normalizeCandidateText(existing.Element.VisibleText)
+	textB := normalizeCandidateText(candidate.Element.VisibleText)
+	if textA == "" || textA != textB {
+		return false
+	}
+	if !(isXPathAncestor(existing.Element.XPath, candidate.Element.XPath) || isXPathAncestor(candidate.Element.XPath, existing.Element.XPath)) {
+		return false
+	}
+	return rectIntersectionRatio(existing.Element.Rect, candidate.Element.Rect) >= 0.85
+}
+
+func preferMoreSpecificRankedCandidate(candidate, existing scorer.RankedCandidate) bool {
+	candidateDepth := len(xpathParts(candidate.Element.XPath))
+	existingDepth := len(xpathParts(existing.Element.XPath))
+	if candidateDepth != existingDepth {
+		return candidateDepth > existingDepth
+	}
+	candidateArea := candidate.Element.Rect.Width * candidate.Element.Rect.Height
+	existingArea := existing.Element.Rect.Width * existing.Element.Rect.Height
+	if candidateArea != existingArea {
+		return candidateArea < existingArea
+	}
+	return candidate.Element.ID > existing.Element.ID
+}
+
+func normalizeCandidateText(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
+}
+
+func xpathParts(xpath string) []string {
+	var parts []string
+	for _, part := range strings.Split(xpath, "/") {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return parts
+}
+
+func isXPathAncestor(ancestor, descendant string) bool {
+	if ancestor == "" || descendant == "" || ancestor == descendant {
+		return false
+	}
+	ancestorParts := xpathParts(ancestor)
+	descendantParts := xpathParts(descendant)
+	if len(ancestorParts) >= len(descendantParts) {
+		return false
+	}
+	for i := range ancestorParts {
+		if ancestorParts[i] != descendantParts[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func rectIntersectionRatio(a, b dom.Rect) float64 {
+	left := math.Max(a.Left, b.Left)
+	top := math.Max(a.Top, b.Top)
+	right := math.Min(a.Right, b.Right)
+	bottom := math.Min(a.Bottom, b.Bottom)
+	if right <= left || bottom <= top {
+		return 0.0
+	}
+	intersection := (right - left) * (bottom - top)
+	areaA := a.Width * a.Height
+	areaB := b.Width * b.Height
+	if areaA <= 0 || areaB <= 0 {
+		return 0.0
+	}
+	return intersection / math.Min(areaA, areaB)
 }
 
 func selectionIsAmbiguous(ranked []scorer.RankedCandidate) bool {

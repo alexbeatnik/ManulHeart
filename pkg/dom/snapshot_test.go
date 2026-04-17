@@ -11,7 +11,8 @@ func TestNormalize(t *testing.T) {
 		Placeholder: "Enter email",
 		LabelText:   "  Name  ",
 		DataQA:      "login-btn",
-		HTMLId:       "myBtn",
+		HTMLId:      "myBtn",
+		FrameIndex:  2,
 	}
 	el.Normalize()
 
@@ -32,6 +33,9 @@ func TestNormalize(t *testing.T) {
 	}
 	if el.NormHTMLId != "mybtn" {
 		t.Errorf("NormHTMLId = %q", el.NormHTMLId)
+	}
+	if el.FrameIndex != 2 {
+		t.Errorf("FrameIndex = %d, want 2", el.FrameIndex)
 	}
 }
 
@@ -95,9 +99,9 @@ func TestAllTextSignals_IncludesAll(t *testing.T) {
 
 func TestIsInteractive_CheckboxMode(t *testing.T) {
 	tests := []struct {
-		name    string
-		el      ElementSnapshot
-		want    bool
+		name string
+		el   ElementSnapshot
+		want bool
 	}{
 		{"checkbox", ElementSnapshot{Tag: "input", InputType: "checkbox"}, true},
 		{"radio", ElementSnapshot{Tag: "input", InputType: "radio"}, true},

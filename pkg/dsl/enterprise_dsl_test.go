@@ -368,17 +368,25 @@ func TestEnterpriseDSL_QuotedKeywordsNotMisclassified(t *testing.T) {
 
 func TestEnterpriseDSL_VerifyChecked(t *testing.T) {
 	tests := []struct {
-		line string
+		line    string
+		state   string
+		negated bool
 	}{
-		{"VERIFY that 'Monday' is checked"},
-		{"VERIFY that 'Accept' is NOT checked"},
-		{"VERIFY that 'Submit' is ENABLED"},
-		{"VERIFY that 'Submit' is DISABLED"},
+		{"VERIFY that 'Monday' is checked", "checked", false},
+		{"VERIFY that 'Accept' is NOT checked", "checked", true},
+		{"VERIFY that 'Submit' is ENABLED", "enabled", false},
+		{"VERIFY that 'Submit' is DISABLED", "disabled", false},
 	}
 	for _, tc := range tests {
 		cmd := mustParseLine(t, tc.line)
-		if cmd.Type != CmdVerify {
-			t.Errorf("%q: type = %s, want %s", tc.line, cmd.Type, CmdVerify)
+		if cmd.Type != CmdVerifyField {
+			t.Errorf("%q: type = %s, want %s", tc.line, cmd.Type, CmdVerifyField)
+		}
+		if cmd.VerifyState != tc.state {
+			t.Errorf("%q: VerifyState = %q, want %q", tc.line, cmd.VerifyState, tc.state)
+		}
+		if cmd.VerifyNegated != tc.negated {
+			t.Errorf("%q: VerifyNegated = %t, want %t", tc.line, cmd.VerifyNegated, tc.negated)
 		}
 	}
 }

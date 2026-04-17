@@ -270,6 +270,15 @@ func TestDisambiguation_ExpandAllSections(t *testing.T) {
 		t.Errorf("expected d29, got %s", got)
 	}
 }
+func TestDisambiguation_ExpandAllIgnoresGenericAllNoise(t *testing.T) {
+	elements := append(allToggleButtons(),
+		makeEl(withTag("span"), withText("ALL RIGHTS RESERVED"), withID("d29-noise-footer")),
+		makeEl(withTag("div"), withText("Site navigation and all widgets"), withID("d29-noise-root")),
+	)
+	if got := rankFirstID(t, "expand all", "button", "clickable", elements); got != "d29" {
+		t.Errorf("expected d29, got %s", got)
+	}
+}
 func TestDisambiguation_CollapseAllSections(t *testing.T) {
 	if got := rankFirstID(t, "collapse all sections", "", "clickable", allToggleButtons()); got != "d30" {
 		t.Errorf("expected d30, got %s", got)

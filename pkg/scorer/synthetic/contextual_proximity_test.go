@@ -250,7 +250,8 @@ func TestProximity_IdenticalPositions(t *testing.T) {
 func TestProximity_NearNoXPath(t *testing.T) {
 	// When no XPath available, should fall back to pure spatial distance
 	anchor := &scorer.AnchorContext{
-		Rect: dom.Rect{Top: 100, Left: 100, Bottom: 130, Right: 200, Width: 100, Height: 30},
+		Rect:       dom.Rect{Top: 100, Left: 100, Bottom: 130, Right: 200, Width: 100, Height: 30},
+		FrameIndex: 0,
 		// No XPath
 	}
 	el := makeElWithRect("noXP", "button", "Save", 100, 210, 130, 310, "")
@@ -259,6 +260,20 @@ func TestProximity_NearNoXPath(t *testing.T) {
 	// Should still get proximity from spatial distance
 	if score.ProximityScore <= 0 {
 		t.Errorf("NEAR without XPath should still use spatial distance, got %.4f", score.ProximityScore)
+	}
+}
+
+func TestProximity_NearCrossFrameCandidateRejected(t *testing.T) {
+	anchor := &scorer.AnchorContext{
+		Rect:       dom.Rect{Top: 100, Left: 100, Bottom: 130, Right: 200, Width: 100, Height: 30},
+		FrameIndex: 0,
+	}
+	el := makeElWithRect("iframe-btn", "button", "Save", 110, 120, 140, 220, "/html/body/button[1]")
+	el.FrameIndex = 1
+
+	score := scorer.Score("save", "button", "clickable", &el, anchor)
+	if score.ProximityScore != 0.0 {
+		t.Errorf("cross-frame NEAR should give 0 proximity, got %.4f", score.ProximityScore)
 	}
 }
 

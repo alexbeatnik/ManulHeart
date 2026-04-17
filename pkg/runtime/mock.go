@@ -14,6 +14,7 @@ import (
 // pre-defined DOM snapshots instead of a real browser.
 type MockPage struct {
 	URL      string
+	Title    string
 	Elements []dom.ElementSnapshot
 
 	// Record of interaction calls
@@ -35,6 +36,9 @@ func (m *MockPage) Navigate(ctx context.Context, url string) error {
 }
 
 func (m *MockPage) EvalJS(ctx context.Context, expr string) ([]byte, error) {
+	if strings.Contains(expr, "document.title") {
+		return json.Marshal(m.Title)
+	}
 	return nil, nil
 }
 
@@ -83,6 +87,12 @@ func (m *MockPage) SetInputValue(ctx context.Context, id int, xpath, value strin
 }
 
 func (m *MockPage) SetChecked(ctx context.Context, id int, xpath string, checked bool) error {
+	for i := range m.Elements {
+		if m.Elements[i].XPath == xpath || m.Elements[i].ID == id {
+			m.Elements[i].IsChecked = checked
+			return nil
+		}
+	}
 	return nil
 }
 

@@ -34,6 +34,9 @@ type ElementSnapshot struct {
 	Tag string `json:"tag"`
 	// InputType is the value of the `type` attribute for input elements.
 	InputType string `json:"input_type,omitempty"`
+	// FrameIndex is the zero-based frame index this element belongs to.
+	// 0 is the main document; positive values refer to embedded frames.
+	FrameIndex int `json:"frame_index,omitempty"`
 
 	// -- Text signals ---------------------------------------------------
 
@@ -84,6 +87,8 @@ type ElementSnapshot struct {
 	IsContentEditable bool `json:"is_contenteditable"`
 	// IsChecked reports whether the element (checkbox/radio) is checked.
 	IsChecked bool `json:"is_checked"`
+	// IsSelected reports whether the element is selected (option/aria-selected).
+	IsSelected bool `json:"is_selected"`
 	// IsInShadow reports whether the element is inside a shadow DOM.
 	IsInShadow bool `json:"is_in_shadow,omitempty"`
 

@@ -70,9 +70,11 @@ STEP 8: Paginated table interaction
     CLICK on the '2' link
     WAIT 2
     CHECK the checkbox for '7'
+    VERIFY that '7' is checked
     CLICK on the '4' link
     WAIT 2
     CHECK the checkbox for '17'
+    VERIFY that '17' is checked
 
 STEP 9: Scrolling dropdown
     SCROLL DOWN
@@ -102,5 +104,4 @@ STEP 11: Final validation
     VERIFY that 'Dropped!' is present
     VERIFY that 'Item 100' is present
     VERIFY that 'Shadow Boss' is present
-    WAIT 30
 DONE.

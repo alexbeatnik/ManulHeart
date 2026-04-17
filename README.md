@@ -2,6 +2,8 @@
 
 A deterministic, DSL-first browser automation runtime in Go.
 
+Current alpha version: `0.0.0.1`.
+
 ManulHeart executes `.hunt` files using plain-English commands, DOM intelligence,
 heuristic element resolution, and structured explainability.
 It connects to system-installed Chrome via the Chrome DevTools Protocol (CDP).
@@ -33,7 +35,30 @@ cd ManulHeart
 go build -o manul ./cmd/manul
 ```
 
-### 2. Run a hunt file
+### 2. Install `manul` as a system command
+
+For editor integrations and extensions, the recommended setup is to put the
+Go binary on your `PATH` so the runtime is available as a normal shell command.
+
+User-local install:
+
+```bash
+install -m 0755 manul ~/.local/bin/manul
+```
+
+System-wide install:
+
+```bash
+sudo install -m 0755 manul /usr/local/bin/manul
+```
+
+Verify:
+
+```bash
+manul --help
+```
+
+### 3. Run a hunt file
 
 ```bash
 manul examples/saucedemo.hunt
@@ -42,20 +67,20 @@ manul examples/saucedemo.hunt
 Chrome is launched automatically with remote debugging, the hunt is executed,
 and Chrome is closed when done. No manual browser setup required.
 
-### 3. Run all hunt files in a directory
+### 4. Run all hunt files in a directory
 
 ```bash
 manul examples/
 manul .
 ```
 
-### 4. Run headless
+### 5. Run headless
 
 ```bash
 manul examples/saucedemo.hunt --headless
 ```
 
-### 5. Connect to existing Chrome
+### 6. Connect to existing Chrome
 
 If you already have Chrome running with `--remote-debugging-port=9222`:
 
@@ -65,28 +90,22 @@ manul examples/saucedemo.hunt --cdp http://127.0.0.1:9222
 
 When `--cdp` is set, the driver skips auto-launch and connects to the running instance.
 
-### 6. Run a single step (requires running Chrome)
+### 7. Run a single step (requires running Chrome)
 
 ```bash
 manul run-step "Click the 'Login' button" --cdp http://127.0.0.1:9222
 ```
 
-### 7. Verbose / JSON output
+### 8. Verbose / JSON output
 
 ```bash
 manul examples/saucedemo.hunt --verbose
 manul examples/saucedemo.hunt --json 2>/dev/null | jq .
 ```
 
-### Install globally
-
-```bash
-go build -o manul ./cmd/manul
-cp manul ~/.local/bin/manul
-```
-
 > **Note:** The `manul` command name is shared with the Python ManulEngine.
 > Whichever you install last takes priority. To switch back to Python: `pipx install manul-engine`.
+> For ManulHeart `0.0.0.1`, prefer a PATH install so extensions can execute `manul` directly.
 
 ### CLI Flags
 
@@ -324,6 +343,11 @@ and 476 synthetic unit tests across 35 test files.
 
 Not yet implemented: parallel execution (workers > 1), LLM-based fallback,
 scan/record subcommands.
+
+**Documented CLI version:** `0.0.0.1`.
+
+**Recommended install target:** expose the binary as a PATH command named `manul`
+for editor extensions and automation tooling.
 
 ---
 

@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/manulengineer/manulheart/pkg/core"
 )
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -361,6 +363,7 @@ func (c *Conn) SetChecked(ctx context.Context, id int, xpath string, checked boo
 		var el = (window.__manulReg && window.__manulReg[%[1]d]) || document.evaluate(%[2]q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
 		if (el) {
 			var targetEl = el;
+			var desiredAria = %[3]v ? 'true' : 'false';
 			// Refinement: find checkbox/radio if el is not one
 			if (el.tagName !== 'INPUT' || (el.type !== 'checkbox' && el.type !== 'radio')) {
 				if (el.tagName === 'LABEL' && el.htmlFor) {
@@ -384,27 +387,70 @@ func (c *Conn) SetChecked(ctx context.Context, id int, xpath string, checked boo
 
 			if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
 				if (el.checked !== %[3]v) {
-					// Use native setter for framework compatibility
-					var proto = Object.getPrototypeOf(el);
-					var nativeSetter = null;
-					while (proto && proto !== Object.prototype) {
-						var desc = Object.getOwnPropertyDescriptor(proto, 'checked');
-						if (desc && desc.set) {
-							nativeSetter = desc.set;
-							break;
-						}
-						proto = Object.getPrototypeOf(proto);
+					if (typeof el.scrollIntoView === 'function') {
+						el.scrollIntoView({ block: 'center', inline: 'center' });
 					}
-					if (nativeSetter) {
-						nativeSetter.call(el, %[3]v);
+					if (typeof el.focus === 'function') {
+						try { el.focus({ preventScroll: true }); } catch (_) { el.focus(); }
+					}
+
+					// Let the browser perform the native toggle first.
+					el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+					el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+					if (typeof el.click === 'function') {
+						el.click();
 					} else {
-						el.checked = %[3]v;
+						el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
 					}
-					// Fire a full sequence of events
-					const events = ['mousedown', 'mouseup', 'click', 'input', 'change'];
-					events.forEach(evt => {
-						el.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
-					});
+
+					// If the native click did not produce the requested state,
+					// fall back to the native checked setter and emit value events.
+					if (el.checked !== %[3]v) {
+						var proto = Object.getPrototypeOf(el);
+						var nativeSetter = null;
+						while (proto && proto !== Object.prototype) {
+							var desc = Object.getOwnPropertyDescriptor(proto, 'checked');
+							if (desc && desc.set) {
+								nativeSetter = desc.set;
+								break;
+							}
+							proto = Object.getPrototypeOf(proto);
+						}
+						if (nativeSetter) {
+							nativeSetter.call(el, %[3]v);
+						} else {
+							el.checked = %[3]v;
+						}
+						el.dispatchEvent(new Event('input', { bubbles: true }));
+						el.dispatchEvent(new Event('change', { bubbles: true }));
+					}
+				}
+			} else {
+				var role = (el.getAttribute('role') || '').toLowerCase();
+				if (role === 'checkbox' || role === 'radio' || role === 'switch') {
+					var current = el.getAttribute('aria-checked');
+					if (current !== desiredAria) {
+						if (typeof el.scrollIntoView === 'function') {
+							el.scrollIntoView({ block: 'center', inline: 'center' });
+						}
+						if (typeof el.focus === 'function') {
+							try { el.focus({ preventScroll: true }); } catch (_) { el.focus(); }
+						}
+
+						el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+						el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+						if (typeof el.click === 'function') {
+							el.click();
+						} else {
+							el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+						}
+
+						if (el.getAttribute('aria-checked') !== desiredAria) {
+							el.setAttribute('aria-checked', desiredAria);
+							el.dispatchEvent(new Event('input', { bubbles: true }));
+							el.dispatchEvent(new Event('change', { bubbles: true }));
+						}
+					}
 				}
 			}
 		}
@@ -430,6 +476,19 @@ func ScrollPage(ctx context.Context, c *Conn, direction, container string) error
 	var amount = 500
 	if direction == "up" {
 		amount = -500
+	}
+	containerLower := strings.ToLower(strings.TrimSpace(container))
+	if containerLower == string(core.ScrollStrategyGenericList) {
+		js := fmt.Sprintf(`(() => {
+			const target = document.querySelector('#dropdown') ||
+				document.querySelector('[role="listbox"]') ||
+				document.querySelector('[class*="dropdown"]');
+			if (!target) return false;
+			target.scrollBy({ top: %d, behavior: 'auto' });
+			return true;
+		})()`, amount)
+		_, err := Evaluate(ctx, c, js)
+		return err
 	}
 	js := fmt.Sprintf(`window.scrollBy(0, %d);`, amount)
 	if container != "" {
