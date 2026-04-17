@@ -61,6 +61,8 @@ const (
 	CmdUse             CommandType = "USE"
 	CmdUploadFile      CommandType = "UPLOAD_FILE"
 	CmdUpload          CommandType = "UPLOAD_FILE" // alias for backward compatibility
+	CmdPause           CommandType = "PAUSE"
+	CmdDebugVars       CommandType = "DEBUG_VARS"
 	CmdUnknown         CommandType = "UNKNOWN"
 )
 
@@ -934,6 +936,12 @@ func parseCommandLine(line string) Command {
 			cmd.CallStepName = stripPrefix(line, "RUN STEP ", "CALL ")
 		}
 		cmd.CallStepName = strings.TrimSpace(cmd.CallStepName)
+ 
+	// ── DEBUGGING ─────────────────────────────────────────────────────────────
+	case upper == "PAUSE":
+		cmd.Type = CmdPause
+	case upper == "DEBUG VARS":
+		cmd.Type = CmdDebugVars
 
 	default:
 		cmd.Type = CmdUnknown

@@ -252,15 +252,32 @@ FOR EACH {item} IN {items}:
 Conditions support: element present/not present, `{var} == 'value'`,
 `{var} != 'value'`, `{var} contains 'text'`, truthy variable checks.
 
-### Debugging
+### Interactive Debugger
+
+ManulHeart includes a powerful TTY-based interactive debugger. It can be triggered in three ways:
+1. **Global Debug Mode**: Run `manul` with the `--debug` flag to pause before every step.
+2. **Breakpoints**: Use `--break-lines 12,45` to pause only at specific line numbers.
+3. **DSL Pause**: Insert the `PAUSE` command anywhere in your `.hunt` file.
+
+When paused, you have access to the following commands in your terminal:
+
+- `next` (or Enter): Execute the current step and pause at the next one.
+- `continue`: Resume execution and skip all future pauses.
+- `explain`: Show the top 5 candidates for the current targeting query with full score breakdowns.
+- `highlight <xpath>`: Outline a specific element in the browser with a magenta highlight.
+- `debug-vars` (or `DEBUG VARS` in DSL): Dump all currently set variables and their scopes.
+- `abort`: Stop the hunt execution immediately.
+
+While paused, a **debug control panel** is also injected into the browser page, allowing you to `Continue` or `Abort` directly from the UI.
+
+#### Debugging Commands in DSL
 
 ```
 PAUSE
 DEBUG VARS
 ```
 
-`PAUSE` enters interactive mode (requires `--debug`). `DEBUG VARS` dumps
-all runtime variables.
+`PAUSE` enters the interactive debugger. `DEBUG VARS` prints a formatted table of all variables in the `ROW`, `STEP`, `MISSION`, and `GLOBAL` scopes to the console.
 
 ### File structure
 
@@ -389,6 +406,19 @@ func runInParallel(ctx context.Context, hunts []*dsl.Hunt) error {
 
 ---
 
+## Development Guides
+
+For developers working on the ManulHeart engine, we provide detailed "Skill Guides" covering core systems:
+
+- [**Scoring & Heuristics**](.claude/skills/scoring-heuristics/SKILL.md) — How element targeting works.
+- [**Concurrency Rules**](.claude/skills/concurrency-rules/SKILL.md) — Thread-safety and the worker pool.
+- [**Adding DSL Commands**](.claude/skills/adding-dsl-commands/SKILL.md) — How to extend the natural language syntax.
+- [**Go Calls & Extensions**](.claude/skills/extensions-and-go-calls/SKILL.md) — Implementing custom logic in Go.
+- [**Testing ManulHeart**](.claude/skills/testing-manulheart/SKILL.md) — Best practices for unit and integration tests.
+- [**Hunt Authoring**](.claude/skills/hunt-authoring/SKILL.md) — Writing effective `.hunt` files.
+
+---
+
 ## Project Status
 
 Alpha. The core engine covers:
@@ -416,8 +446,10 @@ for editor extensions and automation tooling.
 
 ## What's New
 
-### `0.0.0.4` — agent skill documentation
+### `0.0.0.4` — interactive debugger & skill guides
 
+- **Interactive Runtime Debugger** — Added a TTY-based interactive debugger that can be triggered via `--debug` or the `PAUSE` command. Features include step-by-step execution, browser modal controls, element highlighting (`highlight <xpath>`), and scoring explanations (`explain`).
+- **Execution Breakpoints** — Added the `--break-lines` flag to pause execution only at specific lines in the `.hunt` file.
 - **Expanded scoring-heuristics skill** — Documented the dual-mode proximity signal: base weight `0.10` (XPath-depth DOM ancestry, always active) vs. contextual override `1.50` (Euclidean pixel distance from anchor, active under `NEAR`/`INSIDE`). Added inline comments and a 3-pass targeting pipeline explanation for the `ThresholdPass3*` constants.
 - **Expanded testing skill** — Added an explicit callout for the two `MockPage` fields most commonly left at zero: `IsVisible` (silently drops elements from the visibility pre-filter) and `Rect` (required by the proximity scorer for `NEAR`/`INSIDE` path; zero value flattens the proximity channel).
 - **Expanded hunt-authoring skill** — Added an `## Advanced / less common commands` section covering keyboard input (`PRESS`), `WAIT FOR RESPONSE`, `DRAG`/`UPLOAD`, `EXTRACT`/`PRINT`, and `DEBUG VARS`/`PAUSE`.

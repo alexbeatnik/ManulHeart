@@ -33,11 +33,8 @@ func (rt *Runtime) shouldPause(cmd dsl.Command) bool {
 
 // isTTY reports whether os.Stdin is connected to an interactive terminal.
 func isTTY() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
+	fileInfo, _ := os.Stdin.Stat()
+	return (fileInfo.Mode() & os.ModeCharDevice) != 0
 }
 
 // injectDebugModal injects a floating debug control panel into the live browser page.
@@ -172,16 +169,16 @@ func (rt *Runtime) explainStep(ctx context.Context, cmd dsl.Command) string {
 }
 
 // debugPrompt dispatches to TTY or extension debug protocol based on stdin.
-func (rt *Runtime) debugPrompt(ctx context.Context, cmd dsl.Command) error {
+func (rt *Runtime) debugPrompt(ctx context.Context, cmd dsl.Command, idx int) error {
 	if isTTY() {
-		return rt.debugPromptTTY(ctx, cmd)
+		return rt.debugPromptTTY(ctx, cmd, idx)
 	}
-	return rt.debugPromptExtension(ctx, cmd)
+	return rt.debugPromptExtension(ctx, cmd, idx)
 }
 
 // debugPromptTTY handles the interactive terminal debug loop.
 // Injects a browser modal and polls for abort while reading commands from stdin.
-func (rt *Runtime) debugPromptTTY(ctx context.Context, cmd dsl.Command) error {
+func (rt *Runtime) debugPromptTTY(ctx context.Context, cmd dsl.Command, idx int) error {
 	if err := rt.injectDebugModal(ctx, cmd.Raw); err != nil {
 		rt.logger.Warn("debug: modal inject failed: %v", err)
 	}
@@ -243,17 +240,11 @@ func (rt *Runtime) debugPromptTTY(ctx context.Context, cmd dsl.Command) error {
 }
 
 // debugPromptExtension handles the non-TTY (IDE extension) debug protocol.
-// Emits NUL-delimited JSON markers to stdout and reads NUL-delimited command tokens from stdin.
-func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command) error {
-	type pausePayload struct {
-		Step    string `json:"step"`
-		LineNum int    `json:"line_num"`
-	}
-	payload, _ := json.Marshal(pausePayload{
-		Step:    cmd.Raw,
-		LineNum: cmd.LineNum,
-	})
-	fmt.Printf("\x00MANUL_DEBUG_PAUSE\x00%s\n", payload)
+// Emits NUL-delimited JSON markers directly to os.Stdout and reads NUL-delimited command tokens from stdin.
+func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, idx int) error {
+	payload := fmt.Sprintf(`{"step":%q,"idx":%d}`, cmd.Raw, idx)
+	fmt.Fprintf(os.Stdout, "\x00MANUL_DEBUG_PAUSE\x00%s\n", payload)
+	os.Stdout.Sync() //nolint:errcheck
 
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Split(bufio.ScanLines)
@@ -262,7 +253,7 @@ func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command) er
 	readNext := func() {
 		go func() {
 			if sc.Scan() {
-				inputCh <- strings.TrimSpace(sc.Text())
+				inputCh <- sc.Text()
 			} else {
 				inputCh <- "next"
 			}
@@ -275,23 +266,24 @@ func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command) er
 		case <-ctx.Done():
 			return ctx.Err()
 		case token := <-inputCh:
+			cmdStr := strings.ToLower(strings.TrimSpace(token))
 			switch {
-			case token == "" || token == "next":
+			case cmdStr == "" || cmdStr == "next":
 				rt.clearDebugHighlight(ctx) //nolint:errcheck
 				return nil
-			case token == "continue":
+			case cmdStr == "continue":
 				rt.debugContinue = true
 				rt.clearDebugHighlight(ctx) //nolint:errcheck
 				return nil
-			case token == "debug-stop", token == "abort":
+			case cmdStr == "debug-stop" || cmdStr == "abort":
 				return ErrDebugStop
-			case strings.HasPrefix(token, "highlight "):
-				xpath := strings.TrimPrefix(token, "highlight ")
+			case strings.HasPrefix(cmdStr, "highlight "):
+				xpath := strings.TrimPrefix(cmdStr, "highlight ")
 				if err := rt.debugHighlight(ctx, xpath); err != nil {
 					rt.logger.Warn("debug: highlight failed: %v", err)
 				}
 				readNext()
-			case token == "explain":
+			case cmdStr == "explain":
 				explainText := rt.explainStep(ctx, cmd)
 				type explainPayload struct {
 					Step       string                   `json:"step"`
@@ -303,7 +295,8 @@ func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command) er
 					Candidates: rt.lastExplainData,
 					Text:       explainText,
 				})
-				fmt.Printf("\x00MANUL_EXPLAIN_NEXT\x00%s\n", ep)
+				fmt.Fprintf(os.Stdout, "\x00MANUL_EXPLAIN_NEXT\x00%s\n", ep)
+				os.Stdout.Sync() //nolint:errcheck
 				readNext()
 			default:
 				readNext()

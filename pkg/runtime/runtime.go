@@ -154,13 +154,13 @@ func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRe
 
 func (rt *Runtime) runCommands(ctx context.Context, commands []dsl.Command, huntRes *explain.HuntResult) (int, int, error) {
 	passed, failed := 0, 0
-	for _, cmd := range commands {
+	for i, cmd := range commands {
 		if err := ctx.Err(); err != nil {
 			return passed, failed, fmt.Errorf("runtime: context cancelled: %w", err)
 		}
 
 		if rt.cfg.DebugMode && rt.shouldPause(cmd) {
-			if dbgErr := rt.debugPrompt(ctx, cmd); dbgErr != nil {
+			if dbgErr := rt.debugPrompt(ctx, cmd, i); dbgErr != nil {
 				return passed, failed, dbgErr
 			}
 		}
@@ -296,6 +296,17 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 
 	case dsl.CmdCallGo:
 		res.ActionValue, res.ProbeMetadata, err = rt.executeCallGo(ctx, cmd)
+ 
+	case dsl.CmdPause:
+		// Force an interactive debug prompt even if --debug is not set globally.
+		// Note: this only works in TTY mode.
+		rt.logger.Info("PAUSE command encountered")
+		err = rt.debugPrompt(ctx, cmd, -1)
+ 
+	case dsl.CmdDebugVars:
+		vars := rt.vars.String()
+		rt.logger.Info(vars)
+		res.ActionValue = vars
 
 	case dsl.CmdSet:
 		if cmd.SetVar != "" {
