@@ -30,35 +30,40 @@ Single dependency: `gorilla/websocket`. Pure Go. ~476 tests.
 
 ### 1. Build
 
-```bash
-cd ManulHeart
-go build -o manul ./cmd/manul
-```
-
-### 2. Install `manul` as a system command
-
-For editor integrations and extensions, the recommended setup is to put the
-Go binary on your `PATH` so the runtime is available as a normal shell command.
-
-User-local install:
+You can build the `manul` binary using the provided `Makefile`:
 
 ```bash
-install -m 0755 manul ~/.local/bin/manul
+make build
 ```
 
-System-wide install:
+This creates a `manul` executable in the current directory.
 
+### 2. Install
+
+To use `manul` as a system-wide command, install it to your `PATH`.
+
+**User-local install** (installs to `~/.local/bin`):
 ```bash
-sudo install -m 0755 manul /usr/local/bin/manul
+make install
 ```
 
-Verify:
+**System-wide install** (installs to `/usr/local/bin`, requires `sudo`):
+```bash
+make install-system
+```
 
+Verify the installation:
 ```bash
 manul --help
 ```
 
-### 3. Run a hunt file
+### 3. Other Commands
+
+- `make test` — Run all tests.
+- `make clean` — Remove the compiled binary.
+- `make uninstall` — Remove the binary from both local and system paths.
+
+### 4. Run a hunt file
 
 ```bash
 manul examples/saucedemo.hunt
@@ -67,20 +72,20 @@ manul examples/saucedemo.hunt
 Chrome is launched automatically with remote debugging, the hunt is executed,
 and Chrome is closed when done. No manual browser setup required.
 
-### 4. Run all hunt files in a directory
+### 5. Run all hunt files in a directory
 
 ```bash
 manul examples/
 manul .
 ```
 
-### 5. Run headless
+### 6. Run headless
 
 ```bash
 manul examples/saucedemo.hunt --headless
 ```
 
-### 6. Connect to existing Chrome
+### 7. Connect to existing Chrome
 
 If you already have Chrome running with `--remote-debugging-port=9222`:
 
@@ -90,13 +95,13 @@ manul examples/saucedemo.hunt --cdp http://127.0.0.1:9222
 
 When `--cdp` is set, the driver skips auto-launch and connects to the running instance.
 
-### 7. Run a single step (requires running Chrome)
+### 8. Run a single step (requires running Chrome)
 
 ```bash
 manul run-step "Click the 'Login' button" --cdp http://127.0.0.1:9222
 ```
 
-### 8. Verbose / JSON output
+### 9. Verbose / JSON output
 
 ```bash
 manul examples/saucedemo.hunt --verbose
