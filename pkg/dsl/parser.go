@@ -95,6 +95,8 @@ type Command struct {
 	Raw string
 	// Verb is the first word of the raw text (normalised lowercase).
 	Verb string
+	// LineNum is the 1-based source line number in the .hunt file.
+	LineNum int
 
 	// StepBlock is the STEP label this command belongs to (if any).
 	StepBlock string
@@ -452,6 +454,7 @@ func parseLines(hunt *Hunt, lines []string) error {
 
 		cmd := parseCommandLine(expanded)
 		cmd.Raw = trimmed
+		cmd.LineNum = i + 1
 		cmd.StepBlock = currentStep
 		cmd.Tags = append([]string{}, currentTags...)
 		currentTags = nil
