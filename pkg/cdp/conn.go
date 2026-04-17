@@ -7,20 +7,21 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gorilla/websocket"
 )
 
 // msgReq represents a JSON-RPC 2.0 request.
 type msgReq struct {
-	ID     int         `json:"id"`
+	ID     int64       `json:"id"`
 	Method string      `json:"method"`
 	Params interface{} `json:"params,omitempty"`
 }
 
 // msgResp represents a JSON-RPC 2.0 response or event.
 type msgResp struct {
-	ID     int             `json:"id,omitempty"`
+	ID     int64           `json:"id,omitempty"`
 	Method string          `json:"method,omitempty"`
 	Params json.RawMessage `json:"params,omitempty"`
 	Result json.RawMessage `json:"result,omitempty"`
@@ -32,25 +33,70 @@ type msgError struct {
 	Message string `json:"message"`
 }
 
+// eventChanCap is the buffer size of every event subscription channel.
+// A slow subscriber that fails to drain will lose events past this depth
+// (publisher uses non-blocking send), but will never block the read loop.
+const eventChanCap = 64
+
 // Conn is a live WebSocket connection to a Chrome DevTools Protocol target.
 // It is safe for concurrent use from multiple goroutines.
 type Conn struct {
 	wsURL string
 	ws    *websocket.Conn
-	mu      sync.Mutex
+
+	// idSeq is the JSON-RPC request ID counter. Atomic to avoid mutex
+	// contention on the hot Call() path.
+	idSeq atomic.Int64
+
+	// writeMu serializes WriteJSON calls — gorilla/websocket requires
+	// external synchronization on writes.
 	writeMu sync.Mutex
-	idSeq   int
 
-	// pending maps message IDs to channels waiting for the response.
-	pending map[int]chan *msgResp
+	// pendingMu guards the pending map.
+	pendingMu sync.Mutex
+	pending   map[int64]chan *msgResp
 
-	// events is a channel broadcasting all received events.
-	// Many listeners can subscribe. For now we use a simple fanout or just bare handling.
-	eventSubs []chan *msgResp
+	// subsMu guards the eventSubs map.
 	subsMu    sync.Mutex
+	subsSeq   uint64
+	eventSubs map[uint64]chan *msgResp
+
+	// closeOnce guarantees Close() is idempotent and triggers cleanup
+	// (cancel context, close socket) exactly once.
+	closeOnce sync.Once
 
 	ctx    context.Context
 	cancel context.CancelFunc
+}
+
+// Subscription is a handle to a CDP event subscription. The caller must
+// invoke Close() when done — typically via `defer sub.Close()` — to release
+// the underlying channel slot. Forgetting Close() leaks one channel per
+// orphaned subscription.
+type Subscription struct {
+	id   uint64
+	ch   chan *msgResp
+	conn *Conn
+	once sync.Once
+}
+
+// C returns the receive channel for this subscription. The channel is closed
+// by the publisher when the connection terminates or Close() is called.
+func (s *Subscription) C() <-chan *msgResp {
+	if s == nil {
+		return nil
+	}
+	return s.ch
+}
+
+// Close releases the subscription. Safe to call multiple times.
+func (s *Subscription) Close() {
+	if s == nil {
+		return
+	}
+	s.once.Do(func() {
+		s.conn.unsubscribe(s.id)
+	})
 }
 
 // DialTarget establishes a WebSocket connection to the given target URL.
@@ -60,58 +106,92 @@ func DialTarget(ctx context.Context, wsURL string) (*Conn, error) {
 		return nil, fmt.Errorf("websocket dial %s: %w", wsURL, err)
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	connCtx, cancel := context.WithCancel(context.Background())
 	c := &Conn{
-		wsURL:   wsURL,
-		ws:      ws,
-		pending: make(map[int]chan *msgResp),
-		ctx:     ctx,
-		cancel:  cancel,
+		wsURL:     wsURL,
+		ws:        ws,
+		pending:   make(map[int64]chan *msgResp),
+		eventSubs: make(map[uint64]chan *msgResp),
+		ctx:       connCtx,
+		cancel:    cancel,
 	}
+
+	// Watch for parent ctx cancellation: tear down the connection.
+	// This makes Dial-time deadlines propagate to an idle connection.
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = c.Close()
+		case <-connCtx.Done():
+		}
+	}()
 
 	go c.readLoop()
 	return c, nil
 }
 
-// Close terminates the WebSocket connection.
+// Close terminates the WebSocket connection. Safe to call multiple times.
+// On Close, all in-flight Call() invocations return an error, and every
+// active Subscription channel is closed.
 func (c *Conn) Close() error {
 	if c == nil {
 		return nil
 	}
-	c.cancel()
-	if c.ws != nil {
-		return c.ws.Close()
-	}
-	return nil
+	var closeErr error
+	c.closeOnce.Do(func() {
+		c.cancel()
+		if c.ws != nil {
+			closeErr = c.ws.Close()
+		}
+		// Drain pending request waiters: closing their channels would
+		// race with readLoop's send, so instead let Call()'s
+		// `<-c.ctx.Done()` branch fire after cancel() above.
+
+		// Close all subscription channels so subscribers exit cleanly.
+		c.subsMu.Lock()
+		for id, ch := range c.eventSubs {
+			close(ch)
+			delete(c.eventSubs, id)
+		}
+		c.subsMu.Unlock()
+	})
+	return closeErr
 }
 
 func (c *Conn) readLoop() {
-	defer c.cancel()
+	// Calling Close() (idempotent via closeOnce) ensures subscription channels
+	// are closed when the read loop exits for any reason — including unexpected
+	// WebSocket errors from the remote end.
+	defer c.Close()
 	for {
 		_, msg, err := c.ws.ReadMessage()
 		if err != nil {
-			break
+			return
+		}
+		// Bail early if the connection has been closed externally.
+		select {
+		case <-c.ctx.Done():
+			return
+		default:
 		}
 		var resp msgResp
 		if err := json.Unmarshal(msg, &resp); err != nil {
-			// fmt.Printf("cdp readLoop unmarshal error: %v, msg=%s\n", err, string(msg))
 			continue
 		}
-		// fmt.Printf("cdp readLoop: %s\n", string(msg))
 
 		if resp.ID != 0 {
-			// It's a response to a request
-			c.mu.Lock()
+			c.pendingMu.Lock()
 			ch, ok := c.pending[resp.ID]
 			if ok {
 				delete(c.pending, resp.ID)
 			}
-			c.mu.Unlock()
+			c.pendingMu.Unlock()
 			if ok {
 				ch <- &resp
 			}
-		} else if resp.Method != "" {
-			// It's an event
+			continue
+		}
+		if resp.Method != "" {
 			c.subsMu.Lock()
 			for _, sub := range c.eventSubs {
 				select {
@@ -124,35 +204,52 @@ func (c *Conn) readLoop() {
 	}
 }
 
-// Subscribe returns a channel that receives CDP events.
-func (c *Conn) Subscribe() <-chan *msgResp {
+// Subscribe returns a handle to a CDP event subscription. The caller MUST
+// invoke Close() on the returned Subscription when done; failing to do so
+// leaks one buffered channel per orphaned subscription.
+//
+// If the connection is already closed, Subscribe returns a Subscription whose
+// channel is already closed, so any receive on sub.C() exits immediately.
+func (c *Conn) Subscribe() *Subscription {
 	c.subsMu.Lock()
 	defer c.subsMu.Unlock()
-	ch := make(chan *msgResp, 64)
-	c.eventSubs = append(c.eventSubs, ch)
-	return ch
+	// Check ctx.Done() while holding subsMu. Close() calls cancel() before
+	// acquiring subsMu, so this check is the safe seam: either we see Done
+	// and return a pre-closed channel, or Close() will find and close our
+	// newly registered channel when it acquires the lock next.
+	select {
+	case <-c.ctx.Done():
+		ch := make(chan *msgResp)
+		close(ch)
+		return &Subscription{ch: ch, conn: c}
+	default:
+	}
+	c.subsSeq++
+	id := c.subsSeq
+	ch := make(chan *msgResp, eventChanCap)
+	c.eventSubs[id] = ch
+	return &Subscription{id: id, ch: ch, conn: c}
 }
 
-// Unsubscribe removes an event listener channel.
-func (c *Conn) Unsubscribe(ch <-chan *msgResp) {
+func (c *Conn) unsubscribe(id uint64) {
 	c.subsMu.Lock()
 	defer c.subsMu.Unlock()
-	for i, sub := range c.eventSubs {
-		if sub == ch {
-			c.eventSubs = append(c.eventSubs[:i], c.eventSubs[i+1:]...)
-			break
-		}
+	if ch, ok := c.eventSubs[id]; ok {
+		delete(c.eventSubs, id)
+		// Close so any blocked receiver wakes up.
+		// Safe because readLoop holds subsMu while sending.
+		close(ch)
 	}
 }
 
 // Call sends a JSON-RPC request and waits for the response.
 func (c *Conn) Call(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
-	c.mu.Lock()
-	c.idSeq++
-	id := c.idSeq
+	id := c.idSeq.Add(1)
 	ch := make(chan *msgResp, 1)
+
+	c.pendingMu.Lock()
 	c.pending[id] = ch
-	c.mu.Unlock()
+	c.pendingMu.Unlock()
 
 	req := msgReq{
 		ID:     id,
@@ -164,29 +261,29 @@ func (c *Conn) Call(ctx context.Context, method string, params interface{}) (jso
 	err := c.ws.WriteJSON(req)
 	c.writeMu.Unlock()
 	if err != nil {
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
+		c.deletePending(id)
 		return nil, fmt.Errorf("cdp write: %w", err)
 	}
 
 	select {
 	case <-ctx.Done():
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
+		c.deletePending(id)
 		return nil, ctx.Err()
 	case <-c.ctx.Done():
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
-		return nil, fmt.Errorf("connection closed")
+		c.deletePending(id)
+		return nil, fmt.Errorf("cdp connection closed")
 	case resp := <-ch:
 		if resp.Error != nil {
 			return nil, fmt.Errorf("cdp error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
 		}
 		return resp.Result, nil
 	}
+}
+
+func (c *Conn) deletePending(id int64) {
+	c.pendingMu.Lock()
+	delete(c.pending, id)
+	c.pendingMu.Unlock()
 }
 
 // ListTargets queries the Chrome HTTP endpoint and returns all available targets.
@@ -196,7 +293,7 @@ func ListTargets(ctx context.Context, endpoint string) ([]Target, error) {
 		url = fmt.Sprintf("http://%s", endpoint)
 	}
 	url = strings.TrimSuffix(url, "/") + "/json/list"
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err

@@ -33,6 +33,25 @@ type GoCallInvocation struct {
 
 type GoCallHandler func(context.Context, GoCallInvocation) (any, error)
 
+// REGISTRY POLICY (parallel execution):
+//
+// customControls and goCalls are package-global maps shared by every
+// Runtime in the process. They are safe for concurrent reads (sync.RWMutex)
+// and for concurrent registration, but the intended lifecycle is:
+//
+//   1. All Register* calls happen at process init (TestMain, main(),
+//      or init() functions in plugin packages).
+//   2. Worker pool spawns; goroutines call only Get* / handler invocation.
+//   3. Process exits.
+//
+// Registering or unregistering handlers WHILE workers are executing is
+// permitted by the type system (the mutex makes it data-race-free) but is
+// strongly discouraged: the visibility of a handler to a particular
+// in-flight hunt becomes timing-dependent. resetRuntimeRegistries() exists
+// for test fixtures and MUST NOT be called while any Worker is running.
+//
+// Handlers themselves MUST be safe for concurrent invocation across goroutines:
+// the same handler may be invoked by every worker simultaneously.
 var (
 	customControlsMu sync.RWMutex
 	customControls   = map[string]CustomControlHandler{}

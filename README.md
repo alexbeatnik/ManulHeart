@@ -2,7 +2,7 @@
 
 A deterministic, DSL-first browser automation runtime in Go.
 
-Current alpha version: `0.0.0.1`.
+Current alpha version: `0.0.0.2`.
 
 ManulHeart executes `.hunt` files using plain-English commands, DOM intelligence,
 heuristic element resolution, and structured explainability.
@@ -105,7 +105,7 @@ manul examples/saucedemo.hunt --json 2>/dev/null | jq .
 
 > **Note:** The `manul` command name is shared with the Python ManulEngine.
 > Whichever you install last takes priority. To switch back to Python: `pipx install manul-engine`.
-> For ManulHeart `0.0.0.1`, prefer a PATH install so extensions can execute `manul` directly.
+> For ManulHeart `0.0.0.2`, prefer a PATH install so extensions can execute `manul` directly.
 
 ### CLI Flags
 
@@ -314,16 +314,17 @@ STEP 1: Login
 cmd/manul           CLI entry point (produces `manul` binary)
 pkg/cdp             Low-level CDP WebSocket transport and domain wrappers
 pkg/browser         Abstract browser/page interfaces + CDP backend + Chrome lifecycle
-pkg/runtime            Targeting pipeline: probe → filter → score → resolve
+pkg/runtime         Targeting pipeline: probe → filter → score → resolve;
+                    DSL execution, control flow, variable management
+pkg/worker          Worker / WorkerPool / PortAllocator for parallel execution
 pkg/dom             Normalized DOM element model (ElementSnapshot with 27 fields)
 pkg/heuristics      In-page JS probes (SnapshotProbe, VisibleTextProbe, ExtractDataProbe)
 pkg/scorer          Deterministic 4-channel [0.0–1.0] scoring and ranking
-pkg/runtime         DSL execution, control flow, variable management
 pkg/dsl             .hunt file parser, import resolver, command AST with block nesting
 pkg/explain         Structured execution results and explainability types
-pkg/report          Styled HTML report generation
+pkg/report          Styled HTML report generation + aggregate index.html
 pkg/config          Runtime configuration (18 fields)
-pkg/utils           Logging, error types
+pkg/utils           Logging (with per-worker prefix support), error types
 examples/           7 sample .hunt files
 docs/               Documentation
 ```
@@ -332,19 +333,83 @@ See [docs/overview.md](docs/overview.md) for a detailed architecture walkthrough
 
 ---
 
+## Parallel Execution (API, `0.0.0.2`)
+
+As of `0.0.0.2` ManulHeart ships a Go-level worker pool for running hunts in
+parallel. The `manul` CLI is still single-threaded; embed the pool directly
+to fan out:
+
+```go
+import (
+    "context"
+    "github.com/manulengineer/manulheart/pkg/browser"
+    "github.com/manulengineer/manulheart/pkg/config"
+    "github.com/manulengineer/manulheart/pkg/dsl"
+    "github.com/manulengineer/manulheart/pkg/report"
+    "github.com/manulengineer/manulheart/pkg/worker"
+)
+
+func runInParallel(ctx context.Context, hunts []*dsl.Hunt) error {
+    alloc := worker.NewPortAllocator(9222, 9321) // 100 concurrent workers max
+
+    pool, err := worker.NewPool(worker.PoolOptions{
+        Concurrency:   4,
+        Config:        config.Default(),
+        Allocator:     alloc,
+        ChromeOptions: browser.DefaultChromeOptions(),
+        FailFast:      false,
+    })
+    if err != nil {
+        return err
+    }
+
+    results, err := pool.Run(ctx, hunts)
+    if err != nil {
+        // err is the first hunt failure; per-hunt errors live on results[i].Err
+    }
+
+    summaries := make([]report.RunSummary, len(results))
+    for i, r := range results {
+        summaries[i] = report.RunSummary{Result: r.Result, WorkerID: r.WorkerID}
+    }
+    _, _ = report.GenerateIndex(summaries, "reports")
+    return err
+}
+```
+
+**Rules of engagement:**
+
+- One `Runtime`, `Page`, and `ChromeProcess` per worker. Sharing them across
+  goroutines is a data race — verified by `go test -race` in CI.
+- Register custom controls and `CALL GO` handlers **before** the pool spawns.
+  The handler maps themselves are mutex-guarded, but handlers must be safe
+  for concurrent invocation (every worker may invoke the same handler
+  simultaneously).
+- Each worker logs with a `[wN]` prefix via `utils.WithPrefix`.
+- Per-hunt reports include a monotonic sequence suffix so two workers
+  finishing the same hunt title in the same second do not collide.
+
+---
+
 ## Project Status
 
-Alpha. The core engine is feature-complete for single-threaded execution:
+Alpha. The core engine covers:
 32 DSL commands, full control flow (IF/ELIF/ELSE, WHILE, REPEAT, FOR EACH),
-import system (including USE/CALL expansion), 4-channel scoring, contextual 
-qualifiers (NEAR, ON HEADER/FOOTER, INSIDE), Shadow DOM support, 3-pass 
-proximity resolution, HTML reporting, screenshots, debug mode, explain mode, 
-and 476 synthetic unit tests across 35 test files.
+import system (including USE/CALL expansion), 4-channel scoring, contextual
+qualifiers (NEAR, ON HEADER/FOOTER, INSIDE), Shadow DOM support, 3-pass
+proximity resolution, HTML reporting, screenshots, debug mode, explain mode.
 
-Not yet implemented: parallel execution (workers > 1), LLM-based fallback,
+As of `0.0.0.2` the engine also exposes a **parallel-execution substrate**:
+a goroutine-safe CDP transport, a `pkg/worker` package with `Worker`,
+`WorkerPool`, and `PortAllocator`, per-worker log prefixes, and collision-proof
+report filenames. Every test (CDP, runtime, scorer, worker) runs under
+`go test -race` in CI.
+
+Not yet implemented: a CLI flag to expose the worker pool end-to-end (the API
+is there, the CLI is still single-threaded), LLM-based fallback,
 scan/record subcommands.
 
-**Documented CLI version:** `0.0.0.1`.
+**Documented CLI version:** `0.0.0.2`.
 
 **Recommended install target:** expose the binary as a PATH command named `manul`
 for editor extensions and automation tooling.
@@ -352,6 +417,41 @@ for editor extensions and automation tooling.
 ---
 
 ## What's New
+
+### `0.0.0.2` — concurrency substrate
+
+- **Hardened CDP transport** — `readLoop` now honors parent-context cancellation
+  via a watchdog that tears down the WebSocket on cancel. Request IDs use
+  `atomic.Int64` instead of a mutex. `Conn.Close()` is idempotent via
+  `sync.Once`.
+- **Subscription handles** — `Conn.Subscribe()` returns a `*Subscription` with
+  `C()` / `Close()` instead of a raw channel. Channels are closed on connection
+  teardown, so subscribers unblock cleanly. Prevents the old "orphaned
+  channel in a slice" leak path.
+- **`pkg/worker`** — new package with:
+  - `PortAllocator` — round-robin CDP debug-port allocation with an OS-level
+    free-check, safe for concurrent `Acquire` / `Release`.
+  - `Worker` — owns exactly one Chrome + Page + Runtime; launches its own
+    Chrome in `NewWorker`, or wraps an existing page via `AdoptWorker` (for
+    tests/embedding).
+  - `WorkerPool` — bounded jobs channel with first-error tracking and optional
+    `FailFast`. Implemented without adding a dependency (no `x/sync/errgroup`).
+- **Runtime concurrency contract** — `pkg/runtime.Runtime` is now explicitly
+  documented as single-goroutine. Use `pkg/worker` for parallel execution.
+- **Extension-registry policy** — `RegisterCustomControl` / `RegisterGoCall`
+  are intended to be called at process init, before the worker pool spawns.
+  Documented inline in [pkg/runtime/extensions.go](pkg/runtime/extensions.go).
+- **Per-worker log prefixes** — `utils.WithPrefix(parent, "[w3] ")` derives
+  child loggers that share the parent's writer/level but prepend the prefix.
+- **Collision-proof report filenames** — `report_{title}_{ts}_{seq}.html`
+  with a process-wide atomic counter; two workers finishing in the same
+  second no longer overwrite each other.
+- **Aggregate reporter** — `report.GenerateIndex(summaries, outDir)` writes
+  an `index.html` linking to every per-hunt report for a parallel run.
+- **`-race` in CI** — every test invocation in the `synthetic-tests` workflow
+  now runs with the race detector, with dedicated CDP and worker steps.
+
+### Earlier (`0.0.0.1`)
 
 - **32 DSL commands** — full interaction set including double-click, right-click,
   hover, drag-and-drop, file upload, keyboard shortcuts, scroll with containers.

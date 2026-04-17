@@ -614,7 +614,7 @@ func WaitForResponse(ctx context.Context, c *Conn, urlPattern string, timeout ti
 	}
 
 	sub := c.Subscribe()
-	defer c.Unsubscribe(sub)
+	defer sub.Close()
 	defer c.Call(context.Background(), "Network.disable", nil)
 
 	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
@@ -624,7 +624,10 @@ func WaitForResponse(ctx context.Context, c *Conn, urlPattern string, timeout ti
 		select {
 		case <-ctxTimeout.Done():
 			return fmt.Errorf("timeout waiting for response pattern %q", urlPattern)
-		case event := <-sub:
+		case event, ok := <-sub.C():
+			if !ok {
+				return fmt.Errorf("cdp connection closed while waiting for response pattern %q", urlPattern)
+			}
 			if event.Method == "Network.responseReceived" {
 				var received struct {
 					Response struct {

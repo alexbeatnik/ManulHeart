@@ -1,0 +1,146 @@
+---
+name: scoring-heuristics
+description: Add, tune, or debug ManulHeart's element resolution scoring. Use when modifying pkg/scorer, adding a new signal to ElementSnapshot (pkg/dom), extending the JS probe (pkg/heuristics), or wiring a new score component into pkg/explain for debuggability.
+---
+
+# Working on the Scorer
+
+ManulHeart resolves DSL targets to DOM elements by scoring every candidate
+on a `[0.0, 1.0]` scale across weighted channels, then ranking. The scorer
+is PURE and STATELESS — same inputs always produce the same output. No
+randomness, no LLM calls, no hidden caches.
+
+## Architecture
+
+```
+.hunt command ──► runtime.loadSnapshot ──► heuristics.ParseProbeResult
+                                                    │
+                                                    ▼
+                                   []dom.ElementSnapshot (27 fields)
+                                                    │
+                                                    ▼
+                            scorer.Rank(query, typeHint, mode, elements, topN, anchor)
+                                                    │
+                                                    ▼
+                                   []RankedCandidate → winner = [0]
+                                                    │
+                                                    ▼
+                                   explain.ExecutionResult (top-5, breakdowns)
+```
+
+## Current channels + weights
+
+From [pkg/scorer/scorer.go](../../../pkg/scorer/scorer.go):
+
+```go
+var Weights = WeightsConfig{
+    Semantic:  0.60,  // type alignment (mode=clickable → prefer button)
+    Text:      0.45,  // visible text, aria-label, placeholder
+    ID:        0.25,  // id, name, data-qa, data-testid
+    Proximity: 0.10,  // Euclidean + DOM ancestry (bumped for NEAR/INSIDE)
+}
+```
+
+The 4 channels are independent and combined linearly. `Total` is the sum.
+Never collapse channels into a single pre-combined score — every channel
+is printed by `--explain` and the breakdown is the project's core
+differentiator.
+
+## Adding a new scoring signal
+
+1. **Where does the signal live?**
+   - DOM attribute you can read in a probe → extend
+     [pkg/heuristics/snapshot_probe.js](../../../pkg/heuristics/) and
+     [pkg/dom/ElementSnapshot](../../../pkg/dom/).
+   - Derived from existing fields → add a pure helper in `pkg/scorer`.
+2. **Which channel does it belong to?** Pick one of the 4. Do NOT invent a
+   fifth channel without a design discussion — more channels = more
+   interaction effects, harder to tune.
+3. **Additive or multiplicative?** Default additive (sum within channel).
+   Multiplicative only for HARD GATES (e.g. `IsDisabled → Total = 0`).
+4. **Write the synthetic test FIRST.** Add a new case to
+   `pkg/scorer/synthetic/*` that would fail without your change.
+5. **Run the full synthetic suite.** All 476+ cases must still pass.
+   A new heuristic that helps one case while breaking two is not a net win.
+
+## Invariants the scorer must preserve
+
+- **Disabled elements score 0.** `if el.IsDisabled { return ScoreBreakdown{Total: 0.0} }`.
+- **Hidden elements are filtered before scoring**, not scored to zero — see
+  the visibility pre-filter.
+- **Pure function.** `Score(query, typeHint, mode, el, anchor)` takes all
+  inputs; no global lookups, no randomness.
+- **Deterministic ordering.** Ties are broken by a stable ordering (DOM
+  order, then XPath) — never by `map` iteration.
+- **Bounded to `[0.0, 1.0]` per channel** after weighting. Clip if your
+  math overflows.
+
+## Debugging a resolution failure
+
+Run the hunt with `--explain`:
+
+```bash
+manul path/to/file.hunt --explain
+```
+
+Output shows, per targeting command:
+
+```
+Target: 'Login' (mode=clickable)
+  [1] ID=42 tag=button text="Sign in"     total=0.71  sem=0.60 text=0.08 id=0.00 prox=0.03
+  [2] ID=17 tag=a      text="Sign in"     total=0.58  sem=0.40 text=0.08 id=0.00 prox=0.10
+  [3] ID=88 tag=button text="Login help"  total=0.52  sem=0.60 text=0.02 id=0.00 prox=-0.10  (penalty)
+```
+
+Reading this:
+- `total` < `ThresholdHighConfidence` (0.15) → ambiguous, may fail.
+- Gap between [1] and [2] < `ThresholdRunnerUpGap` (0.02) → scorer is
+  confused; tighten signals or add a qualifier.
+- Channel that's suspiciously flat → your new signal isn't firing; check
+  the probe output.
+
+## Wiring into explain
+
+New scoring components MUST appear in `explain.ScoreBreakdown`. If you add
+a sub-component, either:
+- Fold it into an existing channel's display, OR
+- Add a named field and update the HTML renderer in
+  [pkg/report/html.go](../../../pkg/report/html.go).
+
+Never emit a score that isn't attributable — if `--explain` can't justify
+the ranking, the resolution becomes unreviewable.
+
+## Thresholds worth knowing
+
+From [pkg/runtime/runtime.go](../../../pkg/runtime/runtime.go):
+
+```go
+ThresholdHighConfidence = 0.15 // strong heuristic match
+ThresholdAmbiguous      = 0.03 // minimum for heuristic choice
+ThresholdRunnerUpGap    = 0.02 // winner must beat runner-up by this
+ThresholdPass3Total     = 0.12
+ThresholdPass3Proximity = 0.18
+ThresholdPass3Gap       = 0.04
+```
+
+Changing a threshold requires running the full synthetic suite and
+checking that no previously-resolved case silently becomes "ambiguous".
+
+## Common anti-patterns
+
+- **Adding substring-match hacks** ("if text contains 'login', boost 0.5").
+  Instead: normalize the text, tokenize, compare token overlap.
+- **Reading DOM state in the scorer.** The scorer sees only
+  `[]ElementSnapshot`. If you need new data, extend the probe.
+- **Global mutable weights** tuned per-hunt. `scorer.Weights` is global and
+  effectively immutable after init. Resist the urge to pass per-hunt
+  weight overrides.
+- **Using `map` iteration for tie-breaking.** Non-deterministic — sort first.
+
+## Key files
+
+- [pkg/scorer/scorer.go](../../../pkg/scorer/scorer.go) — `Score`, `Rank`, `Weights`.
+- [pkg/scorer/synthetic/](../../../pkg/scorer/synthetic/) — 35 test files.
+- [pkg/dom/](../../../pkg/dom/) — `ElementSnapshot` struct.
+- [pkg/heuristics/](../../../pkg/heuristics/) — JS probes, probe result parsing.
+- [pkg/explain/explain.go](../../../pkg/explain/explain.go) — `ScoreBreakdown`.
