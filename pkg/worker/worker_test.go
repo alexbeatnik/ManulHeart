@@ -43,7 +43,7 @@ func mockPageWithButton(label string) *runtime.MockPage {
 
 func TestAdoptWorker_RunsHunt(t *testing.T) {
 	page := mockPageWithButton("Login")
-	w := AdoptWorker(7, config.Default(), page, utils.NewLogger(utils.LogLevelInfo, nil))
+	w := AdoptWorker(7, config.Default(), page, utils.NewLogger(nil))
 	defer w.Close()
 
 	if w.ID() != 7 {
@@ -144,7 +144,7 @@ func TestPool_NewPoolValidation(t *testing.T) {
 // TestWorker_LogPrefix verifies per-worker log lines carry the [wN] prefix.
 func TestWorker_LogPrefix(t *testing.T) {
 	var sb strings.Builder
-	parent := utils.NewLogger(utils.LogLevelInfo, &sb)
+	parent := utils.NewLogger(&sb)
 	child := utils.WithPrefix(parent, "[w42] ")
 	child.Info("hello")
 	if !strings.Contains(sb.String(), "[w42] hello") {

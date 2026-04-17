@@ -21,7 +21,7 @@ func TestRuntime_ExplainMetadataForClick(t *testing.T) {
 	}
 	mock.Elements[0].Normalize()
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	result, err := rt.RunHunt(context.Background(), &dsl.Hunt{
 		Commands: []dsl.Command{{Type: dsl.CmdClick, Raw: "CLICK the 'Save' button", Target: "Save", TypeHint: "button"}},
 	})
@@ -66,7 +66,7 @@ func TestRuntime_UploadFile(t *testing.T) {
 	}
 	mock.Elements[0].Normalize()
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:           dsl.CmdUploadFile,
 		Raw:            "UPLOAD 'avatar.png' to 'Profile Picture'",
@@ -99,7 +99,7 @@ func TestRuntime_SnapshotCacheUsedForRepeatedReadOnlyLookups(t *testing.T) {
 	}
 	mock.Elements[0].Normalize()
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	ctx := context.Background()
 
 	matched, err := rt.evaluateCondition(ctx, "button 'Save' exists")
@@ -129,7 +129,7 @@ func TestRuntime_DisableCacheForcesFreshSnapshotProbe(t *testing.T) {
 	}
 	mock.Elements[0].Normalize()
 
-	rt := New(config.Config{DisableCache: true}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{DisableCache: true}, mock, utils.NewLogger(nil))
 	ctx := context.Background()
 
 	matched, err := rt.evaluateCondition(ctx, "button 'Save' exists")
@@ -159,7 +159,7 @@ func TestRuntime_NavigateInvalidatesSnapshotCache(t *testing.T) {
 	}
 	mock.Elements[0].Normalize()
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	ctx := context.Background()
 
 	matched, err := rt.evaluateCondition(ctx, "button 'Save' exists")
@@ -201,7 +201,7 @@ func TestRuntime_ClickInvalidatesSnapshotCache(t *testing.T) {
 	}
 	mock.Elements[0].Normalize()
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	ctx := context.Background()
 
 	matched, err := rt.evaluateCondition(ctx, "button 'Save' exists")
@@ -293,7 +293,7 @@ func TestRuntime_VerifyCheckedFailsForUncheckedControl(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	_, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:        dsl.CmdVerifyField,
 		Raw:         "VERIFY that '7' is checked",
@@ -316,7 +316,7 @@ func TestRuntime_CheckThenVerifyCheckedPasses(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	_, err := rt.RunHunt(context.Background(), &dsl.Hunt{
 		Commands: []dsl.Command{
 			{Type: dsl.CmdCheck, Raw: "CHECK the checkbox for '7'", Target: "7", TypeHint: "checkbox"},
@@ -342,7 +342,7 @@ func TestRuntime_ReconcileStickyCheckboxStateReappliesVisibleRow(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	rt.rememberStickyCheckboxState("7", true)
 	if err := rt.reconcileStickyCheckboxStates(context.Background()); err != nil {
 		t.Fatalf("reconcileStickyCheckboxStates failed: %v", err)
@@ -363,7 +363,7 @@ func TestRuntime_ClickPrefersExactAriaLabel(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	_, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:     dsl.CmdClick,
 		Raw:      "CLICK the 'Expand all' button",
@@ -393,7 +393,7 @@ func TestRuntime_ClickNearAnchorChoosesClosestCandidate(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	_, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:       dsl.CmdClick,
 		Raw:        "CLICK the 'Increase' button NEAR 'Quantity'",
@@ -424,7 +424,7 @@ func TestRuntime_ClickNearAnchorSameCardBeatsCloserNeighbor(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:       dsl.CmdClick,
 		Raw:        "CLICK the 'Add to cart' button NEAR 'Sauce Labs Fleece Jacket'",
@@ -461,7 +461,7 @@ func TestRuntime_ClickNearAnchorPrefersCandidateInSameFrame(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:       dsl.CmdClick,
 		Raw:        "CLICK the 'Save' button NEAR 'Widget Controls'",
@@ -493,7 +493,7 @@ func TestRuntime_ClickNearAnchorFailsWhenAnchorMissing(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	_, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:       dsl.CmdClick,
 		Raw:        "CLICK the 'Save' button NEAR 'Missing Anchor'",
@@ -523,7 +523,7 @@ func TestRuntime_ClickOnHeaderPrefersHeaderCandidate(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:     dsl.CmdClick,
 		Raw:      "CLICK the 'Login' link ON HEADER",
@@ -559,7 +559,7 @@ func TestRuntime_ClickOnFooterPrefersFooterCandidate(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:     dsl.CmdClick,
 		Raw:      "CLICK the 'Privacy Policy' link ON FOOTER",
@@ -594,7 +594,7 @@ func TestRuntime_ClickInsideRowChoosesCandidateFromMatchingRow(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:          dsl.CmdClick,
 		Raw:           "CLICK the 'Delete' button INSIDE 'Actions' row with 'John'",
@@ -626,7 +626,7 @@ func TestRuntime_ClickInsideContainerChoosesDescendant(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:            dsl.CmdClick,
 		Raw:             "CLICK the 'Edit' button INSIDE 'Checkout Summary'",
@@ -656,7 +656,7 @@ func TestRuntime_FillPrefersInputByLabelOverMatchingButtonText(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:   dsl.CmdFill,
 		Raw:    "FILL 'Email Address' field with 'alex@manul.dev'",
@@ -691,7 +691,7 @@ func TestRuntime_FillUsesPlaceholderWhenNoLabelExists(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:   dsl.CmdFill,
 		Raw:    "FILL 'Search Products' field with 'backpack'",
@@ -720,7 +720,7 @@ func TestRuntime_FillUsesFieldsetLegendAsLabel(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:   dsl.CmdFill,
 		Raw:    "FILL 'Suggession Class' field with 'Ukra'",
@@ -783,7 +783,7 @@ func TestRuntime_FillWaitsForReactiveAutocompleteSuggestions(t *testing.T) {
 		page.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, page, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, page, utils.NewLogger(nil))
 	if _, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:   dsl.CmdFill,
 		Raw:    "FILL 'Suggession Class' field with 'Ukra'",
@@ -847,7 +847,7 @@ func TestRuntime_HoverWaitsForReactiveMenuReveal(t *testing.T) {
 		page.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, page, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, page, utils.NewLogger(nil))
 	if _, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:     dsl.CmdHover,
 		Raw:      "HOVER over the 'Mouse Hover' button",
@@ -883,7 +883,7 @@ func TestRuntime_ClickCollapsesNestedAutocompleteWrappers(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:     dsl.CmdClick,
 		Raw:      "CLICK the 'Ukraine' element",
@@ -912,7 +912,7 @@ func TestRuntime_FillPrefersVisibleInputOverHiddenExactMatch(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:   dsl.CmdFill,
 		Raw:    "FILL 'Search' field with 'golang'",
@@ -944,7 +944,7 @@ func TestRuntime_SelectPrefersNativeSelectOverMatchingButton(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:     dsl.CmdSelect,
 		Raw:      "SELECT 'Japan' from the 'Country' dropdown",
@@ -980,7 +980,7 @@ func TestRuntime_CheckPrefersRoleCheckboxOverMatchingButtonText(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:     dsl.CmdCheck,
 		Raw:      "CHECK the checkbox for 'Email Alerts'",
@@ -1012,7 +1012,7 @@ func TestRuntime_CheckPassesForLowConfidenceRoleCheckbox(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:     dsl.CmdCheck,
 		Raw:      "CHECK the checkbox for 'Home'",
@@ -1050,7 +1050,7 @@ func TestRuntime_VerifyCheckedPassesForLowConfidenceRoleCheckbox(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	res, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:        dsl.CmdVerifyField,
 		Raw:         "VERIFY that 'Home' is checked",
@@ -1079,7 +1079,7 @@ func TestRuntime_ClickFailsForAmbiguousLowConfidenceCandidates(t *testing.T) {
 		mock.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 	_, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:   dsl.CmdClick,
 		Raw:    "CLICK 'alpha'",
@@ -1115,7 +1115,7 @@ func TestRuntime_CheckFailsWhenCheckboxStateDoesNotChange(t *testing.T) {
 		base.Elements[i].Normalize()
 	}
 
-	rt := New(config.Config{}, &noOpCheckPage{MockPage: base}, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, &noOpCheckPage{MockPage: base}, utils.NewLogger(nil))
 	_, err := rt.executeCommand(context.Background(), dsl.Command{
 		Type:     dsl.CmdCheck,
 		Raw:      "CHECK the checkbox for '7'",

@@ -74,12 +74,14 @@ func New(cfg config.Config, page browser.Page, logger *utils.Logger) *Runtime {
 
 // RunHunt executes all commands in hunt against the bound page.
 // It returns an explain.HuntResult summarising the execution.
+// Commands are grouped by their StepBlock label; each group emits
+// BlockStart / BlockPass / BlockFail so the output mirrors the
+// per-STEP structure of the .hunt file.
 func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntResult, error) {
 	if hunt == nil {
 		return nil, fmt.Errorf("runtime: nil hunt")
 	}
 
-	// Initialize runtime variables from hunt @vars (Global level)
 	for k, v := range hunt.Vars {
 		rt.vars.Set(k, v, LevelGlobal)
 	}
@@ -90,15 +92,54 @@ func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRe
 		Context:  hunt.Context,
 	}
 
+	// Group consecutive commands by StepBlock, preserving order.
+	type stepGroup struct {
+		name     string
+		commands []dsl.Command
+	}
+	var groups []stepGroup
+	defaultLabel := hunt.Title
+	if defaultLabel == "" {
+		defaultLabel = "Mission"
+	}
+	for _, cmd := range hunt.Commands {
+		label := cmd.StepBlock
+		if label == "" {
+			label = defaultLabel
+		}
+		if len(groups) == 0 || groups[len(groups)-1].name != label {
+			groups = append(groups, stepGroup{name: label})
+		}
+		groups[len(groups)-1].commands = append(groups[len(groups)-1].commands, cmd)
+	}
+
 	start := time.Now()
-	passed, failed, err := rt.runCommands(ctx, hunt.Commands, result)
+	passed, failed := 0, 0
+	var firstErr error
+
+	for _, g := range groups {
+		rt.logger.BlockStart(g.name)
+		p, f, err := rt.runCommands(ctx, g.commands, result)
+		passed += p
+		failed += f
+		if err != nil || f > 0 {
+			rt.logger.BlockFail(g.name)
+			if firstErr == nil {
+				firstErr = err
+			}
+			// Stop at first failed block (mirrors Python behaviour).
+			break
+		}
+		rt.logger.BlockPass(g.name)
+	}
+
 	result.TotalDuration = time.Since(start)
 	result.TotalDurationMS = result.TotalDuration.Milliseconds()
 	result.TotalSteps = passed + failed
 	result.Passed = passed
 	result.Failed = failed
 	result.Success = failed == 0
-	return result, err
+	return result, firstErr
 }
 
 func (rt *Runtime) runCommands(ctx context.Context, commands []dsl.Command, huntRes *explain.HuntResult) (int, int, error) {
@@ -108,17 +149,22 @@ func (rt *Runtime) runCommands(ctx context.Context, commands []dsl.Command, hunt
 			return passed, failed, fmt.Errorf("runtime: context cancelled: %w", err)
 		}
 
+		rt.logger.ActionStart(cmd.Raw)
+		stepStart := time.Now()
 		stepResult, err := rt.executeCommand(ctx, cmd)
+		durMs := time.Since(stepStart).Milliseconds()
+
 		if huntRes != nil {
 			huntRes.Results = append(huntRes.Results, stepResult)
 		}
 		if err != nil {
 			failed++
+			rt.logger.ActionFail(err)
 			rt.logger.Error("step failed (%s): %v", cmd.Raw, err)
 			return passed, failed, err
-		} else {
-			passed++
 		}
+		rt.logger.ActionPass(float64(durMs) / 1000)
+		passed++
 	}
 	return passed, failed, nil
 }
@@ -225,7 +271,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 	case dsl.CmdPrint:
 		text := rt.resolveVariables(cmd.PrintText)
 		res.ActionValue = text
-		rt.logger.Info("PRINT: %s", text)
+		rt.logger.ActionDetail("📢", "PRINT: %s", text)
 
 	case dsl.CmdWaitForResponse:
 		pattern := rt.resolveVariables(cmd.WaitResponseURL)
@@ -408,14 +454,18 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			res.ProbeMetadata["inside_row_text"] = cmd.InsideRowText
 		}
 
-		// Anti-phantom guard for inputs/selects (soft warning for now)
-		if !rt.passesAntiPhantomGuard(string(mode), targetPath, best.Element) {
-			rt.logger.Info("⚠️  Anti-phantom guard: heuristic choice %q for target %q has low keyword correlation.", best.Element.Tag, targetPath)
-		}
+		// Anti-phantom guard for inputs/selects (soft warning; logging is inside the helper).
+		rt.passesAntiPhantomGuard(string(mode), targetPath, best.Element)
 
 		winner := best.Element
-		rt.logger.Info("Target '%s' resolved to: %s (ID=%d, Score=%.3f)",
-			targetPath, winner.Name, winner.ID, best.Explain.Score.Total)
+		conf := best.Explain.Score.Total
+		label := "Context reuse"
+		if conf >= ThresholdHighConfidence {
+			label = "High confidence match"
+		} else if conf >= ThresholdAmbiguous {
+			label = "Keyword match"
+		}
+		rt.logger.HeuristicDetail(conf, fmt.Sprintf("%s — '%s' → %s (ID=%d)", label, targetPath, winner.Name, winner.ID))
 
 		if rt.cfg.ExplainMode {
 			rt.logger.Info("  Breakdown: Text=%.2f, Attr=%.2f, Sem=%.2f, Prox=%.2f",
@@ -437,6 +487,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			res.ActionValue = val
 			err = rt.page.SetInputValue(ctx, winner.ID, winner.XPath, val)
 			if err == nil {
+				rt.logger.ActionDetail("⌨️", "Typed %q → %q", val, winner.Name)
 				if waitErr := rt.page.Wait(ctx, 300*time.Millisecond); waitErr != nil {
 					err = waitErr
 					break
@@ -1018,14 +1069,14 @@ func (rt *Runtime) passesAntiPhantomGuard(mode string, query string, el dom.Elem
 			}
 		}
 	}
-	rt.logger.Info("Anti-phantom guard rejected element ID=%d signals=%v for query words=%v", el.ID, signals, words)
+	rt.logger.ActionDetail("👻", "ANTI-PHANTOM GUARD: heuristic choice %q for target %q has low keyword correlation.", el.Tag, query)
 	return false
 }
 
 func (rt *Runtime) autoAnnotateNavigate(ctx context.Context, url string) {
 	// In a real implementation, this would write to the hunt file.
 	// For now, we log it.
-	rt.logger.Info("📍 Auto-Nav: %s", url)
+	rt.logger.ActionDetail("📍", "Auto-Nav: %s", url)
 }
 
 func resolveRestrictiveCandidates(targetPath, typeHint string, mode dsl.InteractionMode, elements []dom.ElementSnapshot, anchor *scorer.AnchorContext, logger *utils.Logger) ([]scorer.RankedCandidate, string) {

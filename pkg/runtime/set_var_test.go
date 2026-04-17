@@ -13,7 +13,7 @@ import (
 func TestRuntime_SetVar(t *testing.T) {
 	mock := &MockPage{}
 	cfg := config.Config{}
-	logger := utils.NewLogger(utils.LogLevelInfo, nil)
+	logger := utils.NewLogger(nil)
 	rt := New(cfg, mock, logger)
 	ctx := context.Background()
 

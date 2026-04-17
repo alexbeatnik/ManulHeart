@@ -20,7 +20,7 @@
 ## CLI INSTALL + VERSION
 
 > **CRITICAL — Read this first.**
-> Current documented ManulHeart CLI version is **0.0.0.2**.
+> Current documented ManulHeart CLI version is **0.0.0.3**.
 > When documenting install or usage, prefer the Go binary as a PATH-visible system command named `manul`
 > (for example `~/.local/bin/manul` or `/usr/local/bin/manul`) so editor extensions can invoke it directly.
 > Do not document the repo-local binary as the only intended integration path when the request is about running from tools or extensions.
@@ -66,11 +66,11 @@ pkg/
   worker/                  Worker, WorkerPool, PortAllocator (parallel execution substrate)
   explain/                 Score breakdown and debugging visualization
   report/                  Per-hunt HTML report + aggregate index.html
-  utils/                   Logger (with per-worker prefix) + error types
+  utils/                   Logger (dual-output: stdout+ANSI, file+stripped) + error types
 examples/                  Reference .hunt files (mega.hunt, sampler.hunt)
 ```
 
-## Concurrency contract (`0.0.0.2`+)
+## Concurrency contract (`0.0.0.3`+)
 
 > **CRITICAL — Read this before writing any code that touches `Runtime`, `Page`, or CDP.**
 
@@ -184,7 +184,8 @@ results, firstErr := pool.Run(ctx, hunts)
 
 - Order preserved: `results[i]` corresponds to `hunts[i]`.
 - Use `report.GenerateIndex(summaries, outDir)` for an aggregate `index.html`.
-- Per-worker logs are prefixed `[wN] ` via `utils.WithPrefix`.
+- Per-worker logs are prefixed `[wN] ` via `utils.WithPrefix(parent, "[wN] ")`.
+- Logger API: `utils.NewLogger(logFile)` (stdout + optional ANSI-stripped file); `l.WithLevel(level)` for verbose mode; semantic methods `BlockStart/Pass/Fail`, `ActionStart/Pass/Fail/Warn`, `HeuristicDetail`, `ActionDetail`.
 - Per-hunt report filenames carry an atomic sequence counter — never collide.
 
 ## Testing expectations

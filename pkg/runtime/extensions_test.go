@@ -61,7 +61,7 @@ func TestRuntime_CustomControlInterceptsFillWithoutDOMResolution(t *testing.T) {
 	}
 
 	mock := &MockPage{URL: "https://example-shop.com/checkout", Title: "Checkout Page"}
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 
 	res, execErr := rt.executeCommand(context.Background(), dsl.Command{
 		Type:   dsl.CmdFill,
@@ -106,7 +106,7 @@ func TestRuntime_CustomControlFallsBackToURLDerivedPageLabel(t *testing.T) {
 	}
 
 	mock := &MockPage{URL: "https://example-shop.com/checkout"}
-	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, mock, utils.NewLogger(nil))
 
 	_, execErr := rt.executeCommand(context.Background(), dsl.Command{
 		Type:   dsl.CmdClick,
@@ -140,7 +140,7 @@ func TestRuntime_CallGoResolvesArgsAndStoresResult(t *testing.T) {
 		t.Fatalf("RegisterGoCall failed: %v", err)
 	}
 
-	rt := New(config.Config{}, &MockPage{}, utils.NewLogger(utils.LogLevelInfo, nil))
+	rt := New(config.Config{}, &MockPage{}, utils.NewLogger(nil))
 	rt.vars.Set("factor", "7", LevelRow)
 
 	res, execErr := rt.executeCommand(context.Background(), dsl.Command{

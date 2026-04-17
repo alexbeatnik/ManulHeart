@@ -2,7 +2,7 @@
 
 A deterministic, DSL-first browser automation runtime in Go.
 
-Current alpha version: `0.0.0.2`.
+Current alpha version: `0.0.0.3`.
 
 ManulHeart executes `.hunt` files using plain-English commands, DOM intelligence,
 heuristic element resolution, and structured explainability.
@@ -105,7 +105,7 @@ manul examples/saucedemo.hunt --json 2>/dev/null | jq .
 
 > **Note:** The `manul` command name is shared with the Python ManulEngine.
 > Whichever you install last takes priority. To switch back to Python: `pipx install manul-engine`.
-> For ManulHeart `0.0.0.2`, prefer a PATH install so extensions can execute `manul` directly.
+> For ManulHeart `0.0.0.3`, prefer a PATH install so extensions can execute `manul` directly.
 
 ### CLI Flags
 
@@ -324,7 +324,7 @@ pkg/dsl             .hunt file parser, import resolver, command AST with block n
 pkg/explain         Structured execution results and explainability types
 pkg/report          Styled HTML report generation + aggregate index.html
 pkg/config          Runtime configuration (18 fields)
-pkg/utils           Logging (with per-worker prefix support), error types
+pkg/utils           Semantic logging (Block/Action/Detail), ANSI stripping, error types
 examples/           7 sample .hunt files
 docs/               Documentation
 ```
@@ -333,9 +333,9 @@ See [docs/overview.md](docs/overview.md) for a detailed architecture walkthrough
 
 ---
 
-## Parallel Execution (API, `0.0.0.2`)
+## Parallel Execution (API, `0.0.0.3`)
 
-As of `0.0.0.2` ManulHeart ships a Go-level worker pool for running hunts in
+As of `0.0.0.3` ManulHeart ships a Go-level worker pool for running hunts in
 parallel. The `manul` CLI is still single-threaded; embed the pool directly
 to fan out:
 
@@ -350,24 +350,17 @@ import (
 )
 
 func runInParallel(ctx context.Context, hunts []*dsl.Hunt) error {
-    alloc := worker.NewPortAllocator(9222, 9321) // 100 concurrent workers max
+    // 1. Setup a shared logger (optional: pass a file writer for dual logging)
+    logger := utils.NewLogger(nil).WithLevel(utils.LogLevelDebug)
 
-    pool, err := worker.NewPool(worker.PoolOptions{
-        Concurrency:   4,
-        Config:        config.Default(),
-        Allocator:     alloc,
-        ChromeOptions: browser.DefaultChromeOptions(),
-        FailFast:      false,
-    })
+    // 2. Use the convenience wrapper for zero-config parallel execution
+    cfg := config.Default()
+    results, err := worker.RunHuntsInParallel(ctx, cfg, hunts, 4, logger)
     if err != nil {
-        return err
+        // err is the first hunt failure encountered
     }
 
-    results, err := pool.Run(ctx, hunts)
-    if err != nil {
-        // err is the first hunt failure; per-hunt errors live on results[i].Err
-    }
-
+    // 3. Generate an aggregate report
     summaries := make([]report.RunSummary, len(results))
     for i, r := range results {
         summaries[i] = report.RunSummary{Result: r.Result, WorkerID: r.WorkerID}
@@ -399,7 +392,7 @@ import system (including USE/CALL expansion), 4-channel scoring, contextual
 qualifiers (NEAR, ON HEADER/FOOTER, INSIDE), Shadow DOM support, 3-pass
 proximity resolution, HTML reporting, screenshots, debug mode, explain mode.
 
-As of `0.0.0.2` the engine also exposes a **parallel-execution substrate**:
+As of `0.0.0.3` the engine also exposes a **parallel-execution substrate**:
 a goroutine-safe CDP transport, a `pkg/worker` package with `Worker`,
 `WorkerPool`, and `PortAllocator`, per-worker log prefixes, and collision-proof
 report filenames. Every test (CDP, runtime, scorer, worker) runs under
@@ -409,7 +402,7 @@ Not yet implemented: a CLI flag to expose the worker pool end-to-end (the API
 is there, the CLI is still single-threaded), LLM-based fallback,
 scan/record subcommands.
 
-**Documented CLI version:** `0.0.0.2`.
+**Documented CLI version:** `0.0.0.3`.
 
 **Recommended install target:** expose the binary as a PATH command named `manul`
 for editor extensions and automation tooling.
@@ -417,6 +410,13 @@ for editor extensions and automation tooling.
 ---
 
 ## What's New
+
+### `0.0.0.3` — logging & pool refactor
+
+- **Simplified Semantic Logger** — Refactored `pkg/utils` to use a leaner, hierarchy-first logging model (Block > Action > Detail). Removed legacy timestamping in favor of cleaner terminal output.
+- **Improved Dual-Logging** — `NewLogger` now supports optional ANSI-stripped file logging via `StripANSIWriter` without requiring separate cleanup functions.
+- **Parallel Substrate Convenience** — Added `RunHuntsInParallel` convenience wrapper in `pkg/worker` for zero-config fan-out.
+- **CLI Renaming** — Formally standardized the CLI binary name as `manul` across all documentation and build scripts.
 
 ### `0.0.0.2` — concurrency substrate
 
