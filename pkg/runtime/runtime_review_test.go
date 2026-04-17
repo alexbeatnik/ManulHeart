@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/manulengineer/manulheart/pkg/config"
 	"github.com/manulengineer/manulheart/pkg/dom"
@@ -705,6 +706,198 @@ func TestRuntime_FillUsesPlaceholderWhenNoLabelExists(t *testing.T) {
 	}
 	if res.WinnerXPath != "/html/body/div[1]/input[1]" {
 		t.Fatalf("WinnerXPath = %q, want placeholder-matched input", res.WinnerXPath)
+	}
+}
+
+func TestRuntime_FillUsesFieldsetLegendAsLabel(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/input[1]", Tag: "input", InputType: "text", LabelText: "Suggession Class Example", IsVisible: true, IsEditable: true, Rect: dom.Rect{Top: 70, Left: 20, Width: 240, Height: 32}},
+			{ID: 2, XPath: "/html/body/div[1]/input[2]", Tag: "input", InputType: "text", LabelText: "Enter Your Name", IsVisible: true, IsEditable: true, Rect: dom.Rect{Top: 130, Left: 20, Width: 240, Height: 32}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:   dsl.CmdFill,
+		Raw:    "FILL 'Suggession Class' field with 'Ukra'",
+		Target: "Suggession Class",
+		Value:  "Ukra",
+	})
+	if err != nil {
+		t.Fatalf("fill failed: %v", err)
+	}
+	if got := mock.Inputs["/html/body/div[1]/input[1]"]; got != "Ukra" {
+		t.Fatalf("fieldset input value = %q, want Ukra", got)
+	}
+	if _, otherUsed := mock.Inputs["/html/body/div[1]/input[2]"]; otherUsed {
+		t.Fatal("did not expect unrelated input to be used")
+	}
+	if res.WinnerXPath != "/html/body/div[1]/input[1]" {
+		t.Fatalf("WinnerXPath = %q, want fieldset legend matched input", res.WinnerXPath)
+	}
+	if res.ProbeMetadata["interaction_mode"] != string(dsl.ModeInput) {
+		t.Fatalf("interaction_mode = %v, want %s", res.ProbeMetadata["interaction_mode"], dsl.ModeInput)
+	}
+}
+
+type delayedAutocompletePage struct {
+	*MockPage
+	pendingSuggestion bool
+}
+
+func (p *delayedAutocompletePage) SetInputValue(ctx context.Context, id int, xpath, value string) error {
+	if err := p.MockPage.SetInputValue(ctx, id, xpath, value); err != nil {
+		return err
+	}
+	p.pendingSuggestion = true
+	return nil
+}
+
+func (p *delayedAutocompletePage) Wait(ctx context.Context, d time.Duration) error {
+	if p.pendingSuggestion {
+		p.pendingSuggestion = false
+		p.Elements = append(p.Elements, dom.ElementSnapshot{
+			ID:          2,
+			XPath:       "/html/body/ul[1]/li[1]/div[1]",
+			Tag:         "div",
+			VisibleText: "Ukraine",
+			IsVisible:   true,
+			Rect:        dom.Rect{Top: 120, Left: 20, Bottom: 150, Right: 220, Width: 200, Height: 30},
+		})
+		p.Elements[len(p.Elements)-1].Normalize()
+	}
+	return nil
+}
+
+func TestRuntime_FillWaitsForReactiveAutocompleteSuggestions(t *testing.T) {
+	page := &delayedAutocompletePage{MockPage: &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/input[1]", Tag: "input", InputType: "text", LabelText: "Suggession Class Example", IsVisible: true, IsEditable: true, Rect: dom.Rect{Top: 70, Left: 20, Bottom: 102, Right: 260, Width: 240, Height: 32}},
+		},
+	}}
+	for i := range page.Elements {
+		page.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, page, utils.NewLogger(utils.LogLevelInfo, nil))
+	if _, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:   dsl.CmdFill,
+		Raw:    "FILL 'Suggession Class' field with 'Ukra'",
+		Target: "Suggession Class",
+		Value:  "Ukra",
+	}); err != nil {
+		t.Fatalf("fill failed: %v", err)
+	}
+
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:     dsl.CmdClick,
+		Raw:      "CLICK the 'Ukraine' element",
+		Target:   "Ukraine",
+		TypeHint: "element",
+	})
+	if err != nil {
+		t.Fatalf("click failed: %v", err)
+	}
+	if len(page.Clicks) != 1 {
+		t.Fatalf("expected 1 click, got %d", len(page.Clicks))
+	}
+	if res.WinnerXPath != "/html/body/ul[1]/li[1]/div[1]" {
+		t.Fatalf("WinnerXPath = %q, want revealed autocomplete suggestion", res.WinnerXPath)
+	}
+}
+
+type delayedHoverMenuPage struct {
+	*MockPage
+	pendingReveal bool
+}
+
+func (p *delayedHoverMenuPage) Hover(ctx context.Context, x, y float64) error {
+	p.Clicks = append(p.Clicks, Point{X: x, Y: y})
+	p.pendingReveal = true
+	return nil
+}
+
+func (p *delayedHoverMenuPage) Wait(ctx context.Context, d time.Duration) error {
+	if p.pendingReveal {
+		p.pendingReveal = false
+		p.Elements = append(p.Elements, dom.ElementSnapshot{
+			ID:          2,
+			XPath:       "/html/body/div[1]/a[1]",
+			Tag:         "a",
+			VisibleText: "Top",
+			IsVisible:   true,
+			Rect:        dom.Rect{Top: 120, Left: 20, Bottom: 165, Right: 180, Width: 160, Height: 45},
+		})
+		p.Elements[len(p.Elements)-1].Normalize()
+	}
+	return nil
+}
+
+func TestRuntime_HoverWaitsForReactiveMenuReveal(t *testing.T) {
+	page := &delayedHoverMenuPage{MockPage: &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/div[1]/button[1]", Tag: "button", VisibleText: "Mouse Hover", IsVisible: true, Rect: dom.Rect{Top: 70, Left: 20, Bottom: 102, Right: 160, Width: 140, Height: 32}},
+		},
+	}}
+	for i := range page.Elements {
+		page.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, page, utils.NewLogger(utils.LogLevelInfo, nil))
+	if _, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:     dsl.CmdHover,
+		Raw:      "HOVER over the 'Mouse Hover' button",
+		Target:   "Mouse Hover",
+		TypeHint: "button",
+	}); err != nil {
+		t.Fatalf("hover failed: %v", err)
+	}
+
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:     dsl.CmdClick,
+		Raw:      "CLICK on the 'Top' link",
+		Target:   "Top",
+		TypeHint: "link",
+	})
+	if err != nil {
+		t.Fatalf("click failed: %v", err)
+	}
+	if res.WinnerXPath != "/html/body/div[1]/a[1]" {
+		t.Fatalf("WinnerXPath = %q, want revealed hover-menu link", res.WinnerXPath)
+	}
+}
+
+func TestRuntime_ClickCollapsesNestedAutocompleteWrappers(t *testing.T) {
+	mock := &MockPage{
+		Elements: []dom.ElementSnapshot{
+			{ID: 1, XPath: "/html/body/ul[1]/li[1]", Tag: "li", VisibleText: "Ukraine", IsVisible: true, Rect: dom.Rect{Top: 121, Left: 21, Bottom: 151, Right: 219, Width: 198, Height: 30}},
+			{ID: 2, XPath: "/html/body/ul[1]/li[1]/div[1]", Tag: "div", VisibleText: "Ukraine", IsVisible: true, Rect: dom.Rect{Top: 121, Left: 21, Bottom: 151, Right: 219, Width: 198, Height: 30}},
+			{ID: 3, XPath: "/html/body/div[2]/a[1]", Tag: "a", VisibleText: "Discount Coupons", IsVisible: true, Rect: dom.Rect{Top: 300, Left: 21, Bottom: 331, Right: 249, Width: 228, Height: 31}},
+		},
+	}
+	for i := range mock.Elements {
+		mock.Elements[i].Normalize()
+	}
+
+	rt := New(config.Config{}, mock, utils.NewLogger(utils.LogLevelInfo, nil))
+	res, err := rt.executeCommand(context.Background(), dsl.Command{
+		Type:     dsl.CmdClick,
+		Raw:      "CLICK the 'Ukraine' element",
+		Target:   "Ukraine",
+		TypeHint: "element",
+	})
+	if err != nil {
+		t.Fatalf("click failed: %v", err)
+	}
+	if len(mock.Clicks) != 1 {
+		t.Fatalf("expected 1 click, got %d", len(mock.Clicks))
+	}
+	if res.WinnerXPath != "/html/body/ul[1]/li[1]/div[1]" {
+		t.Fatalf("WinnerXPath = %q, want deepest autocomplete candidate", res.WinnerXPath)
 	}
 }
 

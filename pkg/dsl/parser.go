@@ -705,9 +705,13 @@ func parseCommandLine(line string) Command {
 
 	// ── VERIFY ────────────────────────────────────────────────────────────────
 	case strings.HasPrefix(upper, "VERIFY "):
-		cmd.Type = CmdVerify
 		rest := stripPrefix(line, "VERIFY ")
 		cmd.VerifyText = extractVerifyText(rest, &cmd.VerifyNegated, &cmd.VerifyState)
+		if cmd.VerifyState != "" {
+			cmd.Type = CmdVerifyField
+		} else {
+			cmd.Type = CmdVerify
+		}
 
 	// ── EXTRACT ───────────────────────────────────────────────────────────────
 	case strings.HasPrefix(upper, "EXTRACT "):
@@ -1063,7 +1067,11 @@ func extractVerifyText(rest string, negated *bool, state *string) string {
 		*negated = true
 	}
 	for _, st := range []string{"checked", "unchecked", "visible", "hidden", "enabled", "disabled", "selected", "disappear"} {
-		if strings.Contains(upper, " IS "+strings.ToUpper(st)) ||
+		stateToken := strings.ToUpper(st)
+		if strings.Contains(upper, " IS "+stateToken) ||
+			strings.Contains(upper, " IS NOT "+stateToken) ||
+			strings.Contains(upper, " ARE "+stateToken) ||
+			strings.Contains(upper, " ARE NOT "+stateToken) ||
 			strings.Contains(upper, " TO "+strings.ToUpper(st)) {
 			*state = st
 			break

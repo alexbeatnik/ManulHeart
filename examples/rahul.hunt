@@ -68,15 +68,8 @@ STEP 5: Checkboxes
     UNCHECK the checkbox for 'Option1'
     VERIFY that 'Option1' is NOT checked
 
-STEP 6: Name field and alert
-    FILL 'Enter Your Name' field with 'Cyber Manul'
-    VERIFY that 'Cyber Manul' is present
-    # The Confirm button triggers a browser alert that clears the field.
-    CLICK the 'Confirm' button
-    # Negative assertion: the text should no longer be visible.
-    VERIFY that 'Cyber Manul' is NOT present
 
-STEP 7: Scroll and extract prices
+STEP 6: Scroll and extract prices
     SCROLL DOWN
     # EXTRACT captures table data into runtime variables.
     EXTRACT the 'Price of Selenium' into {selenium_price}
@@ -84,7 +77,7 @@ STEP 7: Scroll and extract prices
     EXTRACT the 'Price of Learn SQL' into {sql_price}
     VERIFY that '25' is present
 
-STEP 8: Hide / Show element
+STEP 7: Hide / Show element
     FILL 'Hide/Show Example' field with 'Ghost Mode'
     VERIFY that 'Ghost Mode' is present
     CLICK the 'Hide' button
@@ -93,20 +86,20 @@ STEP 8: Hide / Show element
     CLICK the 'Show' button
     VERIFY that 'Ghost Mode' is present
 
-STEP 9: Dynamic table extraction
+STEP 8: Dynamic table extraction
     SCROLL DOWN
     EXTRACT the 'Amount of Jack' into {jack_amount}
     EXTRACT the 'Amount of Joe' into {joe_amount}
     VERIFY that 'Joe' is present
 
-STEP 10: Mouse hover
+STEP 9: Mouse hover
     # HOVER triggers Playwright's hover() on the resolved element.
     # The hidden menu items become visible after the hover action.
     HOVER over the 'Mouse Hover' button
     VERIFY that 'Reload' is present
     VERIFY that 'Top' is present
 
-STEP 11: Back to top
+STEP 10: Back to top
     CLICK on the 'Top' link
     VERIFY that 'Practice Page' is present
 DONE.

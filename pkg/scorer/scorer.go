@@ -670,6 +670,7 @@ var stopWords = map[string]bool{
 	"by": true, "or": true, "and": true, "with": true, "from": true,
 	"that": true, "this": true, "it": true, "its": true, "be": true,
 	"as": true, "are": true, "was": true, "were": true, "not": true,
+	"all": true,
 }
 
 // SignificantWords returns query words with length ≥ 2 and not a stop word.

@@ -340,11 +340,33 @@ func TestParseVerifySoftly(t *testing.T) {
 
 func TestParseVerifyChecked(t *testing.T) {
 	cmd := mustParseLine(t, "VERIFY that 'Monday' is checked")
-	if cmd.Type != CmdVerify {
+	if cmd.Type != CmdVerifyField {
 		t.Errorf("type = %s", cmd.Type)
 	}
 	if cmd.VerifyText != "Monday" {
 		t.Errorf("verifyText = %q", cmd.VerifyText)
+	}
+	if cmd.VerifyState != "checked" {
+		t.Errorf("verifyState = %q, want checked", cmd.VerifyState)
+	}
+	if cmd.VerifyNegated {
+		t.Error("VerifyNegated = true, want false")
+	}
+}
+
+func TestParseVerifyNotChecked(t *testing.T) {
+	cmd := mustParseLine(t, "VERIFY that 'Accept' is NOT checked")
+	if cmd.Type != CmdVerifyField {
+		t.Errorf("type = %s", cmd.Type)
+	}
+	if cmd.VerifyText != "Accept" {
+		t.Errorf("verifyText = %q", cmd.VerifyText)
+	}
+	if cmd.VerifyState != "checked" {
+		t.Errorf("verifyState = %q, want checked", cmd.VerifyState)
+	}
+	if !cmd.VerifyNegated {
+		t.Error("VerifyNegated = false, want true")
 	}
 }
 

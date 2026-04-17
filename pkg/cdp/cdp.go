@@ -361,6 +361,7 @@ func (c *Conn) SetChecked(ctx context.Context, id int, xpath string, checked boo
 		var el = (window.__manulReg && window.__manulReg[%[1]d]) || document.evaluate(%[2]q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
 		if (el) {
 			var targetEl = el;
+			var desiredAria = %[3]v ? 'true' : 'false';
 			// Refinement: find checkbox/radio if el is not one
 			if (el.tagName !== 'INPUT' || (el.type !== 'checkbox' && el.type !== 'radio')) {
 				if (el.tagName === 'LABEL' && el.htmlFor) {
@@ -420,6 +421,33 @@ func (c *Conn) SetChecked(ctx context.Context, id int, xpath string, checked boo
 						}
 						el.dispatchEvent(new Event('input', { bubbles: true }));
 						el.dispatchEvent(new Event('change', { bubbles: true }));
+					}
+				}
+			} else {
+				var role = (el.getAttribute('role') || '').toLowerCase();
+				if (role === 'checkbox' || role === 'radio' || role === 'switch') {
+					var current = el.getAttribute('aria-checked');
+					if (current !== desiredAria) {
+						if (typeof el.scrollIntoView === 'function') {
+							el.scrollIntoView({ block: 'center', inline: 'center' });
+						}
+						if (typeof el.focus === 'function') {
+							try { el.focus({ preventScroll: true }); } catch (_) { el.focus(); }
+						}
+
+						el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+						el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+						if (typeof el.click === 'function') {
+							el.click();
+						} else {
+							el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+						}
+
+						if (el.getAttribute('aria-checked') !== desiredAria) {
+							el.setAttribute('aria-checked', desiredAria);
+							el.dispatchEvent(new Event('input', { bubbles: true }));
+							el.dispatchEvent(new Event('change', { bubbles: true }));
+						}
 					}
 				}
 			}

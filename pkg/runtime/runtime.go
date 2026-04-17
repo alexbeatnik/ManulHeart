@@ -7,6 +7,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -355,6 +356,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			ranked = scorer.Rank(targetPath, cmd.TypeHint, string(mode), candidateElements, 5, anchor)
 			resolutionStrategy = "standard"
 		}
+		ranked = collapseNestedDuplicateRankedCandidates(ranked)
 		if contextualStrategy != "" {
 			resolutionStrategy = contextualStrategy + "+" + resolutionStrategy
 		}
@@ -422,6 +424,10 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			res.ActionValue = val
 			err = rt.page.SetInputValue(ctx, winner.ID, winner.XPath, val)
 			if err == nil {
+				if waitErr := rt.page.Wait(ctx, 300*time.Millisecond); waitErr != nil {
+					err = waitErr
+					break
+				}
 				rt.invalidateSnapshot()
 			}
 		case dsl.CmdClick:
@@ -480,7 +486,15 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			if e != nil {
 				err = fmt.Errorf("center calc: %w", e)
 			} else {
+				_ = rt.page.ScrollIntoView(ctx, winner.ID, winner.XPath)
 				err = rt.page.Hover(ctx, x, y)
+				if err == nil {
+					if waitErr := rt.page.Wait(ctx, 300*time.Millisecond); waitErr != nil {
+						err = waitErr
+						break
+					}
+					rt.invalidateSnapshot()
+				}
 			}
 		case dsl.CmdCheck, dsl.CmdUncheck:
 			checked := cmd.Type == dsl.CmdCheck
@@ -1714,6 +1728,111 @@ func appendRankedCandidates(res *explain.ExecutionResult, ranked []scorer.Ranked
 	for i := 0; i < limit; i++ {
 		res.RankedCandidates = append(res.RankedCandidates, ranked[i].Explain)
 	}
+}
+
+func collapseNestedDuplicateRankedCandidates(ranked []scorer.RankedCandidate) []scorer.RankedCandidate {
+	if len(ranked) < 2 {
+		return ranked
+	}
+	collapsed := make([]scorer.RankedCandidate, 0, len(ranked))
+	for _, candidate := range ranked {
+		merged := false
+		for i := range collapsed {
+			if !nestedDuplicateRankedCandidates(collapsed[i], candidate) {
+				continue
+			}
+			if preferMoreSpecificRankedCandidate(candidate, collapsed[i]) {
+				collapsed[i] = candidate
+			}
+			merged = true
+			break
+		}
+		if !merged {
+			collapsed = append(collapsed, candidate)
+		}
+	}
+	for i := range collapsed {
+		collapsed[i].Explain.Rank = i + 1
+		collapsed[i].Explain.Chosen = i == 0
+	}
+	return collapsed
+}
+
+func nestedDuplicateRankedCandidates(existing, candidate scorer.RankedCandidate) bool {
+	if math.Abs(existing.Explain.Score.Total-candidate.Explain.Score.Total) > 0.02 {
+		return false
+	}
+	textA := normalizeCandidateText(existing.Element.VisibleText)
+	textB := normalizeCandidateText(candidate.Element.VisibleText)
+	if textA == "" || textA != textB {
+		return false
+	}
+	if !(isXPathAncestor(existing.Element.XPath, candidate.Element.XPath) || isXPathAncestor(candidate.Element.XPath, existing.Element.XPath)) {
+		return false
+	}
+	return rectIntersectionRatio(existing.Element.Rect, candidate.Element.Rect) >= 0.85
+}
+
+func preferMoreSpecificRankedCandidate(candidate, existing scorer.RankedCandidate) bool {
+	candidateDepth := len(xpathParts(candidate.Element.XPath))
+	existingDepth := len(xpathParts(existing.Element.XPath))
+	if candidateDepth != existingDepth {
+		return candidateDepth > existingDepth
+	}
+	candidateArea := candidate.Element.Rect.Width * candidate.Element.Rect.Height
+	existingArea := existing.Element.Rect.Width * existing.Element.Rect.Height
+	if candidateArea != existingArea {
+		return candidateArea < existingArea
+	}
+	return candidate.Element.ID > existing.Element.ID
+}
+
+func normalizeCandidateText(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
+}
+
+func xpathParts(xpath string) []string {
+	var parts []string
+	for _, part := range strings.Split(xpath, "/") {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return parts
+}
+
+func isXPathAncestor(ancestor, descendant string) bool {
+	if ancestor == "" || descendant == "" || ancestor == descendant {
+		return false
+	}
+	ancestorParts := xpathParts(ancestor)
+	descendantParts := xpathParts(descendant)
+	if len(ancestorParts) >= len(descendantParts) {
+		return false
+	}
+	for i := range ancestorParts {
+		if ancestorParts[i] != descendantParts[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func rectIntersectionRatio(a, b dom.Rect) float64 {
+	left := math.Max(a.Left, b.Left)
+	top := math.Max(a.Top, b.Top)
+	right := math.Min(a.Right, b.Right)
+	bottom := math.Min(a.Bottom, b.Bottom)
+	if right <= left || bottom <= top {
+		return 0.0
+	}
+	intersection := (right - left) * (bottom - top)
+	areaA := a.Width * a.Height
+	areaB := b.Width * b.Height
+	if areaA <= 0 || areaB <= 0 {
+		return 0.0
+	}
+	return intersection / math.Min(areaA, areaB)
 }
 
 func selectionIsAmbiguous(ranked []scorer.RankedCandidate) bool {
