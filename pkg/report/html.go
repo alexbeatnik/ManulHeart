@@ -7,10 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/manulengineer/manulheart/pkg/explain"
 )
+
+// reportSeq is a monotonic counter appended to every generated filename so
+// parallel workers writing reports for hunts with the same title in the
+// same second do not silently overwrite each other.
+var reportSeq atomic.Uint64
 
 // GenerateHTML writes an HTML report file for the given HuntResult.
 // Returns the path to the written report file.
@@ -19,9 +25,10 @@ func GenerateHTML(result *explain.HuntResult, outDir string) (string, error) {
 		return "", fmt.Errorf("create report dir: %w", err)
 	}
 
-	filename := fmt.Sprintf("report_%s_%s.html",
+	filename := fmt.Sprintf("report_%s_%s_%06d.html",
 		sanitizeFilename(result.Title),
-		time.Now().Format("20060102_150405"))
+		time.Now().Format("20060102_150405"),
+		reportSeq.Add(1))
 	outPath := filepath.Join(outDir, filename)
 
 	var b strings.Builder

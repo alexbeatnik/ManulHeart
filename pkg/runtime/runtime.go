@@ -39,6 +39,15 @@ const (
 )
 
 // Runtime executes ManulHeart DSL hunts against a live browser page.
+//
+// CONCURRENCY CONTRACT: A Runtime instance is NOT safe for concurrent use.
+// Each goroutine executing hunts must own its own Runtime, Page, and
+// (typically) ChromeProcess. The DOM snapshot cache, variable store, and
+// sticky checkbox state are unguarded by design — sharing a Runtime across
+// goroutines will cause data races detectable by `go test -race`.
+//
+// To run multiple hunts in parallel, construct one Runtime per worker via
+// pkg/worker.NewWorker rather than sharing a single Runtime.
 type Runtime struct {
 	cfg    config.Config
 	page   browser.Page
@@ -50,6 +59,9 @@ type Runtime struct {
 }
 
 // New creates a new Runtime bound to the given Config, Page, and Logger.
+//
+// The returned Runtime is single-goroutine; see the type doc for the
+// concurrency contract. For parallel execution, use pkg/worker.
 func New(cfg config.Config, page browser.Page, logger *utils.Logger) *Runtime {
 	return &Runtime{
 		cfg:                  cfg,

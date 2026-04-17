@@ -21,7 +21,7 @@
 ## CLI INSTALL + VERSION
 
 > **CRITICAL — Read this first.**
-> Current documented ManulHeart CLI version is **0.0.0.1**.
+> Current documented ManulHeart CLI version is **0.0.0.2**.
 > When documenting install or usage, prefer the Go binary as a PATH-visible system command named `manul`
 > (for example `~/.local/bin/manul` or `/usr/local/bin/manul`) so editor extensions can invoke it directly.
 > Do not document the repo-local binary as the only intended integration path when the request is about running from tools or extensions.
@@ -47,23 +47,60 @@ It resolves DOM elements using a weighted heuristic `Scorer` and a JavaScript `T
 It is specifically designed to handle "Frontend Hell": zero-size inputs, hidden labels, custom div-based dropdowns, and paginated dynamic tables.
 
 **Stack:** Go 1.21+ · Chrome DevTools Protocol (CDP) · JavaScript (TreeWalker)
+**Dependencies:** exactly one — `github.com/gorilla/websocket`. Do NOT add new
+third-party deps (including `golang.org/x/sync`); implement equivalents inline.
 
 ## Repository layout
 
 ```text
 cmd/manul/                 CLI entry point (main.go)
 pkg/
-  cdp/                     CDP connection, browser management, and low-level interactions
+  cdp/                     CDP WebSocket transport, Conn lifecycle, Subscription handles
+  browser/                 Abstract browser/page interfaces + CDP backend + Chrome lifecycle
   dom/                     Element snapshotting and XPath resolution
   heuristics/              Scoring logic (Scorer), keyword analysis, and embedded JS probes
     snapshot_probe.js      TreeWalker DOM traversal (Shadow DOM aware)
     extract_data.js        Data extraction JS logic
     visible_text_probe.js  Deep text collection
-  runtime/                 Interpretation of .hunt files, execution state, and variable memory
+  runtime/                 Interpretation of .hunt files, execution state, variable memory
+                           (SINGLE-GOROUTINE — see "Concurrency contract" below)
+  worker/                  Worker, WorkerPool, PortAllocator (parallel execution substrate)
   explain/                 Score breakdown and debugging visualization
-  testutil/                Shared testing helpers
+  report/                  Per-hunt HTML report + aggregate index.html
+  utils/                   Logger (with per-worker prefix) + error types
 examples/                  Reference .hunt files (mega.hunt, sampler.hunt)
 ```
+
+## Concurrency contract (`0.0.0.2`+)
+
+> **CRITICAL — Read this before writing any code that touches `Runtime`, `Page`, or CDP.**
+
+1. **`runtime.Runtime` is single-goroutine.** The DOM snapshot cache, variable
+   store, and sticky checkbox states are unguarded by design. Sharing a
+   `Runtime` between goroutines is a data race, caught by `go test -race`.
+2. **To run in parallel, use `pkg/worker`.** A `Worker` owns exactly one
+   Chrome process, one `Page`, and one `Runtime`. Use `worker.NewWorker` for
+   real Chrome; `worker.AdoptWorker` for tests/embedding with a pre-built
+   `Page`.
+3. **`WorkerPool` dispatches hunts over a bounded jobs channel.** Options:
+   `Concurrency`, `Config`, `Allocator` (required), `ChromeOptions`,
+   `FailFast`. Result ordering matches input order; per-hunt errors live on
+   `PoolResult.Err`; the outer error is the first failure seen.
+4. **`PortAllocator` hands out CDP debug ports.** Call `Acquire()` / `Release()`
+   per worker. Two workers must never share a port — the allocator also
+   best-effort-checks the port is free at the OS level.
+5. **`cdp.Conn` is safe for concurrent use.** Writes are serialised by
+   `writeMu`; request IDs use `atomic.Int64`; `Close()` is idempotent via
+   `sync.Once`.
+6. **`cdp.Conn.Subscribe()` returns a `*Subscription`.** Callers MUST invoke
+   `sub.Close()` (typically `defer`). Do NOT use the legacy raw-channel form
+   — it no longer exists.
+7. **Extension registries (`RegisterCustomControl`, `RegisterGoCall`) are
+   package-global.** Register at process init, BEFORE spawning the pool.
+   Handlers must themselves be safe for concurrent invocation — every worker
+   may call the same handler simultaneously.
+8. **CI runs `go test -race` on every package.** Any new goroutine spawn,
+   shared map access, or channel plumbing must pass the race detector.
 
 ## Step format
 

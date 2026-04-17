@@ -17,9 +17,15 @@ const (
 )
 
 // Logger is a simple structured logger for ManulHeart execution output.
+//
+// A Logger may carry a prefix (e.g. "[w3] ") that is emitted before every
+// message. Use WithPrefix to derive a child logger that shares the parent's
+// writer and level. Prefixes are nested: WithPrefix(parent, "B") on a
+// parent already prefixed "A" yields a child whose lines start with "AB".
 type Logger struct {
 	level  LogLevel
 	writer io.Writer
+	prefix string
 }
 
 // NewLogger creates a new Logger writing to the given writer at the given level.
@@ -28,6 +34,20 @@ func NewLogger(level LogLevel, w io.Writer) *Logger {
 		w = os.Stdout
 	}
 	return &Logger{level: level, writer: w}
+}
+
+// WithPrefix returns a child logger sharing the parent's writer and level,
+// but prepending prefix to every message. If parent is nil, a default
+// stdout/info logger is used.
+func WithPrefix(parent *Logger, prefix string) *Logger {
+	if parent == nil {
+		parent = NewLogger(LogLevelInfo, nil)
+	}
+	return &Logger{
+		level:  parent.level,
+		writer: parent.writer,
+		prefix: parent.prefix + prefix,
+	}
 }
 
 // Info logs an informational message.
@@ -55,7 +75,7 @@ func (l *Logger) Error(format string, args ...any) {
 func (l *Logger) log(level, format string, args ...any) {
 	ts := time.Now().Format("15:04:05.000")
 	msg := fmt.Sprintf(format, args...)
-	fmt.Fprintf(l.writer, "[%s] [%s] %s\n", ts, level, msg)
+	fmt.Fprintf(l.writer, "[%s] [%s] %s%s\n", ts, level, l.prefix, msg)
 }
 
 // ResolutionError is returned when the targeting pipeline cannot resolve an element.
