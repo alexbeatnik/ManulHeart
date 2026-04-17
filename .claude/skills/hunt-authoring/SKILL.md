@@ -103,6 +103,65 @@ set); a circular import is a parse error.
 - `VERIFY 'Heading' field has text '...'` — for text content
 - `VERIFY SOFTLY that '...' is present` — warning-only, hunt continues
 
+## Advanced / less common commands
+
+### Keyboard input
+
+```hunt
+PRESS Enter
+PRESS Escape
+PRESS Control+A
+PRESS Tab ON 'Username'    # fires key event on a specific element
+```
+
+### Network wait
+
+```hunt
+WAIT FOR RESPONSE "api/users"
+```
+
+Blocks until a network response URL matching the substring is received.
+Use after form submits that trigger XHR/fetch requests to avoid polling
+with `WAIT N` fixed delays.
+
+### Drag-and-drop and file upload
+
+```hunt
+DRAG 'Card A' and drop onto 'Column B'
+UPLOAD '/path/to/file.png' to 'Avatar Upload'
+```
+
+`DRAG` uses CDP mouse events with an HTML5 `DragEvent` fallback.
+`UPLOAD` resolves the file-input element via the scorer and sets its
+value directly — no OS file-picker involved.
+
+### Data extraction
+
+```hunt
+EXTRACT the 'Price' into {total}
+PRINT 'Current price: {total}'
+```
+
+`EXTRACT` is table-aware: if the target resolves inside a `<table>`, it
+uses the column header as context. The extracted value is stored as a
+string variable reachable via `{total}` for the rest of the hunt.
+
+### Debugging inside a hunt
+
+```hunt
+DEBUG VARS    # dumps all current runtime variables to the console
+PAUSE         # enters interactive breakpoint; no-op unless --debug is active
+```
+
+Run with `--debug` for interactive step-by-step execution with breakpoints:
+
+```bash
+manul file.hunt --debug
+```
+
+`PAUSE` halts execution and prompts for input — useful when developing a
+hunt against a live browser. Remove `PAUSE` lines before committing.
+
 ## Common pitfalls
 
 | Symptom | Cause | Fix |

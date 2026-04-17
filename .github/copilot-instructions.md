@@ -20,7 +20,7 @@
 ## CLI INSTALL + VERSION
 
 > **CRITICAL — Read this first.**
-> Current documented ManulHeart CLI version is **0.0.0.3**.
+> Current documented ManulHeart CLI version is **0.0.0.4**.
 > When documenting install or usage, prefer the Go binary as a PATH-visible system command named `manul`
 > (for example `~/.local/bin/manul` or `/usr/local/bin/manul`) so editor extensions can invoke it directly.
 > Do not document the repo-local binary as the only intended integration path when the request is about running from tools or extensions.
@@ -70,7 +70,7 @@ pkg/
 examples/                  Reference .hunt files (mega.hunt, sampler.hunt)
 ```
 
-## Concurrency contract (`0.0.0.3`+)
+## Concurrency contract (`0.0.0.4`+)
 
 > **CRITICAL — Read this before writing any code that touches `Runtime`, `Page`, or CDP.**
 

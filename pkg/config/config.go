@@ -20,6 +20,11 @@ type Config struct {
 	// DebugMode pauses execution between each DSL command for interactive stepping.
 	DebugMode bool
 
+	// BreakLines is a list of .hunt file line numbers (1-based) that should act
+	// as breakpoints. When DebugMode is true and a command's source line matches,
+	// execution pauses before that command. Empty slice means pause on every step.
+	BreakLines []int
+
 	// ExplainMode prints a full scoring breakdown for every targeted element.
 	ExplainMode bool
 

@@ -2,7 +2,7 @@
 
 A deterministic, DSL-first browser automation runtime in Go.
 
-Current alpha version: `0.0.0.3`.
+Current alpha version: `0.0.0.4`.
 
 ManulHeart executes `.hunt` files using plain-English commands, DOM intelligence,
 heuristic element resolution, and structured explainability.
@@ -30,35 +30,40 @@ Single dependency: `gorilla/websocket`. Pure Go. ~476 tests.
 
 ### 1. Build
 
-```bash
-cd ManulHeart
-go build -o manul ./cmd/manul
-```
-
-### 2. Install `manul` as a system command
-
-For editor integrations and extensions, the recommended setup is to put the
-Go binary on your `PATH` so the runtime is available as a normal shell command.
-
-User-local install:
+You can build the `manul` binary using the provided `Makefile`:
 
 ```bash
-install -m 0755 manul ~/.local/bin/manul
+make build
 ```
 
-System-wide install:
+This creates a `manul` executable in the current directory.
 
+### 2. Install
+
+To use `manul` as a system-wide command, install it to your `PATH`.
+
+**User-local install** (installs to `~/.local/bin`):
 ```bash
-sudo install -m 0755 manul /usr/local/bin/manul
+make install
 ```
 
-Verify:
+**System-wide install** (installs to `/usr/local/bin`, requires `sudo`):
+```bash
+make install-system
+```
 
+Verify the installation:
 ```bash
 manul --help
 ```
 
-### 3. Run a hunt file
+### 3. Other Commands
+
+- `make test` — Run all tests.
+- `make clean` — Remove the compiled binary.
+- `make uninstall` — Remove the binary from both local and system paths.
+
+### 4. Run a hunt file
 
 ```bash
 manul examples/saucedemo.hunt
@@ -67,20 +72,20 @@ manul examples/saucedemo.hunt
 Chrome is launched automatically with remote debugging, the hunt is executed,
 and Chrome is closed when done. No manual browser setup required.
 
-### 4. Run all hunt files in a directory
+### 5. Run all hunt files in a directory
 
 ```bash
 manul examples/
 manul .
 ```
 
-### 5. Run headless
+### 6. Run headless
 
 ```bash
 manul examples/saucedemo.hunt --headless
 ```
 
-### 6. Connect to existing Chrome
+### 7. Connect to existing Chrome
 
 If you already have Chrome running with `--remote-debugging-port=9222`:
 
@@ -90,13 +95,13 @@ manul examples/saucedemo.hunt --cdp http://127.0.0.1:9222
 
 When `--cdp` is set, the driver skips auto-launch and connects to the running instance.
 
-### 7. Run a single step (requires running Chrome)
+### 8. Run a single step (requires running Chrome)
 
 ```bash
 manul run-step "Click the 'Login' button" --cdp http://127.0.0.1:9222
 ```
 
-### 8. Verbose / JSON output
+### 9. Verbose / JSON output
 
 ```bash
 manul examples/saucedemo.hunt --verbose
@@ -247,15 +252,32 @@ FOR EACH {item} IN {items}:
 Conditions support: element present/not present, `{var} == 'value'`,
 `{var} != 'value'`, `{var} contains 'text'`, truthy variable checks.
 
-### Debugging
+### Interactive Debugger
+
+ManulHeart includes a powerful TTY-based interactive debugger. It can be triggered in three ways:
+1. **Global Debug Mode**: Run `manul` with the `--debug` flag to pause before every step.
+2. **Breakpoints**: Use `--break-lines 12,45` to pause only at specific line numbers.
+3. **DSL Pause**: Insert the `PAUSE` command anywhere in your `.hunt` file.
+
+When paused, you have access to the following commands in your terminal:
+
+- `next` (or Enter): Execute the current step and pause at the next one.
+- `continue`: Resume execution and skip all future pauses.
+- `explain`: Show the top 5 candidates for the current targeting query with full score breakdowns.
+- `highlight <xpath>`: Outline a specific element in the browser with a magenta highlight.
+- `debug-vars` (or `DEBUG VARS` in DSL): Dump all currently set variables and their scopes.
+- `abort`: Stop the hunt execution immediately.
+
+While paused, a **debug control panel** is also injected into the browser page, allowing you to `Continue` or `Abort` directly from the UI.
+
+#### Debugging Commands in DSL
 
 ```
 PAUSE
 DEBUG VARS
 ```
 
-`PAUSE` enters interactive mode (requires `--debug`). `DEBUG VARS` dumps
-all runtime variables.
+`PAUSE` enters the interactive debugger. `DEBUG VARS` prints a formatted table of all variables in the `ROW`, `STEP`, `MISSION`, and `GLOBAL` scopes to the console.
 
 ### File structure
 
@@ -384,6 +406,19 @@ func runInParallel(ctx context.Context, hunts []*dsl.Hunt) error {
 
 ---
 
+## Development Guides
+
+For developers working on the ManulHeart engine, we provide detailed "Skill Guides" covering core systems:
+
+- [**Scoring & Heuristics**](.claude/skills/scoring-heuristics/SKILL.md) — How element targeting works.
+- [**Concurrency Rules**](.claude/skills/concurrency-rules/SKILL.md) — Thread-safety and the worker pool.
+- [**Adding DSL Commands**](.claude/skills/adding-dsl-commands/SKILL.md) — How to extend the natural language syntax.
+- [**Go Calls & Extensions**](.claude/skills/extensions-and-go-calls/SKILL.md) — Implementing custom logic in Go.
+- [**Testing ManulHeart**](.claude/skills/testing-manulheart/SKILL.md) — Best practices for unit and integration tests.
+- [**Hunt Authoring**](.claude/skills/hunt-authoring/SKILL.md) — Writing effective `.hunt` files.
+
+---
+
 ## Project Status
 
 Alpha. The core engine covers:
@@ -392,7 +427,7 @@ import system (including USE/CALL expansion), 4-channel scoring, contextual
 qualifiers (NEAR, ON HEADER/FOOTER, INSIDE), Shadow DOM support, 3-pass
 proximity resolution, HTML reporting, screenshots, debug mode, explain mode.
 
-As of `0.0.0.3` the engine also exposes a **parallel-execution substrate**:
+As of `0.0.0.4` the engine also exposes a **parallel-execution substrate**:
 a goroutine-safe CDP transport, a `pkg/worker` package with `Worker`,
 `WorkerPool`, and `PortAllocator`, per-worker log prefixes, and collision-proof
 report filenames. Every test (CDP, runtime, scorer, worker) runs under
@@ -402,7 +437,7 @@ Not yet implemented: a CLI flag to expose the worker pool end-to-end (the API
 is there, the CLI is still single-threaded), LLM-based fallback,
 scan/record subcommands.
 
-**Documented CLI version:** `0.0.0.3`.
+**Documented CLI version:** `0.0.0.4`.
 
 **Recommended install target:** expose the binary as a PATH command named `manul`
 for editor extensions and automation tooling.
@@ -410,6 +445,15 @@ for editor extensions and automation tooling.
 ---
 
 ## What's New
+
+### `0.0.0.4` — interactive debugger & skill guides
+
+- **Interactive Runtime Debugger** — Added a TTY-based interactive debugger that can be triggered via `--debug` or the `PAUSE` command. Features include step-by-step execution, browser modal controls, element highlighting (`highlight <xpath>`), and scoring explanations (`explain`).
+- **Execution Breakpoints** — Added the `--break-lines` flag to pause execution only at specific lines in the `.hunt` file.
+- **Expanded scoring-heuristics skill** — Documented the dual-mode proximity signal: base weight `0.10` (XPath-depth DOM ancestry, always active) vs. contextual override `1.50` (Euclidean pixel distance from anchor, active under `NEAR`/`INSIDE`). Added inline comments and a 3-pass targeting pipeline explanation for the `ThresholdPass3*` constants.
+- **Expanded testing skill** — Added an explicit callout for the two `MockPage` fields most commonly left at zero: `IsVisible` (silently drops elements from the visibility pre-filter) and `Rect` (required by the proximity scorer for `NEAR`/`INSIDE` path; zero value flattens the proximity channel).
+- **Expanded hunt-authoring skill** — Added an `## Advanced / less common commands` section covering keyboard input (`PRESS`), `WAIT FOR RESPONSE`, `DRAG`/`UPLOAD`, `EXTRACT`/`PRINT`, and `DEBUG VARS`/`PAUSE`.
+- **Expanded concurrency-rules skill** — Added `## Per-worker logging` section documenting `utils.WithPrefix` for `[wN]`-prefixed child loggers; extended `## Key files` to include `pkg/utils/logger.go`.
 
 ### `0.0.0.3` — logging & pool refactor
 

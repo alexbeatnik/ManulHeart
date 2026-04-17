@@ -97,7 +97,7 @@ Scoring channels and weights:
 | id        | 0.25   | html id (with space → dash/underscore variants) |
 | semantic  | 0.60   | tag/role alignment, type hint match, cross-mode penalty |
 | penalty   | ×mult  | disabled ×0.0, hidden ×0.1 |
-| proximity | 0.10   | XPath depth (shallower = small bonus) |
+| proximity | 1.50   | Euclidean distance to anchor (NEAR/INSIDE) or XPath depth (base) |
 
 ### `pkg/browser`
 

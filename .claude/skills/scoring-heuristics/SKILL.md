@@ -37,7 +37,7 @@ var Weights = WeightsConfig{
     Semantic:  0.60,  // type alignment (mode=clickable → prefer button)
     Text:      0.45,  // visible text, aria-label, placeholder
     ID:        0.25,  // id, name, data-qa, data-testid
-    Proximity: 0.10,  // Euclidean + DOM ancestry (bumped for NEAR/INSIDE)
+    Proximity: 0.10,  // base weight (XPath depth / DOM ancestry); overridden to 1.5 for NEAR/INSIDE
 }
 ```
 
@@ -45,6 +45,14 @@ The 4 channels are independent and combined linearly. `Total` is the sum.
 Never collapse channels into a single pre-combined score — every channel
 is printed by `--explain` and the breakdown is the project's core
 differentiator.
+
+> **Proximity has two modes.** The `0.10` base weight applies unconditionally
+> using XPath-depth DOM ancestry closeness — a structural signal that is
+> always present. When a `NEAR` or `INSIDE` qualifier is active, the runtime
+> overrides the proximity weight to `1.5` and switches to Euclidean pixel
+> distance from the resolved anchor element. These are fundamentally different
+> signals, not a "bump" of the same one. Never assume proximity is negligible
+> just because the base weight is small — in contextual mode it dominates.
 
 ## Adding a new scoring signal
 
@@ -118,10 +126,23 @@ From [pkg/runtime/runtime.go](../../../pkg/runtime/runtime.go):
 ThresholdHighConfidence = 0.15 // strong heuristic match
 ThresholdAmbiguous      = 0.03 // minimum for heuristic choice
 ThresholdRunnerUpGap    = 0.02 // winner must beat runner-up by this
-ThresholdPass3Total     = 0.12
-ThresholdPass3Proximity = 0.18
-ThresholdPass3Gap       = 0.04
+ThresholdPass3Total     = 0.12 // Pass 3 min total score to accept a refined target
+ThresholdPass3Proximity = 0.18 // Pass 3 min proximity score (Euclidean to anchor)
+ThresholdPass3Gap       = 0.04 // Pass 3 winner must beat runner-up by this
 ```
+
+The `Pass3` constants govern the **3-pass targeting strategy** used for
+restrictive interaction modes (checkboxes, radios, selects, hidden inputs):
+
+- **Pass 1 (strict match):** finds elements of the requested type matching
+  the label directly. If a high-confidence winner is found, stops here.
+- **Pass 2 (anchor search):** finds a non-interactive element (e.g. a `<td>`
+  containing the text) to use as a spatial anchor.
+- **Pass 3 (refined target):** searches for the actual interactive element
+  near the Pass 2 anchor. Accepts it only if the total score exceeds
+  `ThresholdPass3Total`, proximity exceeds `ThresholdPass3Proximity`, and
+  the winner beats the runner-up by `ThresholdPass3Gap`. Otherwise, targets
+  the anchor itself and lets the action handler do local refinement.
 
 Changing a threshold requires running the full synthetic suite and
 checking that no previously-resolved case silently becomes "ambiguous".

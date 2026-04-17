@@ -5,8 +5,9 @@ description: Enforce ManulHeart's concurrency contract when editing runtime/, cd
 
 # ManulHeart concurrency contract
 
-Codified in `0.0.0.2` after an architectural review. Every rule here has a
-test under `-race`; violations trip CI.
+Established in `0.0.0.2`, extended in `0.0.0.3` with `RunHuntsInParallel`
+and per-worker log prefixes. Every rule here has a test under `-race`;
+violations trip CI.
 
 ## Hard invariants
 
@@ -21,6 +22,10 @@ test under `-race`; violations trip CI.
    - `worker.NewWorker` — owns a real Chrome + Page + Runtime.
    - `worker.AdoptWorker` — wraps an existing `browser.Page` (tests / embed).
    - `worker.NewPool` — bounded concurrency, jobs channel, first-error tracking.
+   - `worker.RunHuntsInParallel(ctx, cfg, hunts, n, logger)` — zero-config
+     convenience wrapper that creates a pool, runs hunts, and returns results
+     in input order. Use this for quick fan-out; use `NewPool` directly when
+     you need `FailFast` or custom `ChromeOptions`.
 
 3. **Ports go through `worker.PortAllocator`.** No hardcoded 9222, no
    parallel-safe assumption without `Acquire()` / `Release()`.
@@ -100,6 +105,18 @@ Quick smell test:
 - `sync.Map` → almost always the wrong choice here; prefer `RWMutex + map`
   for the few genuinely shared structures we have.
 
+## Per-worker logging
+
+Derive a child logger for each worker using `utils.WithPrefix`. It shares the
+parent's writer and level but prepends a `[wN]` tag to every line:
+
+```go
+workerLog := utils.WithPrefix(parentLogger, fmt.Sprintf("[w%d] ", id))
+```
+
+All `pkg/worker` code routes through this prefix — do not construct a fresh
+`NewLogger` per worker (that would split the output stream).
+
 ## Key files
 
 - [pkg/cdp/conn.go](../../../pkg/cdp/conn.go) — transport; `Conn`, `Subscription`.
@@ -107,3 +124,5 @@ Quick smell test:
 - [pkg/worker/pool.go](../../../pkg/worker/pool.go) — `WorkerPool` dispatch.
 - [pkg/worker/portalloc.go](../../../pkg/worker/portalloc.go) — `PortAllocator`.
 - [pkg/runtime/extensions.go](../../../pkg/runtime/extensions.go) — registry freeze policy.
+- [pkg/utils/logger.go](../../../pkg/utils/logger.go) — `WithPrefix(parent, "[wN] ")` for
+  per-worker log prefixes; `NewLogger(logFile)` for dual stdout+ANSI-stripped file output.

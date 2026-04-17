@@ -56,6 +56,11 @@ type Runtime struct {
 
 	cachedElements       []dom.ElementSnapshot
 	stickyCheckboxStates map[string]bool
+
+	// debug state — only populated when cfg.DebugMode is true
+	breakLines      map[int]bool             // source line numbers that are breakpoints; empty = pause every step
+	debugContinue   bool                     // when true, skip all future pauses
+	lastExplainData []scorer.RankedCandidate // cached ranking for the "explain" debug command
 }
 
 // New creates a new Runtime bound to the given Config, Page, and Logger.
@@ -63,13 +68,18 @@ type Runtime struct {
 // The returned Runtime is single-goroutine; see the type doc for the
 // concurrency contract. For parallel execution, use pkg/worker.
 func New(cfg config.Config, page browser.Page, logger *utils.Logger) *Runtime {
-	return &Runtime{
+	rt := &Runtime{
 		cfg:                  cfg,
 		page:                 page,
 		logger:               logger,
 		vars:                 NewScopedVariables(),
 		stickyCheckboxStates: make(map[string]bool),
+		breakLines:           make(map[int]bool),
 	}
+	for _, ln := range cfg.BreakLines {
+		rt.breakLines[ln] = true
+	}
+	return rt
 }
 
 // RunHunt executes all commands in hunt against the bound page.
@@ -144,9 +154,15 @@ func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRe
 
 func (rt *Runtime) runCommands(ctx context.Context, commands []dsl.Command, huntRes *explain.HuntResult) (int, int, error) {
 	passed, failed := 0, 0
-	for _, cmd := range commands {
+	for i, cmd := range commands {
 		if err := ctx.Err(); err != nil {
 			return passed, failed, fmt.Errorf("runtime: context cancelled: %w", err)
+		}
+
+		if rt.cfg.DebugMode && rt.shouldPause(cmd) {
+			if dbgErr := rt.debugPrompt(ctx, cmd, i); dbgErr != nil {
+				return passed, failed, dbgErr
+			}
 		}
 
 		rt.logger.ActionStart(cmd.Raw)
@@ -280,6 +296,17 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 
 	case dsl.CmdCallGo:
 		res.ActionValue, res.ProbeMetadata, err = rt.executeCallGo(ctx, cmd)
+ 
+	case dsl.CmdPause:
+		// Force an interactive debug prompt even if --debug is not set globally.
+		// Note: this only works in TTY mode.
+		rt.logger.Info("PAUSE command encountered")
+		err = rt.debugPrompt(ctx, cmd, -1)
+ 
+	case dsl.CmdDebugVars:
+		vars := rt.vars.String()
+		rt.logger.Info(vars)
+		res.ActionValue = vars
 
 	case dsl.CmdSet:
 		if cmd.SetVar != "" {
