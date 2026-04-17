@@ -102,7 +102,7 @@ func NewWorker(ctx context.Context, opts Options) (*Worker, error) {
 		if cfg.Verbose {
 			level = utils.LogLevelDebug
 		}
-		logger = utils.NewLogger(level, nil)
+		logger = utils.NewLogger(nil).WithLevel(level)
 	}
 	id := opts.ID
 	if id == 0 {
@@ -133,7 +133,7 @@ func AdoptWorker(id int, cfg config.Config, page browser.Page, logger *utils.Log
 		if cfg.Verbose {
 			level = utils.LogLevelDebug
 		}
-		logger = utils.NewLogger(level, nil)
+		logger = utils.NewLogger(nil).WithLevel(level)
 	}
 	if id == 0 {
 		id = nextSyntheticWorkerID()

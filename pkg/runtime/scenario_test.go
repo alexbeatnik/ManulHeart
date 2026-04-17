@@ -26,7 +26,7 @@ func TestRuntime_ConditionalScenario(t *testing.T) {
 	mock.Elements[0].Normalize()
 
 	cfg := config.Config{}
-	logger := utils.NewLogger(utils.LogLevelInfo, nil)
+	logger := utils.NewLogger(nil)
 	rt := New(cfg, mock, logger)
 	ctx := context.Background()
 
@@ -82,7 +82,7 @@ func TestRuntime_VariableExtractionScenario(t *testing.T) {
 	mock.Elements[0].Normalize()
 
 	cfg := config.Config{}
-	logger := utils.NewLogger(utils.LogLevelInfo, nil)
+	logger := utils.NewLogger(nil)
 	rt := New(cfg, mock, logger)
 	ctx := context.Background()
 

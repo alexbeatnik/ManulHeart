@@ -108,17 +108,22 @@ func (rt *Runtime) runCommands(ctx context.Context, commands []dsl.Command, hunt
 			return passed, failed, fmt.Errorf("runtime: context cancelled: %w", err)
 		}
 
+		rt.logger.ActionStart(cmd.Raw)
+		stepStart := time.Now()
 		stepResult, err := rt.executeCommand(ctx, cmd)
+		durMs := time.Since(stepStart).Milliseconds()
+
 		if huntRes != nil {
 			huntRes.Results = append(huntRes.Results, stepResult)
 		}
 		if err != nil {
 			failed++
+			rt.logger.ActionFail(err)
 			rt.logger.Error("step failed (%s): %v", cmd.Raw, err)
 			return passed, failed, err
-		} else {
-			passed++
 		}
+		rt.logger.ActionPass(float64(durMs) / 1000)
+		passed++
 	}
 	return passed, failed, nil
 }
@@ -225,7 +230,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 	case dsl.CmdPrint:
 		text := rt.resolveVariables(cmd.PrintText)
 		res.ActionValue = text
-		rt.logger.Info("PRINT: %s", text)
+		rt.logger.ActionDetail("📢", "PRINT: %s", text)
 
 	case dsl.CmdWaitForResponse:
 		pattern := rt.resolveVariables(cmd.WaitResponseURL)
@@ -410,12 +415,18 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 
 		// Anti-phantom guard for inputs/selects (soft warning for now)
 		if !rt.passesAntiPhantomGuard(string(mode), targetPath, best.Element) {
-			rt.logger.Info("⚠️  Anti-phantom guard: heuristic choice %q for target %q has low keyword correlation.", best.Element.Tag, targetPath)
+			rt.logger.ActionDetail("👻", "ANTI-PHANTOM GUARD: heuristic choice %q for target %q has low keyword correlation.", best.Element.Tag, targetPath)
 		}
 
 		winner := best.Element
-		rt.logger.Info("Target '%s' resolved to: %s (ID=%d, Score=%.3f)",
-			targetPath, winner.Name, winner.ID, best.Explain.Score.Total)
+		conf := best.Explain.Score.Total
+		label := "Context reuse"
+		if conf >= ThresholdHighConfidence {
+			label = "High confidence match"
+		} else if conf >= ThresholdAmbiguous {
+			label = "Keyword match"
+		}
+		rt.logger.HeuristicDetail(conf, fmt.Sprintf("%s — '%s' → %s (ID=%d)", label, targetPath, winner.Name, winner.ID))
 
 		if rt.cfg.ExplainMode {
 			rt.logger.Info("  Breakdown: Text=%.2f, Attr=%.2f, Sem=%.2f, Prox=%.2f",
@@ -437,6 +448,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			res.ActionValue = val
 			err = rt.page.SetInputValue(ctx, winner.ID, winner.XPath, val)
 			if err == nil {
+				rt.logger.ActionDetail("⌨️", "Typed %q → %q", val, winner.Name)
 				if waitErr := rt.page.Wait(ctx, 300*time.Millisecond); waitErr != nil {
 					err = waitErr
 					break
@@ -1018,14 +1030,14 @@ func (rt *Runtime) passesAntiPhantomGuard(mode string, query string, el dom.Elem
 			}
 		}
 	}
-	rt.logger.Info("Anti-phantom guard rejected element ID=%d signals=%v for query words=%v", el.ID, signals, words)
+	rt.logger.ActionDetail("👻", "ANTI-PHANTOM GUARD: heuristic choice %q for target %q has low keyword correlation.", el.Tag, query)
 	return false
 }
 
 func (rt *Runtime) autoAnnotateNavigate(ctx context.Context, url string) {
 	// In a real implementation, this would write to the hunt file.
 	// For now, we log it.
-	rt.logger.Info("📍 Auto-Nav: %s", url)
+	rt.logger.ActionDetail("📍", "Auto-Nav: %s", url)
 }
 
 func resolveRestrictiveCandidates(targetPath, typeHint string, mode dsl.InteractionMode, elements []dom.ElementSnapshot, anchor *scorer.AnchorContext, logger *utils.Logger) ([]scorer.RankedCandidate, string) {

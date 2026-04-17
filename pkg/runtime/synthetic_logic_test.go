@@ -19,7 +19,7 @@ func TestRuntime_Conditionals(t *testing.T) {
 	mock.Elements[0].Normalize()
 
 	cfg := config.Config{}
-	logger := utils.NewLogger(utils.LogLevelInfo, nil)
+	logger := utils.NewLogger(nil)
 	rt := New(cfg, mock, logger)
 	ctx := context.Background()
 
@@ -52,7 +52,7 @@ func TestRuntime_Conditionals(t *testing.T) {
 func TestRuntime_Loops(t *testing.T) {
 	mock := &MockPage{}
 	cfg := config.Config{}
-	logger := utils.NewLogger(utils.LogLevelInfo, nil)
+	logger := utils.NewLogger(nil)
 	rt := New(cfg, mock, logger)
 	ctx := context.Background()
 
