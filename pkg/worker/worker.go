@@ -160,10 +160,13 @@ func (w *Worker) Runtime() *runtime.Runtime { return w.runtime }
 func (w *Worker) Page() browser.Page { return w.page }
 
 // Run executes a parsed hunt against the worker's page.
+// Block-level logging (BlockStart/BlockPass/BlockFail) is emitted per STEP
+// group inside runtime.RunHunt, so this method only adds the mission header.
 func (w *Worker) Run(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntResult, error) {
 	if w == nil || w.runtime == nil {
 		return nil, errors.New("worker: zero-value Worker; use NewWorker or AdoptWorker")
 	}
+	w.logger.Startup("heuristics", w.cfg.CDPEndpoint)
 	return w.runtime.RunHunt(ctx, hunt)
 }
 

@@ -180,3 +180,21 @@ func (p *WorkerPool) Run(ctx context.Context, hunts []*dsl.Hunt) ([]PoolResult, 
 	}
 	return results, firstErr
 }
+
+// RunHuntsInParallel is a zero-config convenience wrapper around WorkerPool.Run.
+// It constructs an internal PortAllocator over [9222, 9222+concurrency*2) and
+// runs all hunts. For FailFast, custom port ranges, or a mock WorkerFactory use
+// NewPool directly.
+func RunHuntsInParallel(ctx context.Context, cfg config.Config, hunts []*dsl.Hunt, concurrency int, baseLogger *utils.Logger) ([]PoolResult, error) {
+	alloc := NewPortAllocator(9222, 9222+concurrency*2)
+	pool, err := NewPool(PoolOptions{
+		Concurrency: concurrency,
+		Config:      cfg,
+		Logger:      baseLogger,
+		Allocator:   alloc,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pool.Run(ctx, hunts)
+}

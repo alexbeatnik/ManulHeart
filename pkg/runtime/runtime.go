@@ -74,12 +74,14 @@ func New(cfg config.Config, page browser.Page, logger *utils.Logger) *Runtime {
 
 // RunHunt executes all commands in hunt against the bound page.
 // It returns an explain.HuntResult summarising the execution.
+// Commands are grouped by their StepBlock label; each group emits
+// BlockStart / BlockPass / BlockFail so the output mirrors the
+// per-STEP structure of the .hunt file.
 func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntResult, error) {
 	if hunt == nil {
 		return nil, fmt.Errorf("runtime: nil hunt")
 	}
 
-	// Initialize runtime variables from hunt @vars (Global level)
 	for k, v := range hunt.Vars {
 		rt.vars.Set(k, v, LevelGlobal)
 	}
@@ -90,15 +92,54 @@ func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRe
 		Context:  hunt.Context,
 	}
 
+	// Group consecutive commands by StepBlock, preserving order.
+	type stepGroup struct {
+		name     string
+		commands []dsl.Command
+	}
+	var groups []stepGroup
+	defaultLabel := hunt.Title
+	if defaultLabel == "" {
+		defaultLabel = "Mission"
+	}
+	for _, cmd := range hunt.Commands {
+		label := cmd.StepBlock
+		if label == "" {
+			label = defaultLabel
+		}
+		if len(groups) == 0 || groups[len(groups)-1].name != label {
+			groups = append(groups, stepGroup{name: label})
+		}
+		groups[len(groups)-1].commands = append(groups[len(groups)-1].commands, cmd)
+	}
+
 	start := time.Now()
-	passed, failed, err := rt.runCommands(ctx, hunt.Commands, result)
+	passed, failed := 0, 0
+	var firstErr error
+
+	for _, g := range groups {
+		rt.logger.BlockStart(g.name)
+		p, f, err := rt.runCommands(ctx, g.commands, result)
+		passed += p
+		failed += f
+		if err != nil || f > 0 {
+			rt.logger.BlockFail(g.name)
+			if firstErr == nil {
+				firstErr = err
+			}
+			// Stop at first failed block (mirrors Python behaviour).
+			break
+		}
+		rt.logger.BlockPass(g.name)
+	}
+
 	result.TotalDuration = time.Since(start)
 	result.TotalDurationMS = result.TotalDuration.Milliseconds()
 	result.TotalSteps = passed + failed
 	result.Passed = passed
 	result.Failed = failed
 	result.Success = failed == 0
-	return result, err
+	return result, firstErr
 }
 
 func (rt *Runtime) runCommands(ctx context.Context, commands []dsl.Command, huntRes *explain.HuntResult) (int, int, error) {
