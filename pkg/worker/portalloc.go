@@ -77,8 +77,9 @@ func (a *PortAllocator) Release(port int) {
 	delete(a.inUse, port)
 }
 
-// portFree returns true if no process is currently listening on port.
-// Tries IPv4 first; failure on either means the port is unavailable.
+// portFree returns true if the port can be bound on the IPv4 loopback
+// address (127.0.0.1). Failure to bind there means the port is treated
+// as unavailable.
 func portFree(port int) bool {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	l, err := net.Listen("tcp", addr)

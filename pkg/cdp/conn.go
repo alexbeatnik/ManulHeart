@@ -159,7 +159,10 @@ func (c *Conn) Close() error {
 }
 
 func (c *Conn) readLoop() {
-	defer c.cancel()
+	// Calling Close() (idempotent via closeOnce) ensures subscription channels
+	// are closed when the read loop exits for any reason — including unexpected
+	// WebSocket errors from the remote end.
+	defer c.Close()
 	for {
 		_, msg, err := c.ws.ReadMessage()
 		if err != nil {
@@ -204,9 +207,23 @@ func (c *Conn) readLoop() {
 // Subscribe returns a handle to a CDP event subscription. The caller MUST
 // invoke Close() on the returned Subscription when done; failing to do so
 // leaks one buffered channel per orphaned subscription.
+//
+// If the connection is already closed, Subscribe returns a Subscription whose
+// channel is already closed, so any receive on sub.C() exits immediately.
 func (c *Conn) Subscribe() *Subscription {
 	c.subsMu.Lock()
 	defer c.subsMu.Unlock()
+	// Check ctx.Done() while holding subsMu. Close() calls cancel() before
+	// acquiring subsMu, so this check is the safe seam: either we see Done
+	// and return a pre-closed channel, or Close() will find and close our
+	// newly registered channel when it acquires the lock next.
+	select {
+	case <-c.ctx.Done():
+		ch := make(chan *msgResp)
+		close(ch)
+		return &Subscription{ch: ch, conn: c}
+	default:
+	}
 	c.subsSeq++
 	id := c.subsSeq
 	ch := make(chan *msgResp, eventChanCap)

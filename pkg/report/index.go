@@ -105,7 +105,7 @@ func GenerateIndex(summaries []RunSummary, outDir string) (string, error) {
 	b.WriteString(fmt.Sprintf("<div class=\"stat total\"><div class=\"num\">%d</div>Steps</div>\n", totalSteps))
 	b.WriteString(fmt.Sprintf("<div class=\"stat pass\"><div class=\"num\">%d</div>Steps Passed</div>\n", totalStepsPassed))
 	b.WriteString(fmt.Sprintf("<div class=\"stat fail\"><div class=\"num\">%d</div>Steps Failed</div>\n", totalStepsFailed))
-	b.WriteString(fmt.Sprintf("<div class=\"stat time\"><div class=\"num\">%.1fs</div>Wall</div>\n",
+	b.WriteString(fmt.Sprintf("<div class=\"stat time\"><div class=\"num\">%.1fs</div>Total</div>\n",
 		float64(totalDurationMS)/1000.0))
 	b.WriteString("</div>\n")
 
@@ -135,6 +135,7 @@ func GenerateIndex(summaries []RunSummary, outDir string) (string, error) {
 			if err != nil {
 				rel = s.ReportPath
 			}
+			rel = filepath.ToSlash(rel)
 			reportLink = fmt.Sprintf("<a href=\"%s\">view</a>", html.EscapeString(rel))
 		}
 		b.WriteString(fmt.Sprintf("<tr class=\"%s\">", cls))

@@ -126,13 +126,9 @@ func TestPool_ParallelExecutionNoStateBleed(t *testing.T) {
 	}
 }
 
-// TestPool_DispatchSemantics validates Pool.Run's job-dispatch and result
-// collation behaviour without launching Chrome. We swap NewWorker for a
-// no-op by using a zero-concurrency code path is not possible, so instead
-// we build a custom dispatch loop mirroring Pool.Run and assert ordering.
-//
-// The real Pool.Run is exercised under integration tests that require a
-// live Chrome (gated on the MANUL_INTEGRATION env var, see integration_test.go).
+// TestPool_NewPoolValidation verifies constructor validation for PoolOptions.
+// It asserts that NewPool rejects zero concurrency, rejects a missing
+// allocator, and succeeds when given a valid configuration.
 func TestPool_NewPoolValidation(t *testing.T) {
 	if _, err := NewPool(PoolOptions{Concurrency: 0, Allocator: NewPortAllocator(1, 2)}); err == nil {
 		t.Fatalf("expected error on zero concurrency")

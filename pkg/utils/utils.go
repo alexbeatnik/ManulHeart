@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -22,10 +23,14 @@ const (
 // message. Use WithPrefix to derive a child logger that shares the parent's
 // writer and level. Prefixes are nested: WithPrefix(parent, "B") on a
 // parent already prefixed "A" yields a child whose lines start with "AB".
+//
+// Logger is safe for concurrent use. All children created by WithPrefix share
+// the parent's mutex, so writes from parallel workers are serialized.
 type Logger struct {
 	level  LogLevel
 	writer io.Writer
 	prefix string
+	mu     *sync.Mutex // shared pointer; children share the same mutex as parent
 }
 
 // NewLogger creates a new Logger writing to the given writer at the given level.
@@ -33,7 +38,7 @@ func NewLogger(level LogLevel, w io.Writer) *Logger {
 	if w == nil {
 		w = os.Stdout
 	}
-	return &Logger{level: level, writer: w}
+	return &Logger{level: level, writer: w, mu: &sync.Mutex{}}
 }
 
 // WithPrefix returns a child logger sharing the parent's writer and level,
@@ -47,6 +52,7 @@ func WithPrefix(parent *Logger, prefix string) *Logger {
 		level:  parent.level,
 		writer: parent.writer,
 		prefix: parent.prefix + prefix,
+		mu:     parent.mu, // share mutex so parallel children serialize on the same writer
 	}
 }
 
@@ -75,7 +81,9 @@ func (l *Logger) Error(format string, args ...any) {
 func (l *Logger) log(level, format string, args ...any) {
 	ts := time.Now().Format("15:04:05.000")
 	msg := fmt.Sprintf(format, args...)
+	l.mu.Lock()
 	fmt.Fprintf(l.writer, "[%s] [%s] %s%s\n", ts, level, l.prefix, msg)
+	l.mu.Unlock()
 }
 
 // ResolutionError is returned when the targeting pipeline cannot resolve an element.

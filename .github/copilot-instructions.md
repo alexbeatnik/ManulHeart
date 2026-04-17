@@ -6,9 +6,8 @@
 > Whenever the user asks to update documentation, a README, or a feature's description, you **MUST** automatically update the repo-local core files to keep the project's positioning and syntax rules perfectly synchronised:
 > 1. `README.md` — public-facing feature docs and version footer
 > 2. `.github/copilot-instructions.md` — AI training context and syntax rules
-> 3. `.cursorrules` — repo-local assistant guidance, pinned version examples, and install commands
 >
-> A feature that appears in one file but not the others is a documentation bug.
+> A feature that appears in one file but not the other is a documentation bug.
 > This `.github/copilot-instructions.md` file is the single canonical source of Copilot/LLM instructions for this repository.
 
 ## SOLO DEV ALPHA POSITIONING
@@ -159,7 +158,7 @@ The `Scorer` ranks candidates using weighted channels:
 * **Shadow DOM:** Standard XPaths fail inside shadow roots. The Go engine uses a custom `ShadowHostPath` and JS-based resolution to bridge shadow boundaries.
 * **Invisible Inputs:** React/Vue often hide the real `<input type="checkbox">` behind a styled `<div>`. The engine collects these hidden inputs and uses `Pass 2` anchors to find them.
 * **Scroll Lag:** Dynamic dropdowns and lists often need a `WAIT 1` after clicking to allow the DOM to populate.
-* **Pagination:** When clicking table pagination links, the engine needs `time.Sleep` (approx 500ms) to allow AJAX updates to settle before the next targeting probe.
+* **Pagination:** After clicking table pagination links, use `WAIT 1` in the `.hunt` file to let AJAX updates settle before the next targeting probe. Do not use `time.Sleep` in Go production code for this.
 
 ## Interaction Robustness
 
@@ -197,6 +196,7 @@ results, firstErr := pool.Run(ctx, hunts)
 - **CDP tests use an in-process `httptest` WebSocket echo server:** see
   `pkg/cdp/conn_test.go`. Any new CDP transport feature must be tested there
   before shipping.
-- **Never introduce `time.Sleep` in production paths.** The codebase has zero
-  such calls today; adding one will be flagged in review. Use
-  `select { case <-ctx.Done(): ... case <-time.After(...): ... }` instead.
+- **Do not introduce `time.Sleep` in production paths.** Prefer context-aware
+  waits such as `select { case <-ctx.Done(): ... case <-time.After(...): ... }`
+  or explicit readiness checks. Test-only `time.Sleep` is acceptable where
+  necessary, but runtime/production code must not depend on fixed sleeps.
