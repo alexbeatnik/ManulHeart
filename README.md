@@ -410,7 +410,7 @@ func runInParallel(ctx context.Context, hunts []*dsl.Hunt) error {
 
 ## Configuration
 
-ManulHeart resolves runtime configuration from three sources in priority order:
+ManulHeart resolves runtime configuration from four sources in strict priority order:
 
 ```
 CLI Flags  >  MANUL_* environment variables  >  manul_engine_configuration.json  >  Defaults
@@ -421,9 +421,7 @@ are merged with defaults before environment variables and flags are applied. The
 function always returns a safe, zero-configuration baseline — no file on disk is required.
 
 ```go
-cfg := config.Default()               // start from safe defaults
-cfg, _ = config.LoadFile(cfg, ".")    // merge local JSON if present
-cfg = config.ApplyEnv(cfg)            // MANUL_* env vars override JSON
+cfg, _ := config.Load()  // applies all layers: defaults → JSON → env vars
 // CLI flag parsing then overrides cfg fields directly
 ```
 

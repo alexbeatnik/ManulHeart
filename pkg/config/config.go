@@ -79,28 +79,30 @@ type Config struct {
 }
 
 // jsonConfig is an intermediate struct for JSON unmarshaling.
+// All booleans and ints use pointer types so that explicit false/0 in JSON
+// is distinguishable from a missing field (nil pointer = absent).
 // timeout and nav_timeout are stored as integer milliseconds in JSON.
 type jsonConfig struct {
 	CDPEndpoint      string   `json:"cdp_endpoint"`
 	Browser          string   `json:"browser"`
 	BrowserArgs      []string `json:"browser_args"`
 	ExecutablePath   *string  `json:"executable_path"`
-	Headless         bool     `json:"headless"`
-	Verbose          bool     `json:"verbose"`
-	DebugMode        bool     `json:"debug_mode"`
+	Headless         *bool    `json:"headless"`
+	Verbose          *bool    `json:"verbose"`
+	DebugMode        *bool    `json:"debug_mode"`
 	BreakLines       []int    `json:"break_lines"`
-	ExplainMode      bool     `json:"explain_mode"`
+	ExplainMode      *bool    `json:"explain_mode"`
 	TimeoutMs        *int     `json:"timeout"`
 	NavTimeoutMs     *int     `json:"nav_timeout"`
 	Screenshot       string   `json:"screenshot"`
-	HTMLReport       bool     `json:"html_report"`
-	Retries          int      `json:"retries"`
-	VerifyMaxRetries int      `json:"verify_max_retries"`
-	Workers          int      `json:"workers"`
-	DisableCache     bool     `json:"disable_cache"`
+	HTMLReport       *bool    `json:"html_report"`
+	Retries          *int     `json:"retries"`
+	VerifyMaxRetries *int     `json:"verify_max_retries"`
+	Workers          *int     `json:"workers"`
+	DisableCache     *bool    `json:"disable_cache"`
 	Tags             []string `json:"tags"`
 	TestsHome        string   `json:"tests_home"`
-	AutoAnnotate     bool     `json:"auto_annotate"`
+	AutoAnnotate     *bool    `json:"auto_annotate"`
 }
 
 // Default returns a Config with production defaults matching the Python CLI contract.
@@ -167,20 +169,20 @@ func applyJSONFile(cfg *Config) error {
 	if raw.ExecutablePath != nil {
 		cfg.ExecutablePath = raw.ExecutablePath
 	}
-	if raw.Headless {
-		cfg.Headless = raw.Headless
+	if raw.Headless != nil {
+		cfg.Headless = *raw.Headless
 	}
-	if raw.Verbose {
-		cfg.Verbose = raw.Verbose
+	if raw.Verbose != nil {
+		cfg.Verbose = *raw.Verbose
 	}
-	if raw.DebugMode {
-		cfg.DebugMode = raw.DebugMode
+	if raw.DebugMode != nil {
+		cfg.DebugMode = *raw.DebugMode
 	}
 	if len(raw.BreakLines) > 0 {
 		cfg.BreakLines = raw.BreakLines
 	}
-	if raw.ExplainMode {
-		cfg.ExplainMode = raw.ExplainMode
+	if raw.ExplainMode != nil {
+		cfg.ExplainMode = *raw.ExplainMode
 	}
 	if raw.TimeoutMs != nil {
 		cfg.DefaultTimeout = time.Duration(*raw.TimeoutMs) * time.Millisecond
@@ -191,20 +193,20 @@ func applyJSONFile(cfg *Config) error {
 	if raw.Screenshot != "" {
 		cfg.Screenshot = raw.Screenshot
 	}
-	if raw.HTMLReport {
-		cfg.HTMLReport = raw.HTMLReport
+	if raw.HTMLReport != nil {
+		cfg.HTMLReport = *raw.HTMLReport
 	}
-	if raw.Retries != 0 {
-		cfg.Retries = raw.Retries
+	if raw.Retries != nil {
+		cfg.Retries = *raw.Retries
 	}
-	if raw.VerifyMaxRetries != 0 {
-		cfg.VerifyMaxRetries = raw.VerifyMaxRetries
+	if raw.VerifyMaxRetries != nil {
+		cfg.VerifyMaxRetries = *raw.VerifyMaxRetries
 	}
-	if raw.Workers != 0 {
-		cfg.Workers = raw.Workers
+	if raw.Workers != nil {
+		cfg.Workers = *raw.Workers
 	}
-	if raw.DisableCache {
-		cfg.DisableCache = raw.DisableCache
+	if raw.DisableCache != nil {
+		cfg.DisableCache = *raw.DisableCache
 	}
 	if len(raw.Tags) > 0 {
 		cfg.Tags = raw.Tags
@@ -212,8 +214,8 @@ func applyJSONFile(cfg *Config) error {
 	if raw.TestsHome != "" {
 		cfg.TestsHome = raw.TestsHome
 	}
-	if raw.AutoAnnotate {
-		cfg.AutoAnnotate = raw.AutoAnnotate
+	if raw.AutoAnnotate != nil {
+		cfg.AutoAnnotate = *raw.AutoAnnotate
 	}
 	return nil
 }

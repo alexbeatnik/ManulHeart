@@ -209,10 +209,12 @@ When generating code that reads configuration, always start from `config.Default
 `pkg/runtime/debug.go` exposes an interactive step debugger. When paused the engine writes a sentinel to stdout:
 
 ```
-\x00MANUL_DEBUG_PAUSE\x00{"line":12,"step":"Click the 'Login' button","confidence":7}
+\x00MANUL_DEBUG_PAUSE\x00{"line":12,"step":"Click the 'Login' button"}
 ```
 
-The IDE extension polls stdin for `next`, `continue`, `abort`, or `explain`. The JSON payload includes `confidence` (0–10 integer) derived from `scoreToConfidence(score float64)`:
+The IDE extension polls stdin for `next`, `continue`, `abort`, or `explain`. The JSON payload contains `line` (1-based source line number from `cmd.LineNum`) and `step` (raw DSL text). No `confidence` field is included at pause time — heuristic scoring has not yet run.
+
+`scoreToConfidence(score float64)` is available for `explain` responses but not the pause payload:
 
 | Score range | Confidence |
 |-------------|-----------|

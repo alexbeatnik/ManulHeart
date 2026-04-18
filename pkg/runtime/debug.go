@@ -242,7 +242,7 @@ func (rt *Runtime) debugPromptTTY(ctx context.Context, cmd dsl.Command, idx int)
 // debugPromptExtension handles the non-TTY (IDE extension) debug protocol.
 // Emits NUL-delimited JSON markers directly to os.Stdout and reads NUL-delimited command tokens from stdin.
 func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, idx int) error {
-	payload := fmt.Sprintf(`{"step":%q,"idx":%d}`, cmd.Raw, idx)
+	payload := fmt.Sprintf(`{"line":%d,"step":%q}`, cmd.LineNum, cmd.Raw)
 	fmt.Fprintf(os.Stdout, "\x00MANUL_DEBUG_PAUSE\x00%s\n", payload)
 	os.Stdout.Sync() //nolint:errcheck
 

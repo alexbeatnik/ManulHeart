@@ -201,6 +201,66 @@ func TestApplyJSONFile_DoesNotClobberDefaults(t *testing.T) {
 	}
 }
 
+func TestApplyJSONFile_ExplicitFalseAndZero(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	// Start with a config where booleans are true and ints are non-zero,
+	// then confirm JSON can explicitly set them to false/0.
+	writeJSON(t, dir, map[string]any{
+		"headless":           false,
+		"verbose":            false,
+		"html_report":        false,
+		"disable_cache":      false,
+		"auto_annotate":      false,
+		"retries":            0,
+		"verify_max_retries": 0,
+		"workers":            0,
+	})
+
+	cfg := Default()
+	// Override defaults to non-zero/true so we can confirm JSON sets them back.
+	cfg.Headless = true
+	cfg.Verbose = true
+	cfg.HTMLReport = true
+	cfg.DisableCache = true
+	cfg.AutoAnnotate = true
+	cfg.Retries = 5
+	cfg.VerifyMaxRetries = 20
+	cfg.Workers = 8
+
+	if err := applyJSONFile(&cfg); err != nil {
+		t.Fatalf("applyJSONFile: %v", err)
+	}
+
+	if cfg.Headless {
+		t.Error("Headless: JSON false should override true")
+	}
+	if cfg.Verbose {
+		t.Error("Verbose: JSON false should override true")
+	}
+	if cfg.HTMLReport {
+		t.Error("HTMLReport: JSON false should override true")
+	}
+	if cfg.DisableCache {
+		t.Error("DisableCache: JSON false should override true")
+	}
+	if cfg.AutoAnnotate {
+		t.Error("AutoAnnotate: JSON false should override true")
+	}
+	if cfg.Retries != 0 {
+		t.Errorf("Retries=%d: JSON 0 should override 5", cfg.Retries)
+	}
+	if cfg.VerifyMaxRetries != 0 {
+		t.Errorf("VerifyMaxRetries=%d: JSON 0 should override 20", cfg.VerifyMaxRetries)
+	}
+	if cfg.Workers != 0 {
+		t.Errorf("Workers=%d: JSON 0 should override 8", cfg.Workers)
+	}
+}
+
 // ---- overrideFromEnv --------------------------------------------------------
 
 func TestOverrideFromEnv(t *testing.T) {
