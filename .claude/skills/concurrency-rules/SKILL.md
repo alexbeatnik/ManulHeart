@@ -6,8 +6,9 @@ description: Enforce ManulHeart's concurrency contract when editing runtime/, cd
 # ManulHeart concurrency contract
 
 Established in `0.0.0.2`, extended in `0.0.0.3` with `RunHuntsInParallel`
-and per-worker log prefixes. Every rule here has a test under `-race`;
-violations trip CI.
+and per-worker log prefixes, extended in `0.0.0.5` with the configuration
+system (`pkg/config`) and VS Code debug protocol (`pkg/runtime/debug.go`).
+Every rule here has a test under `-race`; violations trip CI.
 
 ## Hard invariants
 

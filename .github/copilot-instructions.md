@@ -20,7 +20,7 @@
 ## CLI INSTALL + VERSION
 
 > **CRITICAL — Read this first.**
-> Current documented ManulHeart CLI version is **0.0.0.4**.
+> Current documented ManulHeart CLI version is **0.0.0.5**.
 > When documenting install or usage, prefer the Go binary as a PATH-visible system command named `manul`
 > (for example `~/.local/bin/manul` or `/usr/local/bin/manul`) so editor extensions can invoke it directly.
 > Do not document the repo-local binary as the only intended integration path when the request is about running from tools or extensions.
@@ -66,11 +66,12 @@ pkg/
   worker/                  Worker, WorkerPool, PortAllocator (parallel execution substrate)
   explain/                 Score breakdown and debugging visualization
   report/                  Per-hunt HTML report + aggregate index.html
+  config/                  Runtime configuration (18 fields); config.Default() + JSON + env-var loading
   utils/                   Logger (dual-output: stdout+ANSI, file+stripped) + error types
 examples/                  Reference .hunt files (mega.hunt, sampler.hunt)
 ```
 
-## Concurrency contract (`0.0.0.4`+)
+## Concurrency contract (`0.0.0.5`+)
 
 > **CRITICAL — Read this before writing any code that touches `Runtime`, `Page`, or CDP.**
 
@@ -187,6 +188,45 @@ results, firstErr := pool.Run(ctx, hunts)
 - Per-worker logs are prefixed `[wN] ` via `utils.WithPrefix(parent, "[wN] ")`.
 - Logger API: `utils.NewLogger(logFile)` (stdout + optional ANSI-stripped file); `l.WithLevel(level)` for verbose mode; semantic methods `BlockStart/Pass/Fail`, `ActionStart/Pass/Fail/Warn`, `HeuristicDetail`, `ActionDetail`.
 - Per-hunt report filenames carry an atomic sequence counter — never collide.
+
+## Configuration priority chain (`0.0.0.5`+)
+
+`pkg/config` resolves an 18-field `Config` struct from four sources in strict priority order:
+
+```
+CLI Flags  >  MANUL_* env vars  >  manul_engine_configuration.json  >  config.Default()
+```
+
+- `config.Default()` always returns a safe zero-configuration baseline — no file required.
+- If `manul_engine_configuration.json` exists in the working directory it is merged next.
+- `MANUL_HEADLESS`, `MANUL_TIMEOUT`, `MANUL_EXPLAIN`, `MANUL_SCREENSHOT` override the JSON.
+- CLI flag parsing applies last and wins unconditionally.
+
+When generating code that reads configuration, always start from `config.Default()` and apply layers on top — never construct a `Config` literal from scratch.
+
+## VS Code Debug Protocol (`0.0.0.5`+)
+
+`pkg/runtime/debug.go` exposes an interactive step debugger. When paused the engine writes a sentinel to stdout:
+
+```
+\x00MANUL_DEBUG_PAUSE\x00{"line":12,"step":"Click the 'Login' button"}
+```
+
+The IDE extension polls stdin for `next`, `continue`, `abort`, or `explain`. The JSON payload contains `line` (1-based source line number from `cmd.LineNum`) and `step` (raw DSL text). No `confidence` field is included at pause time — heuristic scoring has not yet run.
+
+`scoreToConfidence(score float64)` is available for `explain` responses but not the pause payload:
+
+| Score range | Confidence |
+|-------------|-----------|
+| ≤ 0 | 0 |
+| > 0, < 0.01 | 1 |
+| 0.01–0.049 | 3 |
+| 0.05–0.099 | 5 |
+| 0.10–0.499 | 7 |
+| 0.50–0.999 | 9 |
+| ≥ 1.0 | 10 |
+
+`shouldPause(cmd)` returns true when `breakLines` is empty (pause-every-step mode) or the command's line number appears in `breakLines`, UNLESS `debugContinue` is set — in which case all pauses are suppressed.
 
 ## Testing expectations
 

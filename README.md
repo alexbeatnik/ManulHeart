@@ -2,7 +2,7 @@
 
 A deterministic, DSL-first browser automation runtime in Go.
 
-Current alpha version: `0.0.0.4`.
+Current alpha version: `0.0.0.5`.
 
 ManulHeart executes `.hunt` files using plain-English commands, DOM intelligence,
 heuristic element resolution, and structured explainability.
@@ -110,7 +110,7 @@ manul examples/saucedemo.hunt --json 2>/dev/null | jq .
 
 > **Note:** The `manul` command name is shared with the Python ManulEngine.
 > Whichever you install last takes priority. To switch back to Python: `pipx install manul-engine`.
-> For ManulHeart `0.0.0.3`, prefer a PATH install so extensions can execute `manul` directly.
+> For ManulHeart `0.0.0.5`, prefer a PATH install so extensions can execute `manul` directly.
 
 ### CLI Flags
 
@@ -355,11 +355,13 @@ See [docs/overview.md](docs/overview.md) for a detailed architecture walkthrough
 
 ---
 
-## Parallel Execution (API, `0.0.0.3`)
+## Parallel Execution (API, `0.0.0.5`)
 
 As of `0.0.0.3` ManulHeart ships a Go-level worker pool for running hunts in
 parallel. The `manul` CLI is still single-threaded; embed the pool directly
-to fan out:
+to fan out. Each `Worker` owns its own isolated `Runtime`, `Page`, and
+`ChromeProcess` — sharing any of these across workers is a data race caught
+by `go test -race`.
 
 ```go
 import (
@@ -406,6 +408,28 @@ func runInParallel(ctx context.Context, hunts []*dsl.Hunt) error {
 
 ---
 
+## Configuration
+
+ManulHeart resolves runtime configuration from four sources in strict priority order:
+
+```
+CLI Flags  >  MANUL_* environment variables  >  manul_engine_configuration.json  >  Defaults
+```
+
+If a `manul_engine_configuration.json` file exists in the current working directory, its values
+are merged with defaults before environment variables and flags are applied. The `config.Default()`
+function always returns a safe, zero-configuration baseline — no file on disk is required.
+
+```go
+cfg, _ := config.Load()  // applies all layers: defaults → JSON → env vars
+// CLI flag parsing then overrides cfg fields directly
+```
+
+The `pkg/config` package exposes 18 fields covering headless mode, timeouts, screenshot
+policy, debug breakpoints, scoring thresholds, and more.
+
+---
+
 ## Development Guides
 
 For developers working on the ManulHeart engine, we provide detailed "Skill Guides" covering core systems:
@@ -427,7 +451,7 @@ import system (including USE/CALL expansion), 4-channel scoring, contextual
 qualifiers (NEAR, ON HEADER/FOOTER, INSIDE), Shadow DOM support, 3-pass
 proximity resolution, HTML reporting, screenshots, debug mode, explain mode.
 
-As of `0.0.0.4` the engine also exposes a **parallel-execution substrate**:
+As of `0.0.0.5` the engine also exposes a **parallel-execution substrate**:
 a goroutine-safe CDP transport, a `pkg/worker` package with `Worker`,
 `WorkerPool`, and `PortAllocator`, per-worker log prefixes, and collision-proof
 report filenames. Every test (CDP, runtime, scorer, worker) runs under
@@ -437,7 +461,7 @@ Not yet implemented: a CLI flag to expose the worker pool end-to-end (the API
 is there, the CLI is still single-threaded), LLM-based fallback,
 scan/record subcommands.
 
-**Documented CLI version:** `0.0.0.4`.
+**Documented CLI version:** `0.0.0.5`.
 
 **Recommended install target:** expose the binary as a PATH command named `manul`
 for editor extensions and automation tooling.
@@ -445,6 +469,13 @@ for editor extensions and automation tooling.
 ---
 
 ## What's New
+
+### `0.0.0.5` — configuration system, debug protocol & test coverage
+
+- **Configuration System** — `pkg/config` resolves settings from four layers in priority order: CLI Flags > `MANUL_*` env vars > `manul_engine_configuration.json` > `config.Default()`. An 18-field `Config` struct covers headless, timeouts, screenshot policy, debug breakpoints, scoring thresholds, and more. No config file is required for zero-configuration use.
+- **VS Code Debug Protocol** — `pkg/runtime/debug.go` formalised with `\x00MANUL_DEBUG_PAUSE\x00` JSON markers on stdout and stdin polling so VS Code extensions can drive the interactive debugger over a simple pipe. `scoreToConfidence()` maps a `[0.0–1.0]` heuristic score to a 0–10 confidence integer for display.
+- **Expanded test coverage** — Added white-box test suites for `pkg/report` (`sanitizeFilename`, `GenerateHTML`, `GenerateIndex`), `pkg/runtime/debug` (`scoreToConfidence`, `shouldPause`), `pkg/core` (scroll strategy constants), `pkg/explain` (JSON serialisation round-trips for `ScoreBreakdown`, `ExecutionResult`, `HuntResult`, `Candidate`), and `pkg/utils` (ANSI writer, logger levels, `WithPrefix`, race safety).
+- **Worker isolation clarified** — Each `Worker` owns its own isolated `Runtime`, `Page`, and `ChromeProcess`; sharing them is a data race caught by `go test -race`.
 
 ### `0.0.0.4` — interactive debugger & skill guides
 

@@ -69,7 +69,7 @@ pkg/cdp/            Raw CDP WebSocket transport; goroutine-safe Conn
 pkg/worker/         Worker / WorkerPool / PortAllocator — parallel execution substrate
 pkg/explain/        Pure data types: ExecutionResult, HuntResult, ScoreBreakdown
 pkg/report/         Per-hunt HTML report + aggregate index.html
-pkg/config/         Runtime configuration (18 fields); config.Default()
+pkg/config/         Runtime configuration (18 fields); config.Default() + JSON + env-var loading
 pkg/utils/          Dual-output semantic logger + ANSI stripping + error types
 examples/           Reference .hunt files
 docs/overview.md    Detailed architecture walkthrough
@@ -122,6 +122,18 @@ results, firstErr := pool.Run(ctx, hunts)
 // results[i] corresponds to hunts[i]
 report.GenerateIndex(summaries, "reports")  // aggregate index.html
 ```
+
+### Configuration Priority Chain (`0.0.0.5`+)
+
+`pkg/config` resolves an 18-field `Config` struct from four sources in strict priority order:
+
+```
+CLI Flags  >  MANUL_* env vars  >  manul_engine_configuration.json  >  config.Default()
+```
+
+- Always start from `config.Default()` and apply layers on top — never construct a `Config` literal from scratch.
+- `MANUL_HEADLESS`, `MANUL_TIMEOUT`, `MANUL_EXPLAIN`, `MANUL_SCREENSHOT` are the primary env overrides.
+- If `manul_engine_configuration.json` exists in the working directory it is merged before env vars.
 
 ## Testing Patterns
 
