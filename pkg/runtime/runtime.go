@@ -59,6 +59,7 @@ type Runtime struct {
 
 	// debug state — only populated when cfg.DebugMode is true
 	breakLines      map[int]bool             // source line numbers that are breakpoints; empty = pause every step
+	breakSteps      map[int]bool             // command indices queued by extension-mode "next" to pause at
 	debugContinue   bool                     // when true, skip all future pauses
 	lastExplainData []scorer.RankedCandidate // cached ranking for the "explain" debug command
 }
@@ -159,7 +160,7 @@ func (rt *Runtime) runCommands(ctx context.Context, commands []dsl.Command, hunt
 			return passed, failed, fmt.Errorf("runtime: context cancelled: %w", err)
 		}
 
-		if rt.cfg.DebugMode && rt.shouldPause(cmd) {
+		if rt.cfg.DebugMode && rt.shouldPause(cmd, i) {
 			if dbgErr := rt.debugPrompt(ctx, cmd, i); dbgErr != nil {
 				return passed, failed, dbgErr
 			}

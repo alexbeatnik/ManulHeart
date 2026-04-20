@@ -14,30 +14,29 @@ import (
 	"github.com/manulengineer/manulheart/pkg/scorer"
 )
 
-// ErrDebugStop is returned by debugPrompt when the user or browser requests a halt.
 var ErrDebugStop = errors.New("debug: stop requested")
 
-// shouldPause reports whether execution should pause before cmd.
-// Returns false immediately when debugContinue is set (user issued "continue").
-// Pauses on every step when breakLines is empty; otherwise pauses only when
-// cmd.LineNum is in the breakLines set.
-func (rt *Runtime) shouldPause(cmd dsl.Command) bool {
+func (rt *Runtime) shouldPause(cmd dsl.Command, idx int) bool {
 	if rt.debugContinue {
 		return false
 	}
-	if len(rt.breakLines) == 0 {
+	if len(rt.breakLines) == 0 && len(rt.breakSteps) == 0 {
 		return true
 	}
-	return rt.breakLines[cmd.LineNum]
+	if rt.breakLines[cmd.LineNum] {
+		return true
+	}
+	if rt.breakSteps != nil && rt.breakSteps[idx] {
+		return true
+	}
+	return false
 }
 
-// isTTY reports whether os.Stdin is connected to an interactive terminal.
 func isTTY() bool {
 	fileInfo, _ := os.Stdin.Stat()
 	return (fileInfo.Mode() & os.ModeCharDevice) != 0
 }
 
-// injectDebugModal injects a floating debug control panel into the live browser page.
 func (rt *Runtime) injectDebugModal(ctx context.Context, step string) error {
 	stepJSON, _ := json.Marshal(step)
 	js := fmt.Sprintf(`(function(){
@@ -54,14 +53,12 @@ window.__manul_debug_action='';
 	return err
 }
 
-// removeDebugModal removes the debug panel and clears the action signal.
 func (rt *Runtime) removeDebugModal(ctx context.Context) error {
 	js := `(function(){var d=document.getElementById('manul-debug-modal');if(d)d.remove();window.__manul_debug_action='';})();`
 	_, err := rt.page.EvalJS(ctx, js)
 	return err
 }
 
-// debugHighlight outlines the element matching xpath with a magenta highlight.
 func (rt *Runtime) debugHighlight(ctx context.Context, xpath string) error {
 	xpathJSON, _ := json.Marshal(xpath)
 	js := fmt.Sprintf(`(function(){
@@ -77,7 +74,6 @@ if(el){el.setAttribute('data-manul-debug-highlight','true');el.scrollIntoView({b
 	return err
 }
 
-// clearDebugHighlight removes all debug highlight styles and attributes from the page.
 func (rt *Runtime) clearDebugHighlight(ctx context.Context) error {
 	js := `(function(){
 var el=document.querySelector('[data-manul-debug-highlight]');if(el)el.removeAttribute('data-manul-debug-highlight');
@@ -87,7 +83,6 @@ var s=document.getElementById('manul-debug-style');if(s)s.remove();
 	return err
 }
 
-// pollForAbort polls window.__manul_debug_action every 200 ms and signals abortCh on "abort".
 func (rt *Runtime) pollForAbort(ctx context.Context, abortCh chan<- struct{}) {
 	for {
 		select {
@@ -110,7 +105,6 @@ func (rt *Runtime) pollForAbort(ctx context.Context, abortCh chan<- struct{}) {
 	}
 }
 
-// scoreToConfidence maps a normalized [0,1] score to a 0–10 confidence level.
 func scoreToConfidence(s float64) int {
 	switch {
 	case s >= 1.0:
@@ -130,8 +124,6 @@ func scoreToConfidence(s float64) int {
 	}
 }
 
-// explainStep runs the snapshot probe and scorer for cmd and returns a formatted summary.
-// The top-5 candidates are cached in rt.lastExplainData for extension-mode serialization.
 func (rt *Runtime) explainStep(ctx context.Context, cmd dsl.Command) string {
 	elements, err := rt.loadSnapshot(ctx)
 	if err != nil {
@@ -168,7 +160,6 @@ func (rt *Runtime) explainStep(ctx context.Context, cmd dsl.Command) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// debugPrompt dispatches to TTY or extension debug protocol based on stdin.
 func (rt *Runtime) debugPrompt(ctx context.Context, cmd dsl.Command, idx int) error {
 	if isTTY() {
 		return rt.debugPromptTTY(ctx, cmd, idx)
@@ -176,8 +167,6 @@ func (rt *Runtime) debugPrompt(ctx context.Context, cmd dsl.Command, idx int) er
 	return rt.debugPromptExtension(ctx, cmd, idx)
 }
 
-// debugPromptTTY handles the interactive terminal debug loop.
-// Injects a browser modal and polls for abort while reading commands from stdin.
 func (rt *Runtime) debugPromptTTY(ctx context.Context, cmd dsl.Command, idx int) error {
 	if err := rt.injectDebugModal(ctx, cmd.Raw); err != nil {
 		rt.logger.Warn("debug: modal inject failed: %v", err)
@@ -239,12 +228,14 @@ func (rt *Runtime) debugPromptTTY(ctx context.Context, cmd dsl.Command, idx int)
 	}
 }
 
-// debugPromptExtension handles the non-TTY (IDE extension) debug protocol.
-// Emits NUL-delimited JSON markers directly to os.Stdout and reads NUL-delimited command tokens from stdin.
 func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, idx int) error {
-	payload := fmt.Sprintf(`{"line":%d,"step":%q}`, cmd.LineNum, cmd.Raw)
-	fmt.Fprintf(os.Stdout, "\x00MANUL_DEBUG_PAUSE\x00%s\n", payload)
-	os.Stdout.Sync() //nolint:errcheck
+	payload := fmt.Sprintf(`{"step":%q,"idx":%d}`, cmd.Raw, idx)
+
+	emitPauseMarker := func() {
+		fmt.Fprintf(os.Stdout, "\x00MANUL_DEBUG_PAUSE\x00%s\n", payload)
+		os.Stdout.Sync()
+	}
+	emitPauseMarker()
 
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Split(bufio.ScanLines)
@@ -269,21 +260,39 @@ func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, id
 			cmdStr := strings.ToLower(strings.TrimSpace(token))
 			switch {
 			case cmdStr == "" || cmdStr == "next":
+				if rt.breakSteps == nil {
+					rt.breakSteps = make(map[int]bool)
+				}
+				rt.breakSteps[idx+1] = true
 				rt.clearDebugHighlight(ctx) //nolint:errcheck
 				return nil
+
 			case cmdStr == "continue":
 				rt.debugContinue = true
+				if rt.breakSteps != nil {
+					rt.breakSteps = make(map[int]bool)
+				}
 				rt.clearDebugHighlight(ctx) //nolint:errcheck
 				return nil
+
 			case cmdStr == "debug-stop" || cmdStr == "abort":
 				return ErrDebugStop
+
+			case cmdStr == "highlight":
+				js := `(function(){var el=document.querySelector('[data-manul-debug-highlight]');if(el)el.scrollIntoView({behavior:'smooth',block:'center'});})();`
+				rt.page.EvalJS(ctx, js)
+				emitPauseMarker()
+				readNext()
+
 			case strings.HasPrefix(cmdStr, "highlight "):
 				xpath := strings.TrimPrefix(cmdStr, "highlight ")
 				if err := rt.debugHighlight(ctx, xpath); err != nil {
 					rt.logger.Warn("debug: highlight failed: %v", err)
 				}
+				emitPauseMarker()
 				readNext()
-			case cmdStr == "explain":
+
+			case cmdStr == "explain" || strings.HasPrefix(cmdStr, "explain-next"):
 				explainText := rt.explainStep(ctx, cmd)
 				type explainPayload struct {
 					Step       string                   `json:"step"`
@@ -296,9 +305,13 @@ func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, id
 					Text:       explainText,
 				})
 				fmt.Fprintf(os.Stdout, "\x00MANUL_EXPLAIN_NEXT\x00%s\n", ep)
-				os.Stdout.Sync() //nolint:errcheck
+				os.Stdout.Sync()
+
+				emitPauseMarker()
 				readNext()
+
 			default:
+				emitPauseMarker()
 				readNext()
 			}
 		}
