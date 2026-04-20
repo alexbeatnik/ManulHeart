@@ -171,7 +171,7 @@ func (rt *Runtime) debugPromptTTY(ctx context.Context, cmd dsl.Command, idx int)
 	if err := rt.injectDebugModal(ctx, cmd.Raw); err != nil {
 		rt.logger.Warn("debug: modal inject failed: %v", err)
 	}
-	defer rt.removeDebugModal(ctx) //nolint:errcheck
+	defer rt.removeDebugModal(ctx)
 
 	abortCh := make(chan struct{}, 1)
 	go rt.pollForAbort(ctx, abortCh)
@@ -203,11 +203,11 @@ func (rt *Runtime) debugPromptTTY(ctx context.Context, cmd dsl.Command, idx int)
 		case token := <-inputCh:
 			switch {
 			case token == "" || token == "next":
-				rt.clearDebugHighlight(ctx) //nolint:errcheck
+				rt.clearDebugHighlight(ctx)
 				return nil
 			case token == "continue":
 				rt.debugContinue = true
-				rt.clearDebugHighlight(ctx) //nolint:errcheck
+				rt.clearDebugHighlight(ctx)
 				return nil
 			case token == "debug-stop", token == "abort":
 				return ErrDebugStop
@@ -264,18 +264,25 @@ func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, id
 					rt.breakSteps = make(map[int]bool)
 				}
 				rt.breakSteps[idx+1] = true
-				rt.clearDebugHighlight(ctx) //nolint:errcheck
+				rt.clearDebugHighlight(ctx)
 				return nil
 
 			case cmdStr == "continue":
+				if rt.breakSteps != nil {
+					rt.breakSteps = make(map[int]bool)
+				}
+				rt.clearDebugHighlight(ctx)
+				return nil
+
+			case cmdStr == "debug-stop":
 				rt.debugContinue = true
 				if rt.breakSteps != nil {
 					rt.breakSteps = make(map[int]bool)
 				}
-				rt.clearDebugHighlight(ctx) //nolint:errcheck
+				rt.clearDebugHighlight(ctx)
 				return nil
 
-			case cmdStr == "debug-stop" || cmdStr == "abort":
+			case cmdStr == "abort":
 				return ErrDebugStop
 
 			case cmdStr == "highlight":
