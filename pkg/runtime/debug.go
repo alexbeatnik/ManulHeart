@@ -228,11 +228,124 @@ func (rt *Runtime) debugPromptTTY(ctx context.Context, cmd dsl.Command, idx int)
 	}
 }
 
+func confidenceLabel(score float64) string {
+	switch {
+	case score >= 0.5:
+		return "high"
+	case score >= 0.1:
+		return "medium"
+	case score > 0:
+		return "low"
+	default:
+		return "none"
+	}
+}
+
+// explainNextPayload implements the VS Code extension's ExplainNextResult
+// TypeScript interface (contracts/EXTENSION_ENGINE_CONTRACT.md §3.5).
+// All 10 fields are serialized on every emission; null-typed fields use
+// pointer types so `encoding/json` can write JSON null.
+type explainNextPayload struct {
+	Step            string   `json:"step"`
+	Score           float64  `json:"score"`
+	ConfidenceLabel string   `json:"confidence_label"`
+	TargetFound     bool     `json:"target_found"`
+	TargetElement   *string  `json:"target_element"`
+	Explanation     string   `json:"explanation"`
+	Risk            string   `json:"risk"`
+	Suggestion      *string  `json:"suggestion"`
+	HeuristicScore  *float64 `json:"heuristic_score"`
+	HeuristicMatch  *string  `json:"heuristic_match"`
+}
+
+func (rt *Runtime) buildExplainNextResult(ctx context.Context, stepText string, cmd dsl.Command) explainNextPayload {
+	elements, err := rt.loadSnapshot(ctx)
+	if err != nil {
+		return explainNextPayload{
+			Step:            stepText,
+			Score:           0,
+			ConfidenceLabel: "none",
+			TargetFound:     false,
+			Explanation:     fmt.Sprintf("snapshot failed: %v", err),
+		}
+	}
+
+	query := cmd.Target
+	if query == "" {
+		query = stepText
+	}
+	mode := string(cmd.InteractionMode)
+	if mode == "" {
+		mode = string(dsl.ModeNone)
+	}
+	ranked := scorer.Rank(query, cmd.TypeHint, mode, elements, 5, nil)
+	rt.lastExplainData = ranked
+
+	if len(ranked) == 0 {
+		return explainNextPayload{
+			Step:            stepText,
+			Score:           0,
+			ConfidenceLabel: "none",
+			TargetFound:     false,
+			Explanation:     fmt.Sprintf("no candidates found for %q", query),
+		}
+	}
+
+	top := ranked[0]
+	topXPath := top.Element.XPath
+	topScore := top.Explain.Score.Total
+
+	label := confidenceLabel(topScore)
+	sb := top.Explain.Score
+	textCh := sb.ExactTextMatch + sb.NormalizedTextMatch + sb.LabelMatch + sb.PlaceholderMatch + sb.AriaMatch + sb.DataQAMatch
+	semanticCh := sb.TagSemantics + sb.TypeHintAlignment
+	penaltyCh := sb.VisibilityScore * sb.InteractabilityScore
+	explanation := fmt.Sprintf(
+		"top candidate <%s> score=%.3f (text=%.3f id=%.3f semantic=%.3f penalty=%.3f)",
+		top.Element.Tag,
+		topScore,
+		textCh,
+		sb.IDMatch,
+		semanticCh,
+		penaltyCh,
+	)
+
+	risk := ""
+	var suggestion *string
+	if topScore < 0.1 {
+		risk = "low confidence — target may be ambiguous or missing"
+		if len(ranked) > 1 {
+			s := fmt.Sprintf("next candidate <%s> xpath=%s score=%.3f",
+				ranked[1].Element.Tag, ranked[1].Element.XPath, ranked[1].Explain.Score.Total)
+			suggestion = &s
+		}
+	}
+
+	match := top.Element.VisibleText
+	if match == "" {
+		match = top.Element.Tag
+	}
+
+	return explainNextPayload{
+		Step:            stepText,
+		Score:           topScore,
+		ConfidenceLabel: label,
+		TargetFound:     topScore > 0,
+		TargetElement:   &topXPath,
+		Explanation:     explanation,
+		Risk:            risk,
+		Suggestion:      suggestion,
+		HeuristicScore:  &topScore,
+		HeuristicMatch:  &match,
+	}
+}
+
 func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, idx int) error {
-	payload := fmt.Sprintf(`{"step":%q,"idx":%d}`, cmd.Raw, idx)
+	// Contract §3.4: payload idx is 1-based.
+	pausePayload := fmt.Sprintf(`{"step":%q,"idx":%d}`, cmd.Raw, idx+1)
 
 	emitPauseMarker := func() {
-		fmt.Fprintf(os.Stdout, "\x00MANUL_DEBUG_PAUSE\x00%s\n", payload)
+		fmt.Fprintf(os.Stdout, "\x00MANUL_DEBUG_PAUSE\x00%s\n", pausePayload)
 		os.Stdout.Sync()
 	}
 	emitPauseMarker()
@@ -252,14 +365,26 @@ func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, id
 	}
 	readNext()
 
+	emitExplain := func(stepText string) {
+		payload := rt.buildExplainNextResult(ctx, stepText, cmd)
+		ep, _ := json.Marshal(payload)
+		fmt.Fprintf(os.Stdout, "\x00MANUL_EXPLAIN_NEXT\x00%s\n", ep)
+		os.Stdout.Sync()
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case token := <-inputCh:
-			cmdStr := strings.ToLower(strings.TrimSpace(token))
+			raw := strings.TrimRight(token, "\r\n")
+			trimmed := strings.TrimSpace(raw)
+			lower := strings.ToLower(trimmed)
+
 			switch {
-			case cmdStr == "" || cmdStr == "next":
+			case lower == "" || lower == "next":
+				// Pause at the next step. Preserve existing breakLines; append
+				// an index-based one-shot breakpoint at idx+1 (0-based internal).
 				if rt.breakSteps == nil {
 					rt.breakSteps = make(map[int]bool)
 				}
@@ -267,53 +392,56 @@ func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, id
 				rt.clearDebugHighlight(ctx)
 				return nil
 
-			case cmdStr == "continue":
-				if rt.breakSteps != nil {
-					rt.breakSteps = make(map[int]bool)
-				}
-				rt.clearDebugHighlight(ctx)
-				return nil
-
-			case cmdStr == "debug-stop":
+			case lower == "continue":
+				// Contract §4.3: remove all remaining breakpoints, run to end.
 				rt.debugContinue = true
-				if rt.breakSteps != nil {
-					rt.breakSteps = make(map[int]bool)
-				}
+				rt.breakLines = make(map[int]bool)
+				rt.breakSteps = make(map[int]bool)
 				rt.clearDebugHighlight(ctx)
 				return nil
 
-			case cmdStr == "abort":
+			case lower == "debug-stop":
+				// Contract §4.3: clear breakpoints, continue the run.
+				rt.debugContinue = true
+				rt.breakLines = make(map[int]bool)
+				rt.breakSteps = make(map[int]bool)
+				rt.clearDebugHighlight(ctx)
+				return nil
+
+			case lower == "abort":
 				return ErrDebugStop
 
-			case cmdStr == "highlight":
+			case lower == "highlight":
 				js := `(function(){var el=document.querySelector('[data-manul-debug-highlight]');if(el)el.scrollIntoView({behavior:'smooth',block:'center'});})();`
 				rt.page.EvalJS(ctx, js)
 				emitPauseMarker()
 				readNext()
 
-			case strings.HasPrefix(cmdStr, "highlight "):
-				xpath := strings.TrimPrefix(cmdStr, "highlight ")
+			case strings.HasPrefix(lower, "highlight "):
+				xpath := strings.TrimPrefix(trimmed, "highlight ")
+				xpath = strings.TrimPrefix(xpath, "HIGHLIGHT ")
 				if err := rt.debugHighlight(ctx, xpath); err != nil {
 					rt.logger.Warn("debug: highlight failed: %v", err)
 				}
 				emitPauseMarker()
 				readNext()
 
-			case cmdStr == "explain" || strings.HasPrefix(cmdStr, "explain-next"):
-				explainText := rt.explainStep(ctx, cmd)
-				type explainPayload struct {
-					Step       string                   `json:"step"`
-					Candidates []scorer.RankedCandidate `json:"candidates"`
-					Text       string                   `json:"text"`
-				}
-				ep, _ := json.Marshal(explainPayload{
-					Step:       cmd.Raw,
-					Candidates: rt.lastExplainData,
-					Text:       explainText,
-				})
-				fmt.Fprintf(os.Stdout, "\x00MANUL_EXPLAIN_NEXT\x00%s\n", ep)
-				os.Stdout.Sync()
+			case lower == "explain-next" || lower == "explain":
+				emitExplain(cmd.Raw)
+				emitPauseMarker()
+				readNext()
 
+			case strings.HasPrefix(lower, "explain-next "):
+				// Contract §4.3: `explain-next {"step":"<override>"}\n`.
+				jsonPart := strings.TrimSpace(trimmed[len("explain-next"):])
+				stepText := cmd.Raw
+				var ov struct {
+					Step string `json:"step"`
+				}
+				if err := json.Unmarshal([]byte(jsonPart), &ov); err == nil && ov.Step != "" {
+					stepText = ov.Step
+				}
+				emitExplain(stepText)
 				emitPauseMarker()
 				readNext()
 
