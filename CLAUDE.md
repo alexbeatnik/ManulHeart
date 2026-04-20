@@ -54,6 +54,8 @@ Read the relevant skill file **before** making changes to related systems.
 | `pkg/scorer`, `pkg/dom`, JS probes (`pkg/heuristics`) | `.claude/skills/scoring-heuristics/SKILL.md` |
 | Writing or reviewing `.hunt` files | `.claude/skills/hunt-authoring/SKILL.md` |
 | Writing or debugging tests | `.claude/skills/testing-manulheart/SKILL.md` |
+| Adding/modifying DSL commands in `pkg/dsl` + `pkg/runtime` | `.claude/skills/adding-dsl-commands/SKILL.md` |
+| `RegisterCustomControl` / `RegisterGoCall` extension registries | `.claude/skills/extensions-and-go-calls/SKILL.md` |
 
 ## Architecture
 
@@ -63,13 +65,14 @@ pkg/dsl/            .hunt parser → Hunt{Commands[]Command}; no browser access
 pkg/runtime/        Targeting pipeline + hunt execution (SINGLE-GOROUTINE per worker)
 pkg/heuristics/     In-page JS probes (SnapshotProbe, VisibleTextProbe, ExtractDataProbe)
 pkg/scorer/         Deterministic stateless 4-channel scoring [0.0–1.0]
-pkg/dom/            ElementSnapshot (27 fields): normalized Go structs from probe output
+pkg/dom/            ElementSnapshot (37 fields): normalized Go structs from probe output
 pkg/browser/        Page/Browser interfaces + CDP backend + Chrome lifecycle
 pkg/cdp/            Raw CDP WebSocket transport; goroutine-safe Conn
-pkg/worker/         Worker / WorkerPool / PortAllocator — parallel execution substrate
+pkg/worker/         Worker / WorkerPool / PortAllocator / RunHuntsInParallel — parallel execution substrate
 pkg/explain/        Pure data types: ExecutionResult, HuntResult, ScoreBreakdown
 pkg/report/         Per-hunt HTML report + aggregate index.html
-pkg/config/         Runtime configuration (18 fields); config.Default() + JSON + env-var loading
+pkg/config/         Runtime configuration (20 fields); config.Default() + JSON + env-var loading
+pkg/core/           Shared enums (e.g. ScrollStrategy: window vs generic-list containers)
 pkg/utils/          Dual-output semantic logger + ANSI stripping + error types
 examples/           Reference .hunt files
 docs/overview.md    Detailed architecture walkthrough
@@ -123,9 +126,13 @@ results, firstErr := pool.Run(ctx, hunts)
 report.GenerateIndex(summaries, "reports")  // aggregate index.html
 ```
 
-### Configuration Priority Chain (`0.0.0.5`+)
+For quick fan-out without `FailFast` or custom `ChromeOptions`, use the convenience
+wrapper: `results, err := worker.RunHuntsInParallel(ctx, cfg, hunts, n, logger)` —
+returns per-hunt results in input order.
 
-`pkg/config` resolves an 18-field `Config` struct from four sources in strict priority order:
+### Configuration Priority Chain (`0.0.0.6`+)
+
+`pkg/config` resolves a 20-field `Config` struct from four sources in strict priority order:
 
 ```
 CLI Flags  >  MANUL_* env vars  >  manul_engine_configuration.json  >  config.Default()
