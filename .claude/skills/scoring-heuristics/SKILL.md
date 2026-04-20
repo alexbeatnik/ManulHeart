@@ -16,7 +16,7 @@ randomness, no LLM calls, no hidden caches.
 .hunt command ──► runtime.loadSnapshot ──► heuristics.ParseProbeResult
                                                     │
                                                     ▼
-                                   []dom.ElementSnapshot (27 fields)
+                                   []dom.ElementSnapshot (37 fields)
                                                     │
                                                     ▼
                             scorer.Rank(query, typeHint, mode, elements, topN, anchor)

@@ -2,7 +2,7 @@
 
 A deterministic, DSL-first browser automation runtime in Go.
 
-Current alpha version: `0.0.0.5`.
+Current alpha version: `0.0.0.6`.
 
 ManulHeart executes `.hunt` files using plain-English commands, DOM intelligence,
 heuristic element resolution, and structured explainability.
@@ -110,7 +110,7 @@ manul examples/saucedemo.hunt --json 2>/dev/null | jq .
 
 > **Note:** The `manul` command name is shared with the Python ManulEngine.
 > Whichever you install last takes priority. To switch back to Python: `pipx install manul-engine`.
-> For ManulHeart `0.0.0.5`, prefer a PATH install so extensions can execute `manul` directly.
+> For ManulHeart `0.0.0.6`, prefer a PATH install so extensions can execute `manul` directly.
 
 ### CLI Flags
 
@@ -339,13 +339,14 @@ pkg/browser         Abstract browser/page interfaces + CDP backend + Chrome life
 pkg/runtime         Targeting pipeline: probe → filter → score → resolve;
                     DSL execution, control flow, variable management
 pkg/worker          Worker / WorkerPool / PortAllocator for parallel execution
-pkg/dom             Normalized DOM element model (ElementSnapshot with 27 fields)
+pkg/dom             Normalized DOM element model (ElementSnapshot with 37 fields)
 pkg/heuristics      In-page JS probes (SnapshotProbe, VisibleTextProbe, ExtractDataProbe)
 pkg/scorer          Deterministic 4-channel [0.0–1.0] scoring and ranking
 pkg/dsl             .hunt file parser, import resolver, command AST with block nesting
 pkg/explain         Structured execution results and explainability types
 pkg/report          Styled HTML report generation + aggregate index.html
-pkg/config          Runtime configuration (18 fields)
+pkg/config          Runtime configuration (20 fields)
+pkg/core            Shared enums (e.g. ScrollStrategy: window vs generic-list containers)
 pkg/utils           Semantic logging (Block/Action/Detail), ANSI stripping, error types
 examples/           7 sample .hunt files
 docs/               Documentation
@@ -355,7 +356,7 @@ See [docs/overview.md](docs/overview.md) for a detailed architecture walkthrough
 
 ---
 
-## Parallel Execution (API, `0.0.0.5`)
+## Parallel Execution (API, `0.0.0.6`)
 
 As of `0.0.0.3` ManulHeart ships a Go-level worker pool for running hunts in
 parallel. The `manul` CLI is still single-threaded; embed the pool directly
@@ -425,7 +426,7 @@ cfg, _ := config.Load()  // applies all layers: defaults → JSON → env vars
 // CLI flag parsing then overrides cfg fields directly
 ```
 
-The `pkg/config` package exposes 18 fields covering headless mode, timeouts, screenshot
+The `pkg/config` package exposes 20 fields covering headless mode, timeouts, screenshot
 policy, debug breakpoints, scoring thresholds, and more.
 
 ---
@@ -451,7 +452,7 @@ import system (including USE/CALL expansion), 4-channel scoring, contextual
 qualifiers (NEAR, ON HEADER/FOOTER, INSIDE), Shadow DOM support, 3-pass
 proximity resolution, HTML reporting, screenshots, debug mode, explain mode.
 
-As of `0.0.0.5` the engine also exposes a **parallel-execution substrate**:
+As of `0.0.0.6` the engine also exposes a **parallel-execution substrate**:
 a goroutine-safe CDP transport, a `pkg/worker` package with `Worker`,
 `WorkerPool`, and `PortAllocator`, per-worker log prefixes, and collision-proof
 report filenames. Every test (CDP, runtime, scorer, worker) runs under
@@ -461,7 +462,7 @@ Not yet implemented: a CLI flag to expose the worker pool end-to-end (the API
 is there, the CLI is still single-threaded), LLM-based fallback,
 scan/record subcommands.
 
-**Documented CLI version:** `0.0.0.5`.
+**Documented CLI version:** `0.0.0.6`.
 
 **Recommended install target:** expose the binary as a PATH command named `manul`
 for editor extensions and automation tooling.
@@ -469,6 +470,14 @@ for editor extensions and automation tooling.
 ---
 
 ## What's New
+
+### `0.0.0.6` — snapshot expansion, config growth & convenience parallelism
+
+- **37-field `ElementSnapshot`** — Expanded from 27 fields to 37; the JS `SnapshotProbe` (Shadow-DOM-aware, single-pass `TreeWalker`) now collects richer identity, text, state, and geometry signals in one round-trip for the scorer.
+- **20-field `Config`** — Grew from 18 to 20 fields; new knobs surface via the same four-layer priority chain (CLI > `MANUL_*` env > `manul_engine_configuration.json` > `config.Default()`).
+- **`worker.RunHuntsInParallel`** — Zero-config convenience wrapper over `WorkerPool` that creates a pool, runs hunts, and returns per-hunt results in input order. Use `NewPool` directly when you need `FailFast` or custom `ChromeOptions`.
+- **`pkg/core` shared enums** — New package centralising cross-cutting enums (e.g. `ScrollStrategy`: window vs generic-list containers) that previously lived inline in `pkg/runtime`.
+- **Skill guides refreshed** — `concurrency-rules`, `scoring-heuristics`, and the repo-level `CLAUDE.md` / `.github/copilot-instructions.md` updated to reflect the `0.0.0.6` field counts, new convenience APIs, and `pkg/core`.
 
 ### `0.0.0.5` — configuration system, debug protocol & test coverage
 
