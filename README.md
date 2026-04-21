@@ -262,8 +262,8 @@ ManulHeart includes a powerful TTY-based interactive debugger. It can be trigger
 When paused, you have access to the following commands in your terminal:
 
 - `next` (or Enter): Execute the current step and pause at the next one.
-- `continue`: Resume execution and skip all future pauses.
-- `debug-stop`: Alias for `continue`.
+- `continue`: Free-run to the next `--break-lines` breakpoint.
+- `debug-stop`: Suppress all future pauses (clears all breakpoints, free-runs to end).
 - `explain-next`: Score candidates for the current step and print a full `ExplainNextResult` breakdown, then re-pause.
 - `explain-next {"step":"<text>"}`: Same as above but scores the overridden step text.
 - `highlight <xpath>`: Outline a specific element in the browser with a magenta highlight.

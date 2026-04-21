@@ -21,8 +21,8 @@ type RunHistoryEntry struct {
 
 // AppendRunHistory appends one JSONL record describing result to
 // <reportsDir>/run_history.json (created if needed). The file is append-only;
-// each record ends with a newline. Errors opening or writing the file are
-// returned unchanged so the caller can surface them without failing the run.
+// each record ends with a newline. Errors are wrapped and returned so the
+// caller can surface them without failing the run.
 func AppendRunHistory(reportsDir string, result *explain.HuntResult) error {
 	if result == nil {
 		return fmt.Errorf("nil HuntResult")

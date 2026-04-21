@@ -110,7 +110,7 @@ func cmdRun(args []string) error {
 	verbose := fs.Bool("verbose", false, "enable verbose logging")
 	jsonOut := fs.Bool("json", false, "print JSON result to stdout")
 	timeout := fs.Duration("timeout", 30*time.Second, "default command timeout")
-	userDataDir := fs.String("user-data-dir", "/tmp/manulheart-chrome", "Chrome profile directory (default: /tmp/manulheart-chrome)")
+	userDataDir := fs.String("user-data-dir", "", "Chrome profile directory (empty = unique temp dir per run)")
 	headless := fs.Bool("headless", false, "run Chrome in headless mode")
 	debug := fs.Bool("debug", false, "enable debug mode (pause on each step)")
 	explainMode := fs.Bool("explain", false, "enable explain mode (show targeting candidates)")
@@ -231,7 +231,10 @@ func cmdRun(args []string) error {
 	} else {
 		opts := browser.DefaultChromeOptions()
 		opts.UserDataDir = *userDataDir // empty string → unique temp dir
-		opts.Headless = *headless
+		if *headless {
+			cfg.Headless = true
+		}
+		opts.Headless = cfg.Headless
 
 		logger.Info("Launching Chrome (port %d, profile %s)…", opts.Port, opts.UserDataDir)
 		chrome, err = browser.LaunchChrome(ctx, opts)
@@ -452,19 +455,6 @@ func printResult(result any, asJSON bool, logger *utils.Logger) {
 		return
 	}
 
-	type huntResult interface {
-		GetSummary() (int, int, int, time.Duration, bool)
-	}
-
-	// Type-assert for the structured summary
-	type summary struct {
-		TotalSteps    int
-		Passed        int
-		Failed        int
-		TotalDuration time.Duration
-		Success       bool
-	}
-
 	data, _ := json.Marshal(result)
 	var s struct {
 		TotalSteps      int   `json:"total_steps"`
@@ -494,7 +484,7 @@ Usage:
 
 Core Flags:
   --cdp URL           Connect to existing Chrome (skip auto-launch)
-  --user-data-dir DIR Chrome profile directory (default: /tmp/manulheart-chrome)
+  --user-data-dir DIR Chrome profile directory (default: unique temp dir per run)
   --headless          Run Chrome in headless mode
   --verbose           Enable verbose debug logging
   --json              Output structured JSON result to stdout

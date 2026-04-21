@@ -226,9 +226,9 @@ The extension sends one token per line:
 | Token | Effect |
 |-------|--------|
 | `next` (or empty Enter) | Execute current step, pause at next |
-| `continue` | Resume — suppress all future pauses |
-| `debug-stop` | Alias for `continue` |
-| `abort` | Halt execution immediately |
+| `continue` | Free-run to next `--break-lines` breakpoint |
+| `debug-stop` | Suppress all future pauses (clears all breakpoints, free-runs to end) |
+| `abort` | Halt execution immediately with error |
 | `explain-next` | Score candidates for current step, emit `MANUL_EXPLAIN_NEXT` payload, then re-emit pause marker |
 | `explain-next {"step":"<override>"}` | Score candidates for the overridden step text instead |
 
@@ -241,24 +241,24 @@ After `explain-next` the engine emits a second sentinel then re-pauses:
 \x00MANUL_DEBUG_PAUSE\x00{"step":"...","idx":N}\n
 ```
 
-The JSON is a 10-field `ExplainNextResult`:
+The JSON is a 10-field `ExplainNextResult` (matches `explainNextPayload` in `pkg/runtime/debug.go`):
 
 ```json
 {
-  "step":        "Click the 'Login' button",
-  "idx":         3,
-  "confidence":  9,
-  "label":       "high",
-  "topTag":      "button",
-  "topText":     "Login",
-  "topScore":    0.87,
-  "explanation": "top candidate <button> score=0.870 (text=0.450 id=0.000 semantic=0.600 penalty=1.000)",
-  "candidates":  5,
-  "error":       null
+  "step":             "Click the 'Login' button",
+  "score":            0.87,
+  "confidence_label": "high",
+  "target_found":     true,
+  "target_element":   "<button> Login",
+  "explanation":      "top candidate <button> score=0.870 (text=0.450 id=0.000 semantic=0.600 penalty=1.000)",
+  "risk":             "",
+  "suggestion":       null,
+  "heuristic_score":  null,
+  "heuristic_match":  null
 }
 ```
 
-`confidence` is derived from `scoreToConfidence(score)`:
+`confidence_label` is derived from `score`:
 
 | Score range | Confidence | Label |
 |-------------|-----------|-------|
