@@ -206,10 +206,18 @@ func (rt *Runtime) debugPromptTTY(ctx context.Context, cmd dsl.Command, idx int)
 				rt.clearDebugHighlight(ctx)
 				return nil
 			case token == "continue":
-				rt.debugContinue = true
+				// Run to the next --break-lines breakpoint; clear one-shot step
+				// advances but preserve user-set breakpoints.
+				rt.breakSteps = make(map[int]bool)
 				rt.clearDebugHighlight(ctx)
 				return nil
-			case token == "debug-stop", token == "abort":
+			case token == "debug-stop":
+				rt.debugContinue = true
+				rt.breakLines = make(map[int]bool)
+				rt.breakSteps = make(map[int]bool)
+				rt.clearDebugHighlight(ctx)
+				return nil
+			case token == "abort":
 				return ErrDebugStop
 			case strings.HasPrefix(token, "highlight "):
 				xpath := strings.TrimPrefix(token, "highlight ")

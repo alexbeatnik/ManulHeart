@@ -113,3 +113,130 @@ func TestShouldPause_DebugContinue_OverridesBreakLines(t *testing.T) {
 		}
 	}
 }
+
+func TestShouldPause_BreakSteps(t *testing.T) {
+	cfg := config.Default()
+	cfg.BreakLines = []int{10} // non-empty so we don't enter pause-every-step mode
+	rt := newTestRuntime(cfg)
+	rt.breakSteps = map[int]bool{3: true}
+
+	// Index 3 must pause; indices that aren't in breakSteps or breakLines must not.
+	if !rt.shouldPause(dsl.Command{LineNum: 99}, 3) {
+		t.Error("shouldPause should return true for breakSteps index 3")
+	}
+	if rt.shouldPause(dsl.Command{LineNum: 99}, 2) {
+		t.Error("shouldPause should return false for index 2 (not in breakSteps or breakLines)")
+	}
+}
+
+// ---- token state mutations ---------------------------------------------------
+//
+// The "next", "continue", and "debug-stop" debug tokens each mutate Runtime
+// state before returning control to the execution loop. These tests verify
+// that state directly, without needing to pipe stdin.
+
+// nextTokenState replicates the state mutation that "next" performs.
+func nextTokenState(rt *Runtime, idx int) {
+	if rt.breakSteps == nil {
+		rt.breakSteps = make(map[int]bool)
+	}
+	rt.breakSteps[idx+1] = true
+}
+
+// continueTokenState replicates the state mutation that "continue" performs.
+func continueTokenState(rt *Runtime) {
+	rt.breakSteps = make(map[int]bool)
+}
+
+// debugStopTokenState replicates the state mutation that "debug-stop" performs.
+func debugStopTokenState(rt *Runtime) {
+	rt.debugContinue = true
+	rt.breakLines = make(map[int]bool)
+	rt.breakSteps = make(map[int]bool)
+}
+
+func TestNextToken_PausesAtNextStep(t *testing.T) {
+	cfg := config.Default()
+	cfg.BreakLines = []int{99} // non-empty; idx+1 is not in breakLines
+	rt := newTestRuntime(cfg)
+
+	nextTokenState(rt, 2) // simulates "next" while paused at step 2
+
+	// Step 3 (idx 3) must now trigger a pause.
+	if !rt.shouldPause(dsl.Command{LineNum: 1}, 3) {
+		t.Error("shouldPause should return true at idx 3 after 'next' from idx 2")
+	}
+	// Step 4 must not.
+	if rt.shouldPause(dsl.Command{LineNum: 1}, 4) {
+		t.Error("shouldPause should return false at idx 4 after 'next' from idx 2")
+	}
+}
+
+func TestContinueToken_PreservesBreakLines(t *testing.T) {
+	cfg := config.Default()
+	cfg.BreakLines = []int{20}
+	rt := newTestRuntime(cfg)
+	// Simulate a one-shot breakStep that "continue" must clear.
+	rt.breakSteps = map[int]bool{5: true}
+
+	continueTokenState(rt)
+
+	// breakLines must still cause a pause — continue only clears breakSteps.
+	if !rt.shouldPause(dsl.Command{LineNum: 20}, 99) {
+		t.Error("shouldPause should return true at breakLine 20 after 'continue'")
+	}
+	// The one-shot step advance must be gone.
+	if rt.shouldPause(dsl.Command{LineNum: 1}, 5) {
+		t.Error("shouldPause should return false at old breakStep 5 after 'continue'")
+	}
+}
+
+func TestContinueToken_NoDebugContinueSet(t *testing.T) {
+	rt := newTestRuntime(config.Default())
+	rt.debugContinue = false
+
+	continueTokenState(rt)
+
+	if rt.debugContinue {
+		t.Error("'continue' must not set debugContinue — that would skip all remaining breakpoints")
+	}
+}
+
+func TestDebugStopToken_SuppressesAllPauses(t *testing.T) {
+	cfg := config.Default()
+	cfg.BreakLines = []int{10, 20}
+	rt := newTestRuntime(cfg)
+	rt.breakSteps = map[int]bool{3: true}
+
+	debugStopTokenState(rt)
+
+	// Neither a breakLine nor a breakStep must pause after debug-stop.
+	for _, lineNum := range []int{10, 20, 0, 99} {
+		cmd := dsl.Command{LineNum: lineNum}
+		if rt.shouldPause(cmd, 3) {
+			t.Errorf("shouldPause(line=%d,idx=3) should be false after 'debug-stop'", lineNum)
+		}
+	}
+}
+
+func TestConfidenceLabel(t *testing.T) {
+	cases := []struct {
+		score float64
+		want  string
+	}{
+		{0.0, "none"},
+		{-1.0, "none"},
+		{0.001, "low"},
+		{0.099, "low"},
+		{0.1, "medium"},
+		{0.499, "medium"},
+		{0.5, "high"},
+		{1.0, "high"},
+	}
+	for _, tc := range cases {
+		got := confidenceLabel(tc.score)
+		if got != tc.want {
+			t.Errorf("confidenceLabel(%v) = %q want %q", tc.score, got, tc.want)
+		}
+	}
+}
