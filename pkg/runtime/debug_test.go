@@ -57,7 +57,7 @@ func TestShouldPause_DebugContinue(t *testing.T) {
 
 	// Even with empty breakLines (pause-every-step mode) debugContinue wins.
 	cmd := dsl.Command{LineNum: 5}
-	if rt.shouldPause(cmd) {
+	if rt.shouldPause(cmd, 0) {
 		t.Error("shouldPause should return false when debugContinue=true")
 	}
 }
@@ -69,7 +69,7 @@ func TestShouldPause_EmptyBreakLines_PausesEveryStep(t *testing.T) {
 
 	for _, lineNum := range []int{1, 10, 99, 0} {
 		cmd := dsl.Command{LineNum: lineNum}
-		if !rt.shouldPause(cmd) {
+		if !rt.shouldPause(cmd, 0) {
 			t.Errorf("shouldPause should return true for line %d when breakLines is empty", lineNum)
 		}
 	}
@@ -92,7 +92,7 @@ func TestShouldPause_SpecificBreakLines(t *testing.T) {
 	}
 	for _, tc := range cases {
 		cmd := dsl.Command{LineNum: tc.lineNum}
-		got := rt.shouldPause(cmd)
+		got := rt.shouldPause(cmd, 0)
 		if got != tc.want {
 			t.Errorf("shouldPause(line=%d) = %v want %v", tc.lineNum, got, tc.want)
 		}
@@ -108,7 +108,7 @@ func TestShouldPause_DebugContinue_OverridesBreakLines(t *testing.T) {
 	// Registered breakpoint lines must not pause when debugContinue is set.
 	for _, lineNum := range []int{10, 20} {
 		cmd := dsl.Command{LineNum: lineNum}
-		if rt.shouldPause(cmd) {
+		if rt.shouldPause(cmd, 0) {
 			t.Errorf("shouldPause(line=%d) should be false when debugContinue=true", lineNum)
 		}
 	}
