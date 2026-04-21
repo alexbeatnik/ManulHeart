@@ -99,17 +99,33 @@ func TestShouldPause_SpecificBreakLines(t *testing.T) {
 	}
 }
 
-func TestShouldPause_DebugContinue_OverridesBreakLines(t *testing.T) {
+func TestShouldPause_DebugContinue_StopsAtBreakLine(t *testing.T) {
 	cfg := config.Default()
 	cfg.BreakLines = []int{10, 20}
 	rt := newTestRuntime(cfg)
 	rt.debugContinue = true
 
-	// Registered breakpoint lines must not pause when debugContinue is set.
-	for _, lineNum := range []int{10, 20} {
+	// debugContinue free-runs until it hits a user-set breakpoint line.
+	if !rt.shouldPause(dsl.Command{LineNum: 10}, 0) {
+		t.Error("shouldPause should return true at breakLine 10 even when debugContinue=true")
+	}
+	// shouldPause resets debugContinue so the next normal pause cycle works.
+	if rt.debugContinue {
+		t.Error("shouldPause should reset debugContinue after hitting a breakLine")
+	}
+}
+
+func TestShouldPause_DebugContinue_SkipsNonBreakLines(t *testing.T) {
+	cfg := config.Default()
+	cfg.BreakLines = []int{10, 20}
+	rt := newTestRuntime(cfg)
+	rt.debugContinue = true
+
+	// Lines not in breakLines must not pause.
+	for _, lineNum := range []int{1, 5, 15, 99} {
 		cmd := dsl.Command{LineNum: lineNum}
 		if rt.shouldPause(cmd, 0) {
-			t.Errorf("shouldPause(line=%d) should be false when debugContinue=true", lineNum)
+			t.Errorf("shouldPause(line=%d) should be false during free-run", lineNum)
 		}
 	}
 }
@@ -145,6 +161,7 @@ func nextTokenState(rt *Runtime, idx int) {
 
 // continueTokenState replicates the state mutation that "continue" performs.
 func continueTokenState(rt *Runtime) {
+	rt.debugContinue = true
 	rt.breakSteps = make(map[int]bool)
 }
 
@@ -191,14 +208,13 @@ func TestContinueToken_PreservesBreakLines(t *testing.T) {
 	}
 }
 
-func TestContinueToken_NoDebugContinueSet(t *testing.T) {
+func TestContinueToken_SetsDebugContinue(t *testing.T) {
 	rt := newTestRuntime(config.Default())
-	rt.debugContinue = false
 
 	continueTokenState(rt)
 
-	if rt.debugContinue {
-		t.Error("'continue' must not set debugContinue — that would skip all remaining breakpoints")
+	if !rt.debugContinue {
+		t.Error("'continue' must set debugContinue so execution free-runs to the next breakpoint")
 	}
 }
 

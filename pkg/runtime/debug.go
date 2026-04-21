@@ -18,6 +18,11 @@ var ErrDebugStop = errors.New("debug: stop requested")
 
 func (rt *Runtime) shouldPause(cmd dsl.Command, idx int) bool {
 	if rt.debugContinue {
+		// Free-run mode: only stop at user-set line breakpoints.
+		if rt.breakLines[cmd.LineNum] {
+			rt.debugContinue = false // re-arm for the next continue
+			return true
+		}
 		return false
 	}
 	if len(rt.breakLines) == 0 && len(rt.breakSteps) == 0 {
@@ -206,8 +211,7 @@ func (rt *Runtime) debugPromptTTY(ctx context.Context, cmd dsl.Command, idx int)
 				rt.clearDebugHighlight(ctx)
 				return nil
 			case token == "continue":
-				// Run to the next --break-lines breakpoint; clear one-shot step
-				// advances but preserve user-set breakpoints.
+				rt.debugContinue = true
 				rt.breakSteps = make(map[int]bool)
 				rt.clearDebugHighlight(ctx)
 				return nil
@@ -401,9 +405,7 @@ func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, id
 				return nil
 
 			case lower == "continue":
-				// Contract §4.3: remove all remaining breakpoints, run to end.
 				rt.debugContinue = true
-				rt.breakLines = make(map[int]bool)
 				rt.breakSteps = make(map[int]bool)
 				rt.clearDebugHighlight(ctx)
 				return nil
