@@ -75,12 +75,17 @@ func WithPrefix(parent *Logger, prefix string) *Logger {
 }
 
 // write is the single choke-point for all output: acquires the lock, appends a
-// newline, writes to the console writer, then to the file writer if set.
+// newline, writes to the console writer, flushes stdout, then writes to the
+// file writer if set. The Sync() call is required by the VS Code extension
+// contract so every line is visible on the pipe immediately.
 func (l *Logger) write(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...) + "\n"
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	fmt.Fprint(l.out, msg)
+	if f, ok := l.out.(*os.File); ok {
+		f.Sync()
+	}
 	if l.file != nil {
 		fmt.Fprint(l.file, msg)
 	}
@@ -128,13 +133,17 @@ func (l *Logger) BlockStart(name string) {
 }
 
 // BlockPass logs the 🟩 BLOCK PASS banner in green (no indent).
+// ANSI codes are placed AFTER the bracketed marker so the VS Code extension
+// BLOCK_LOG_RE `^\s*\[...BLOCK\s+(PASS|FAIL)\]` still anchors cleanly.
 func (l *Logger) BlockPass(name string) {
-	l.write("\033[32m[🟩 BLOCK PASS] %s\033[0m", name)
+	l.write("[🟩 BLOCK PASS] \033[32m%s\033[0m", name)
 }
 
 // BlockFail logs the 🟥 BLOCK FAIL banner in red (no indent).
+// ANSI codes are placed AFTER the bracketed marker so the VS Code extension
+// BLOCK_LOG_RE `^\s*\[...BLOCK\s+(PASS|FAIL)\]` still anchors cleanly.
 func (l *Logger) BlockFail(name string) {
-	l.write("\033[31m[🟥 BLOCK FAIL] %s\033[0m", name)
+	l.write("[🟥 BLOCK FAIL] \033[31m%s\033[0m", name)
 }
 
 // ActionStart logs the ▶️ ACTION START line (2-space indent).

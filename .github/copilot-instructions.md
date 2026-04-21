@@ -20,7 +20,7 @@
 ## CLI INSTALL + VERSION
 
 > **CRITICAL — Read this first.**
-> Current documented ManulHeart CLI version is **0.0.0.5**.
+> Current documented ManulHeart CLI version is **0.0.0.6**.
 > When documenting install or usage, prefer the Go binary as a PATH-visible system command named `manul`
 > (for example `~/.local/bin/manul` or `/usr/local/bin/manul`) so editor extensions can invoke it directly.
 > Do not document the repo-local binary as the only intended integration path when the request is about running from tools or extensions.
@@ -66,7 +66,7 @@ pkg/
   worker/                  Worker, WorkerPool, PortAllocator (parallel execution substrate)
   explain/                 Score breakdown and debugging visualization
   report/                  Per-hunt HTML report + aggregate index.html
-  config/                  Runtime configuration (18 fields); config.Default() + JSON + env-var loading
+  config/                  Runtime configuration (20 fields); config.Default() + JSON + env-var loading
   utils/                   Logger (dual-output: stdout+ANSI, file+stripped) + error types
 examples/                  Reference .hunt files (mega.hunt, sampler.hunt)
 ```
@@ -189,9 +189,9 @@ results, firstErr := pool.Run(ctx, hunts)
 - Logger API: `utils.NewLogger(logFile)` (stdout + optional ANSI-stripped file); `l.WithLevel(level)` for verbose mode; semantic methods `BlockStart/Pass/Fail`, `ActionStart/Pass/Fail/Warn`, `HeuristicDetail`, `ActionDetail`.
 - Per-hunt report filenames carry an atomic sequence counter — never collide.
 
-## Configuration priority chain (`0.0.0.5`+)
+## Configuration priority chain (`0.0.0.6`+)
 
-`pkg/config` resolves an 18-field `Config` struct from four sources in strict priority order:
+`pkg/config` resolves a 20-field `Config` struct from four sources in strict priority order:
 
 ```
 CLI Flags  >  MANUL_* env vars  >  manul_engine_configuration.json  >  config.Default()
@@ -204,29 +204,85 @@ CLI Flags  >  MANUL_* env vars  >  manul_engine_configuration.json  >  config.De
 
 When generating code that reads configuration, always start from `config.Default()` and apply layers on top — never construct a `Config` literal from scratch.
 
-## VS Code Debug Protocol (`0.0.0.5`+)
+## VS Code Debug Protocol (`0.0.0.6`+)
 
-`pkg/runtime/debug.go` exposes an interactive step debugger. When paused the engine writes a sentinel to stdout:
+`pkg/runtime/debug.go` exposes an interactive step debugger driven over stdin/stdout pipes.
+
+### Pause marker
+
+When the engine pauses it writes a NUL-delimited sentinel line to stdout:
 
 ```
-\x00MANUL_DEBUG_PAUSE\x00{"line":12,"step":"Click the 'Login' button"}
+\x00MANUL_DEBUG_PAUSE\x00{"step":"Click the 'Login' button","idx":3}\n
 ```
 
-The IDE extension polls stdin for `next`, `continue`, `abort`, or `explain`. The JSON payload contains `line` (1-based source line number from `cmd.LineNum`) and `step` (raw DSL text). No `confidence` field is included at pause time — heuristic scoring has not yet run.
+- `step` — raw DSL text of the command about to execute.
+- `idx` — **1-based** command index within the hunt (matches line display in the extension).
 
-`scoreToConfidence(score float64)` is available for `explain` responses but not the pause payload:
+### Stdin tokens
 
-| Score range | Confidence |
-|-------------|-----------|
-| ≤ 0 | 0 |
-| > 0, < 0.01 | 1 |
-| 0.01–0.049 | 3 |
-| 0.05–0.099 | 5 |
-| 0.10–0.499 | 7 |
-| 0.50–0.999 | 9 |
-| ≥ 1.0 | 10 |
+The extension sends one token per line:
 
-`shouldPause(cmd)` returns true when `breakLines` is empty (pause-every-step mode) or the command's line number appears in `breakLines`, UNLESS `debugContinue` is set — in which case all pauses are suppressed.
+| Token | Effect |
+|-------|--------|
+| `next` (or empty Enter) | Execute current step, pause at next |
+| `continue` | Free-run to next `--break-lines` breakpoint |
+| `debug-stop` | Suppress all future pauses (clears all breakpoints, free-runs to end) |
+| `abort` | Halt execution immediately with error |
+| `explain-next` | Score candidates for current step, emit `MANUL_EXPLAIN_NEXT` payload, then re-emit pause marker |
+| `explain-next {"step":"<override>"}` | Score candidates for the overridden step text instead |
+
+### Explain-next payload
+
+After `explain-next` the engine emits a second sentinel then re-pauses:
+
+```
+\x00MANUL_EXPLAIN_NEXT\x00<json>\n
+\x00MANUL_DEBUG_PAUSE\x00{"step":"...","idx":N}\n
+```
+
+The JSON is a 10-field `ExplainNextResult` (matches `explainNextPayload` in `pkg/runtime/debug.go`):
+
+```json
+{
+  "step":             "Click the 'Login' button",
+  "score":            0.87,
+  "confidence_label": "high",
+  "target_found":     true,
+  "target_element":   "<button> Login",
+  "explanation":      "top candidate <button> score=0.870 (text=0.450 id=0.000 semantic=0.600 penalty=1.000)",
+  "risk":             "",
+  "suggestion":       null,
+  "heuristic_score":  null,
+  "heuristic_match":  null
+}
+```
+
+`confidence_label` is derived from `score`:
+
+| Score range | Confidence | Label |
+|-------------|-----------|-------|
+| ≤ 0 | 0 | none |
+| > 0, < 0.01 | 1 | low |
+| 0.01–0.049 | 3 | low |
+| 0.05–0.099 | 5 | medium |
+| 0.10–0.499 | 7 | medium |
+| 0.50–0.999 | 9 | high |
+| ≥ 1.0 | 10 | high |
+
+### shouldPause
+
+`shouldPause(cmd, idx)` returns true when `breakLines` is empty (pause-every-step mode) or the command's line number appears in `breakLines`, UNLESS `debugContinue` is set — in which case all pauses are suppressed. The `idx` parameter enables future index-based breakpoint matching without changing the line-number logic.
+
+## Filesystem artifacts (`0.0.0.6`+)
+
+After every hunt run the engine appends one JSONL record to `<cwd>/reports/run_history.json` (directory created automatically):
+
+```json
+{"file":"/abs/path/to/login.hunt","name":"login.hunt","timestamp":"2026-04-21T10:00:00Z","status":"pass","duration_ms":4250}
+```
+
+Fields: `file` (absolute path), `name` (`filepath.Base`), `timestamp` (RFC3339 UTC), `status` (`"pass"` or `"fail"`), `duration_ms` (float64). The file is append-only; each record ends with `\n`. Implemented in `pkg/report/run_history.go` via `AppendRunHistory(reportsDir, *explain.HuntResult)`.
 
 ## Testing expectations
 

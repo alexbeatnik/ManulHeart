@@ -59,6 +59,7 @@ type Runtime struct {
 
 	// debug state — only populated when cfg.DebugMode is true
 	breakLines      map[int]bool             // source line numbers that are breakpoints; empty = pause every step
+	breakSteps      map[int]bool             // command indices queued by extension-mode "next" to pause at
 	debugContinue   bool                     // when true, skip all future pauses
 	lastExplainData []scorer.RankedCandidate // cached ranking for the "explain" debug command
 }
@@ -127,9 +128,11 @@ func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRe
 	passed, failed := 0, 0
 	var firstErr error
 
+	var cmdOffset int
 	for _, g := range groups {
 		rt.logger.BlockStart(g.name)
-		p, f, err := rt.runCommands(ctx, g.commands, result)
+		p, f, err := rt.runCommands(ctx, g.commands, result, cmdOffset)
+		cmdOffset += len(g.commands)
 		passed += p
 		failed += f
 		if err != nil || f > 0 {
@@ -152,15 +155,16 @@ func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRe
 	return result, firstErr
 }
 
-func (rt *Runtime) runCommands(ctx context.Context, commands []dsl.Command, huntRes *explain.HuntResult) (int, int, error) {
+func (rt *Runtime) runCommands(ctx context.Context, commands []dsl.Command, huntRes *explain.HuntResult, offset int) (int, int, error) {
 	passed, failed := 0, 0
 	for i, cmd := range commands {
 		if err := ctx.Err(); err != nil {
 			return passed, failed, fmt.Errorf("runtime: context cancelled: %w", err)
 		}
 
-		if rt.cfg.DebugMode && rt.shouldPause(cmd) {
-			if dbgErr := rt.debugPrompt(ctx, cmd, i); dbgErr != nil {
+		globalIdx := offset + i
+		if rt.cfg.DebugMode && rt.shouldPause(cmd, globalIdx) {
+			if dbgErr := rt.debugPrompt(ctx, cmd, globalIdx); dbgErr != nil {
 				return passed, failed, dbgErr
 			}
 		}
@@ -915,7 +919,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			}
 		}
 		if err == nil && len(bodyToRun) > 0 {
-			_, _, err = rt.runCommands(ctx, bodyToRun, nil)
+			_, _, err = rt.runCommands(ctx, bodyToRun, nil, 0)
 		}
 
 	case dsl.CmdRepeat:
@@ -924,7 +928,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			if cmd.RepeatVar != "" {
 				rt.vars.Set(cmd.RepeatVar, fmt.Sprintf("%d", i), LevelRow)
 			}
-			_, _, err = rt.runCommands(ctx, cmd.Body, nil)
+			_, _, err = rt.runCommands(ctx, cmd.Body, nil, 0)
 			if err != nil {
 				break
 			}
@@ -941,7 +945,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 			if !matched {
 				break
 			}
-			_, _, err = rt.runCommands(ctx, cmd.Body, nil)
+			_, _, err = rt.runCommands(ctx, cmd.Body, nil, 0)
 			if err != nil {
 				break
 			}
@@ -960,7 +964,7 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 				continue
 			}
 			rt.vars.Set(cmd.ForEachVar, val, LevelRow)
-			_, _, err = rt.runCommands(ctx, cmd.Body, nil)
+			_, _, err = rt.runCommands(ctx, cmd.Body, nil, 0)
 			if err != nil {
 				break
 			}

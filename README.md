@@ -2,7 +2,7 @@
 
 A deterministic, DSL-first browser automation runtime in Go.
 
-Current alpha version: `0.0.0.5`.
+Current alpha version: `0.0.0.6`.
 
 ManulHeart executes `.hunt` files using plain-English commands, DOM intelligence,
 heuristic element resolution, and structured explainability.
@@ -110,7 +110,7 @@ manul examples/saucedemo.hunt --json 2>/dev/null | jq .
 
 > **Note:** The `manul` command name is shared with the Python ManulEngine.
 > Whichever you install last takes priority. To switch back to Python: `pipx install manul-engine`.
-> For ManulHeart `0.0.0.5`, prefer a PATH install so extensions can execute `manul` directly.
+> For ManulHeart `0.0.0.6`, prefer a PATH install so extensions can execute `manul` directly.
 
 ### CLI Flags
 
@@ -262,8 +262,10 @@ ManulHeart includes a powerful TTY-based interactive debugger. It can be trigger
 When paused, you have access to the following commands in your terminal:
 
 - `next` (or Enter): Execute the current step and pause at the next one.
-- `continue`: Resume execution and skip all future pauses.
-- `explain`: Show the top 5 candidates for the current targeting query with full score breakdowns.
+- `continue`: Free-run to the next `--break-lines` breakpoint.
+- `debug-stop`: Suppress all future pauses (clears all breakpoints, free-runs to end).
+- `explain-next`: Score candidates for the current step and print a full `ExplainNextResult` breakdown, then re-pause.
+- `explain-next {"step":"<text>"}`: Same as above but scores the overridden step text.
 - `highlight <xpath>`: Outline a specific element in the browser with a magenta highlight.
 - `debug-vars` (or `DEBUG VARS` in DSL): Dump all currently set variables and their scopes.
 - `abort`: Stop the hunt execution immediately.
@@ -339,13 +341,14 @@ pkg/browser         Abstract browser/page interfaces + CDP backend + Chrome life
 pkg/runtime         Targeting pipeline: probe → filter → score → resolve;
                     DSL execution, control flow, variable management
 pkg/worker          Worker / WorkerPool / PortAllocator for parallel execution
-pkg/dom             Normalized DOM element model (ElementSnapshot with 27 fields)
+pkg/dom             Normalized DOM element model (ElementSnapshot with 37 fields)
 pkg/heuristics      In-page JS probes (SnapshotProbe, VisibleTextProbe, ExtractDataProbe)
 pkg/scorer          Deterministic 4-channel [0.0–1.0] scoring and ranking
 pkg/dsl             .hunt file parser, import resolver, command AST with block nesting
 pkg/explain         Structured execution results and explainability types
 pkg/report          Styled HTML report generation + aggregate index.html
-pkg/config          Runtime configuration (18 fields)
+pkg/config          Runtime configuration (20 fields)
+pkg/core            Shared enums (e.g. ScrollStrategy: window vs generic-list containers)
 pkg/utils           Semantic logging (Block/Action/Detail), ANSI stripping, error types
 examples/           7 sample .hunt files
 docs/               Documentation
@@ -355,7 +358,7 @@ See [docs/overview.md](docs/overview.md) for a detailed architecture walkthrough
 
 ---
 
-## Parallel Execution (API, `0.0.0.5`)
+## Parallel Execution (API, `0.0.0.6`)
 
 As of `0.0.0.3` ManulHeart ships a Go-level worker pool for running hunts in
 parallel. The `manul` CLI is still single-threaded; embed the pool directly
@@ -425,7 +428,7 @@ cfg, _ := config.Load()  // applies all layers: defaults → JSON → env vars
 // CLI flag parsing then overrides cfg fields directly
 ```
 
-The `pkg/config` package exposes 18 fields covering headless mode, timeouts, screenshot
+The `pkg/config` package exposes 20 fields covering headless mode, timeouts, screenshot
 policy, debug breakpoints, scoring thresholds, and more.
 
 ---
@@ -451,7 +454,7 @@ import system (including USE/CALL expansion), 4-channel scoring, contextual
 qualifiers (NEAR, ON HEADER/FOOTER, INSIDE), Shadow DOM support, 3-pass
 proximity resolution, HTML reporting, screenshots, debug mode, explain mode.
 
-As of `0.0.0.5` the engine also exposes a **parallel-execution substrate**:
+As of `0.0.0.6` the engine also exposes a **parallel-execution substrate**:
 a goroutine-safe CDP transport, a `pkg/worker` package with `Worker`,
 `WorkerPool`, and `PortAllocator`, per-worker log prefixes, and collision-proof
 report filenames. Every test (CDP, runtime, scorer, worker) runs under
@@ -461,7 +464,7 @@ Not yet implemented: a CLI flag to expose the worker pool end-to-end (the API
 is there, the CLI is still single-threaded), LLM-based fallback,
 scan/record subcommands.
 
-**Documented CLI version:** `0.0.0.5`.
+**Documented CLI version:** `0.0.0.6`.
 
 **Recommended install target:** expose the binary as a PATH command named `manul`
 for editor extensions and automation tooling.
@@ -469,6 +472,17 @@ for editor extensions and automation tooling.
 ---
 
 ## What's New
+
+### `0.0.0.6` — snapshot expansion, config growth, convenience parallelism & extension contract
+
+- **37-field `ElementSnapshot`** — Expanded from 27 fields to 37; the JS `SnapshotProbe` (Shadow-DOM-aware, single-pass `TreeWalker`) now collects richer identity, text, state, and geometry signals in one round-trip for the scorer.
+- **20-field `Config`** — Grew from 18 to 20 fields; new knobs surface via the same four-layer priority chain (CLI > `MANUL_*` env > `manul_engine_configuration.json` > `config.Default()`).
+- **`worker.RunHuntsInParallel`** — Zero-config convenience wrapper over `WorkerPool` that creates a pool, runs hunts, and returns per-hunt results in input order. Use `NewPool` directly when you need `FailFast` or custom `ChromeOptions`.
+- **`pkg/core` shared enums** — New package centralising cross-cutting enums (e.g. `ScrollStrategy`: window vs generic-list containers) that previously lived inline in `pkg/runtime`.
+- **VS Code extension contract** — Engine version string is `manul-heart v0.0.9.29 (core 0.0.0.6)`, satisfying the extension `MIN_MANUL_ENGINE_VERSION` gate. BLOCK log markers are now ANSI-free at the bracket prefix so the extension regex matches cleanly. `os.Stdout.Sync()` is called after every output line.
+- **Debug protocol v2** — Pause marker now carries a 1-based `idx` field (`\x00MANUL_DEBUG_PAUSE\x00{"step":"...","idx":N}\n`). New stdin tokens: `explain-next` (and `explain-next {"step":"<override>"}`) cause the engine to score candidates and emit a 10-field `ExplainNextResult` JSON via `\x00MANUL_EXPLAIN_NEXT\x00<json>\n` before re-pausing. The `debug-stop` token is an alias for `continue`.
+- **`run_history.json` artifact** — After every hunt run, `pkg/report.AppendRunHistory` appends a JSONL record to `<cwd>/reports/run_history.json`: `{file, name, timestamp (RFC3339 UTC), status ∈ {"pass","fail"}, duration_ms}`. Directory is created automatically; file is append-only.
+- **Skill guides refreshed** — `concurrency-rules`, `scoring-heuristics`, and the repo-level `CLAUDE.md` / `.github/copilot-instructions.md` updated to reflect the `0.0.0.6` field counts, new convenience APIs, `pkg/core`, and the VS Code extension contract.
 
 ### `0.0.0.5` — configuration system, debug protocol & test coverage
 

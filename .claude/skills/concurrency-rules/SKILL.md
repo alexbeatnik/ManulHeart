@@ -7,7 +7,8 @@ description: Enforce ManulHeart's concurrency contract when editing runtime/, cd
 
 Established in `0.0.0.2`, extended in `0.0.0.3` with `RunHuntsInParallel`
 and per-worker log prefixes, extended in `0.0.0.5` with the configuration
-system (`pkg/config`) and VS Code debug protocol (`pkg/runtime/debug.go`).
+system (`pkg/config`) and VS Code debug protocol (`pkg/runtime/debug.go`),
+refined in `0.0.0.6` (20-field `Config`, 37-field `ElementSnapshot`, `pkg/core` enums).
 Every rule here has a test under `-race`; violations trip CI.
 
 ## Hard invariants
