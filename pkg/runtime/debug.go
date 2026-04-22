@@ -44,46 +44,97 @@ func isTTY() bool {
 
 func (rt *Runtime) injectDebugModal(ctx context.Context, step string) error {
 	stepJSON, _ := json.Marshal(step)
-	js := fmt.Sprintf(`(function(){
-var ex=document.getElementById('manul-debug-modal');if(ex)ex.remove();
-var d=document.createElement('div');d.id='manul-debug-modal';
-d.style.cssText='position:fixed;top:10px;right:10px;z-index:2147483647;background:#1a1a2e;color:#eee;padding:12px 16px;border-radius:8px;font-family:monospace;font-size:13px;max-width:420px;box-shadow:0 4px 20px rgba(0,0,0,.6);border:1px solid #444';
-d.innerHTML='<div style="color:#ff79c6;margin-bottom:6px">⏸ ManulHeart Debug<\/div><div style="color:#aaa;margin-bottom:8px;word-break:break-all">'+%s+'<\/div><button id="manul-dbg-continue" style="background:#50fa7b;color:#000;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;margin-right:6px;font-size:12px">Continue<\/button><button id="manul-dbg-abort" style="background:#ff5555;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px">Abort<\/button>';
-document.body.appendChild(d);
-document.getElementById('manul-dbg-continue').onclick=function(){window.__manul_debug_action='continue';d.remove();};
-document.getElementById('manul-dbg-abort').onclick=function(){window.__manul_debug_action='abort';d.remove();};
-window.__manul_debug_action='';
-})();`, string(stepJSON))
+	js := `(function(stepText){
+		const old = document.getElementById('manul-debug-modal');
+		if (old) old.remove();
+		window.__manul_debug_action = null;
+
+		const modal = document.createElement('div');
+		modal.id = 'manul-debug-modal';
+		modal.setAttribute('data-manul-debug', 'true');
+		modal.style.cssText = [
+			'position:fixed', 'top:12px', 'right:12px', 'z-index:2147483647',
+			'background:#1e1e2e', 'color:#cdd6f4',
+			'border:2px solid #89b4fa', 'border-radius:8px',
+			'padding:14px 40px 14px 16px',
+			'font-family:monospace', 'font-size:13px',
+			'max-width:420px', 'word-break:break-all',
+			'box-shadow:0 4px 24px rgba(0,0,0,.55)',
+			'pointer-events:all', 'user-select:none',
+		].join(';');
+
+		const label = document.createElement('div');
+		label.style.cssText = 'font-weight:bold;color:#89b4fa;margin-bottom:6px;font-size:11px;letter-spacing:.06em;';
+		label.textContent = '\uD83D\uDC3E MANUL DEBUG PAUSE';
+
+		const text = document.createElement('div');
+		text.style.cssText = 'line-height:1.5;';
+		text.textContent = stepText;
+
+		const btn = document.createElement('button');
+		btn.id = 'manul-debug-abort';
+		btn.textContent = '\u2715';
+		btn.title = 'Abort test run';
+		btn.style.cssText = [
+			'position:absolute', 'top:8px', 'right:8px',
+			'background:transparent', 'border:none',
+			'color:#a6adc8', 'font-size:16px', 'font-weight:bold',
+			'cursor:pointer', 'line-height:1', 'padding:2px 6px',
+			'border-radius:4px', 'transition:background .15s,color .15s',
+		].join(';');
+		btn.onmouseover = function(){ btn.style.background='#f38ba8'; btn.style.color='#1e1e2e'; };
+		btn.onmouseout  = function(){ btn.style.background='transparent'; btn.style.color='#a6adc8'; };
+		btn.addEventListener('click', function(){ window.__manul_debug_action = 'ABORT'; });
+
+		modal.appendChild(label);
+		modal.appendChild(text);
+		modal.appendChild(btn);
+		document.body.appendChild(modal);
+	})(` + string(stepJSON) + `)`
 	_, err := rt.page.EvalJS(ctx, js)
 	return err
 }
 
 func (rt *Runtime) removeDebugModal(ctx context.Context) error {
-	js := `(function(){var d=document.getElementById('manul-debug-modal');if(d)d.remove();window.__manul_debug_action='';})();`
+	js := `(() => {
+		const m = document.getElementById('manul-debug-modal');
+		if (m) m.remove();
+		window.__manul_debug_action = null;
+	})();`
 	_, err := rt.page.EvalJS(ctx, js)
 	return err
 }
 
 func (rt *Runtime) debugHighlight(ctx context.Context, xpath string) error {
 	xpathJSON, _ := json.Marshal(xpath)
-	js := fmt.Sprintf(`(function(){
-var s=document.getElementById('manul-debug-style');
-if(!s){s=document.createElement('style');s.id='manul-debug-style';document.head.appendChild(s);}
-s.textContent='[data-manul-debug-highlight]{outline:4px solid #ff00ff!important;box-shadow:0 0 15px #ff00ff!important;background:rgba(255,0,255,.12)!important;z-index:999999!important;}';
-var prev=document.querySelector('[data-manul-debug-highlight]');if(prev)prev.removeAttribute('data-manul-debug-highlight');
-var r=document.evaluate(%s,document,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null);
-var el=r.singleNodeValue;
-if(el){el.setAttribute('data-manul-debug-highlight','true');el.scrollIntoView({block:'center'});}
-})();`, string(xpathJSON))
+	js := `(function(){
+		const styleId = 'manul-debug-style';
+		const styleCss = "[data-manul-debug-highlight='true']{outline:4px solid #ff00ff !important;box-shadow:0 0 15px #ff00ff !important;background:rgba(255,0,255,.12) !important;z-index:999999 !important;}";
+		if (!document.getElementById(styleId)) {
+			const s = document.createElement('style');
+			s.id = styleId;
+			s.textContent = styleCss;
+			document.head.appendChild(s);
+		}
+		const r = document.evaluate(` + string(xpathJSON) + `, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+		const el = r.singleNodeValue;
+		if (el) {
+			el.setAttribute('data-manul-debug-highlight', 'true');
+			el.scrollIntoView({behavior:'smooth',block:'center'});
+		}
+	})();`
 	_, err := rt.page.EvalJS(ctx, js)
 	return err
 }
 
 func (rt *Runtime) clearDebugHighlight(ctx context.Context) error {
-	js := `(function(){
-var el=document.querySelector('[data-manul-debug-highlight]');if(el)el.removeAttribute('data-manul-debug-highlight');
-var s=document.getElementById('manul-debug-style');if(s)s.remove();
-})();`
+	js := `(() => {
+		document.querySelectorAll('[data-manul-debug-highlight]').forEach(
+			el => el.removeAttribute('data-manul-debug-highlight')
+		);
+		const s = document.getElementById('manul-debug-style');
+		if (s) s.remove();
+	})();`
 	_, err := rt.page.EvalJS(ctx, js)
 	return err
 }
@@ -353,6 +404,11 @@ func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, id
 	}
 	emitPauseMarker()
 
+	if err := rt.injectDebugModal(ctx, cmd.Raw); err != nil {
+		rt.logger.Warn("debug: modal inject failed: %v", err)
+	}
+	defer rt.removeDebugModal(ctx)
+
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Split(bufio.ScanLines)
 	// The extension line-buffer safety cap is 1 MB; match it so long tokens don't trigger ErrTooLong.
@@ -372,15 +428,33 @@ func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, id
 
 	emitExplain := func(stepText string) {
 		payload := rt.buildExplainNextResult(ctx, stepText, cmd)
+		// Clear previous explain-next highlight and highlight the new best candidate.
+		_ = rt.clearDebugHighlight(ctx)
+		if payload.TargetElement != nil {
+			_ = rt.debugHighlight(ctx, *payload.TargetElement)
+		}
 		ep, _ := json.Marshal(payload)
 		fmt.Fprintf(os.Stdout, "\x00MANUL_EXPLAIN_NEXT\x00%s\n", ep)
 		os.Stdout.Sync()
 	}
 
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-ticker.C:
+			raw, err := rt.page.EvalJS(ctx, `window.__manul_debug_action||""`)
+			if err != nil {
+				continue
+			}
+			var action string
+			if json.Unmarshal(raw, &action) == nil && action == "ABORT" {
+				rt.logger.Warn("debug: abort from browser")
+				return ErrDebugStop
+			}
 		case token := <-inputCh:
 			raw := strings.TrimRight(token, "\r\n")
 			trimmed := strings.TrimSpace(raw)
@@ -415,7 +489,7 @@ func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, id
 				return ErrDebugStop
 
 			case lower == "highlight":
-				js := `(function(){var el=document.querySelector('[data-manul-debug-highlight]');if(el)el.scrollIntoView({behavior:'smooth',block:'center'});})();`
+				js := `(function(){var el=document.querySelector('[data-manul-debug-highlight="true"]');if(el)el.scrollIntoView({behavior:'smooth',block:'center'});})();`
 				rt.page.EvalJS(ctx, js)
 				emitPauseMarker()
 				readNext()

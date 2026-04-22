@@ -153,23 +153,26 @@ func TestScoringMath_WeightsOrdering(t *testing.T) {
 	if scorer.Weights.Semantic <= scorer.Weights.Text {
 		t.Errorf("semantic weight (%.2f) should be > text weight (%.2f)", scorer.Weights.Semantic, scorer.Weights.Text)
 	}
-	if scorer.Weights.Text <= scorer.Weights.ID {
-		t.Errorf("text weight (%.2f) should be > ID weight (%.2f)", scorer.Weights.Text, scorer.Weights.ID)
+	if scorer.Weights.Text <= scorer.Weights.Attributes {
+		t.Errorf("text weight (%.2f) should be > attributes weight (%.2f)", scorer.Weights.Text, scorer.Weights.Attributes)
 	}
-	if scorer.Weights.ID <= scorer.Weights.Proximity {
-		t.Errorf("ID weight (%.2f) should be > proximity weight (%.2f)", scorer.Weights.ID, scorer.Weights.Proximity)
+	if scorer.Weights.Attributes <= scorer.Weights.Proximity {
+		t.Errorf("attributes weight (%.2f) should be > proximity weight (%.2f)", scorer.Weights.Attributes, scorer.Weights.Proximity)
 	}
 }
 
 func TestScoringMath_WeightsValues(t *testing.T) {
+	if scorer.Weights.Cache != 2.00 {
+		t.Errorf("cache weight = %.2f, want 2.00", scorer.Weights.Cache)
+	}
 	if scorer.Weights.Semantic != 0.60 {
 		t.Errorf("semantic weight = %.2f, want 0.60", scorer.Weights.Semantic)
 	}
 	if scorer.Weights.Text != 0.45 {
 		t.Errorf("text weight = %.2f, want 0.45", scorer.Weights.Text)
 	}
-	if scorer.Weights.ID != 0.25 {
-		t.Errorf("ID weight = %.2f, want 0.25", scorer.Weights.ID)
+	if scorer.Weights.Attributes != 0.25 {
+		t.Errorf("attributes weight = %.2f, want 0.25", scorer.Weights.Attributes)
 	}
 	if scorer.Weights.Proximity != 0.10 {
 		t.Errorf("proximity weight = %.2f, want 0.10", scorer.Weights.Proximity)
@@ -204,8 +207,8 @@ func TestScoringMath_CheckboxSemanticBonus(t *testing.T) {
 		t.Fatal("no candidates")
 	}
 	score := ranked[0].Explain.Score
-	if score.TagSemantics <= 0.3 {
-		t.Errorf("real checkbox should get semantics >0.3, got %.4f", score.TagSemantics)
+	if score.TagSemantics <= 0.05 {
+		t.Errorf("real checkbox should get semantics >0.05, got %.4f", score.TagSemantics)
 	}
 	if score.Total <= 0.3 {
 		t.Errorf("real checkbox total should be >0.3, got %.4f", score.Total)

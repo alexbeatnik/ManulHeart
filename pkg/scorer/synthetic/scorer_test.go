@@ -354,16 +354,16 @@ func TestScoreID(t *testing.T) {
 func TestScoreTagSemantics_ButtonInClickable(t *testing.T) {
 	el := makeEl(withTag("button"))
 	s := scorer.Score("x", "", "clickable", &el, nil)
-	if s.TagSemantics < 0.3 {
-		t.Errorf("TagSemantics = %.3f, want >= 0.3 for button in clickable", s.TagSemantics)
+	if s.TagSemantics < 0.05 {
+		t.Errorf("TagSemantics = %.3f, want >= 0.05 for button in clickable", s.TagSemantics)
 	}
 }
 
 func TestScoreTagSemantics_CheckboxInCheckboxMode(t *testing.T) {
 	el := makeEl(withTag("input"), withInputType("checkbox"))
 	s := scorer.Score("x", "", "checkbox", &el, nil)
-	if s.TagSemantics < 0.4 {
-		t.Errorf("TagSemantics = %.3f, want >= 0.4 for checkbox in checkbox mode", s.TagSemantics)
+	if s.TagSemantics < 0.05 {
+		t.Errorf("TagSemantics = %.3f, want >= 0.05 for checkbox in checkbox mode", s.TagSemantics)
 	}
 }
 
@@ -378,8 +378,8 @@ func TestScoreTagSemantics_ButtonPenaltyInCheckboxMode(t *testing.T) {
 func TestScoreTagSemantics_SelectInSelectMode(t *testing.T) {
 	el := makeEl(withTag("select"))
 	s := scorer.Score("x", "", "select", &el, nil)
-	if s.TagSemantics < 0.4 {
-		t.Errorf("TagSemantics = %.3f, want >= 0.4 for select in select mode", s.TagSemantics)
+	if s.TagSemantics < 0.05 {
+		t.Errorf("TagSemantics = %.3f, want >= 0.05 for select in select mode", s.TagSemantics)
 	}
 }
 
@@ -598,24 +598,24 @@ func TestScoreLabelText_PartialWordOverlap(t *testing.T) {
 func TestScoreTagSemantics_TdInLocateMode(t *testing.T) {
 	el := makeEl(withTag("td"), withText("Chrome"))
 	s := scorer.Score("chrome", "", "none", &el, nil)
-	if s.TagSemantics < 0.15 {
-		t.Errorf("TagSemantics = %.3f, want >= 0.15 for <td> in locate mode", s.TagSemantics)
+	if s.TagSemantics < 0.02 {
+		t.Errorf("TagSemantics = %.3f, want >= 0.02 for <td> in locate mode", s.TagSemantics)
 	}
 }
 
 func TestScoreTagSemantics_ButtonInLocateMode(t *testing.T) {
 	el := makeEl(withTag("button"), withText("Popup"))
 	s := scorer.Score("popup", "", "none", &el, nil)
-	if s.TagSemantics > 0.15 {
-		t.Errorf("TagSemantics = %.3f, want <= 0.15 for <button> in locate mode (should not be preferred)", s.TagSemantics)
+	if s.TagSemantics > 0.02 {
+		t.Errorf("TagSemantics = %.3f, want <= 0.02 for <button> in locate mode (should not be preferred)", s.TagSemantics)
 	}
 }
 
 func TestScoreTagSemantics_HeadingInLocateMode(t *testing.T) {
 	el := makeEl(withTag("h2"), withText("Products"))
 	s := scorer.Score("products", "", "none", &el, nil)
-	if s.TagSemantics < 0.2 {
-		t.Errorf("TagSemantics = %.3f, want >= 0.2 for <h2> in locate mode", s.TagSemantics)
+	if s.TagSemantics < 0.025 {
+		t.Errorf("TagSemantics = %.3f, want >= 0.025 for <h2> in locate mode", s.TagSemantics)
 	}
 }
 

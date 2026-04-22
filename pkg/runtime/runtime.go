@@ -58,10 +58,12 @@ type Runtime struct {
 	stickyCheckboxStates map[string]bool
 
 	// debug state — only populated when cfg.DebugMode is true
-	breakLines      map[int]bool             // source line numbers that are breakpoints; empty = pause every step
-	breakSteps      map[int]bool             // command indices queued by extension-mode "next" to pause at
-	debugContinue   bool                     // when true, skip all future pauses
-	lastExplainData []scorer.RankedCandidate // cached ranking for the "explain" debug command
+	breakLines       map[int]bool             // source line numbers that are breakpoints; empty = pause every step
+	breakSteps       map[int]bool             // command indices queued by extension-mode "next" to pause at
+	debugContinue    bool                     // when true, skip all future pauses
+	lastExplainData  []scorer.RankedCandidate // cached ranking for the "explain" debug command
+	pendingDebugPause bool                    // set in runCommands when an action step should pause after resolution
+	pendingDebugIdx  int                      // command index for the pending debug pause
 }
 
 // New creates a new Runtime bound to the given Config, Page, and Logger.
@@ -155,6 +157,15 @@ func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRe
 	return result, firstErr
 }
 
+func isActionCommand(t dsl.CommandType) bool {
+	switch t {
+	case dsl.CmdClick, dsl.CmdFill, dsl.CmdType, dsl.CmdHover, dsl.CmdCheck,
+		dsl.CmdUncheck, dsl.CmdSelect, dsl.CmdDoubleClick, dsl.CmdRightClick, dsl.CmdUploadFile:
+		return true
+	}
+	return false
+}
+
 func (rt *Runtime) runCommands(ctx context.Context, commands []dsl.Command, huntRes *explain.HuntResult, offset int) (int, int, error) {
 	passed, failed := 0, 0
 	for i, cmd := range commands {
@@ -163,9 +174,16 @@ func (rt *Runtime) runCommands(ctx context.Context, commands []dsl.Command, hunt
 		}
 
 		globalIdx := offset + i
+		rt.pendingDebugPause = false
 		if rt.cfg.DebugMode && rt.shouldPause(cmd, globalIdx) {
-			if dbgErr := rt.debugPrompt(ctx, cmd, globalIdx); dbgErr != nil {
-				return passed, failed, dbgErr
+			if isActionCommand(cmd.Type) {
+				// Defer debug pause until after element resolution inside executeCommand.
+				rt.pendingDebugPause = true
+				rt.pendingDebugIdx = globalIdx
+			} else {
+				if dbgErr := rt.debugPrompt(ctx, cmd, globalIdx); dbgErr != nil {
+					return passed, failed, dbgErr
+				}
 			}
 		}
 
@@ -509,6 +527,20 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 				best.Explain.Score.LabelMatch+best.Explain.Score.AriaMatch,
 				best.Explain.Score.TagSemantics,
 				best.Explain.Score.ProximityScore)
+		}
+
+		// Visual feedback: flash highlight for every action (matches Python _highlight).
+		_ = rt.page.HighlightElement(ctx, winner.ID, winner.XPath, 2000)
+
+		// Debug mode: persistent magenta highlight + pause before action execution.
+		if rt.pendingDebugPause {
+			rt.pendingDebugPause = false
+			_ = rt.debugHighlight(ctx, winner.XPath)
+			if dbgErr := rt.debugPrompt(ctx, cmd, rt.pendingDebugIdx); dbgErr != nil {
+				err = dbgErr
+				break
+			}
+			_ = rt.clearDebugHighlight(ctx)
 		}
 
 		// Perform action

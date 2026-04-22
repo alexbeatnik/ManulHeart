@@ -37,14 +37,17 @@ type AnchorContext struct {
 // testing and observability. The internal scorer uses finer-grained per-signal
 // weights, but these top-level values define the ordering invariant:
 //
-//	Semantic > Text > ID > Proximity
+//	Cache > Semantic > Text > Attributes > Proximity
 type WeightsConfig struct {
+	// Cache is the weight for semantic cache and blind context reuse signals.
+	Cache float64
 	// Semantic is the weight for tag-semantics and role alignment signals.
 	Semantic float64
 	// Text is the combined weight for visible-text, aria-label, and label signals.
 	Text float64
-	// ID is the weight for HTML id, data-qa, and data-testid signals.
-	ID float64
+	// Attributes is the weight for HTML id, data-qa, data-testid, class-name,
+	// and anchor-attribute-affinity signals.
+	Attributes float64
 	// Proximity is the weight for NEAR-qualifier spatial scoring.
 	Proximity float64
 }
@@ -52,12 +55,13 @@ type WeightsConfig struct {
 // Weights is the package-level scoring weight configuration.
 // Tests may read this to verify the calibrated ordering invariants hold:
 //
-//	Weights.Semantic (0.60) > Weights.Text (0.45) > Weights.ID (0.25) > Weights.Proximity (0.10)
+//	Weights.Cache (2.00) > Weights.Semantic (0.60) > Weights.Text (0.45) > Weights.Attributes (0.25) > Weights.Proximity (0.10)
 var Weights = WeightsConfig{
-	Semantic:  0.60,
-	Text:      0.45,
-	ID:        0.25,
-	Proximity: 0.10,
+	Cache:      2.00,
+	Semantic:   0.60,
+	Text:       0.45,
+	Attributes: 0.25,
+	Proximity:  0.10,
 }
 
 // RankedCandidate is a scored element with its full explain breakdown.
@@ -77,7 +81,7 @@ type RankedCandidate struct {
 // anchor is optional; when non-nil, proximity and attribute-affinity are scored.
 func Score(query, typeHint, mode string, el *dom.ElementSnapshot, anchor *AnchorContext) explain.ScoreBreakdown {
 	if el.IsDisabled {
-		return explain.ScoreBreakdown{Total: 0.0}
+		return explain.ScoreBreakdown{Total: 0.0, InteractabilityScore: 0.0}
 	}
 
 	q := norm(query)
@@ -94,7 +98,6 @@ func Score(query, typeHint, mode string, el *dom.ElementSnapshot, anchor *Anchor
 	// ── Structural signals ────────────────────────────────────────────────────
 	tagSem := scoreTagSemantics(mode, el)
 	typeHintScore := scoreTypeHint(typeHint, el)
-	depth := scoreDepth(el)
 	className := scoreClassName(q, el)
 
 	// ── Visibility / interactability ─────────────────────────────────────────
@@ -115,44 +118,76 @@ func Score(query, typeHint, mode string, el *dom.ElementSnapshot, anchor *Anchor
 		anchorAttr = scoreAnchorAttrAffinity(anchor, el)
 	}
 
-	// ── Weighted total ────────────────────────────────────────────────────────
-	// Weights are calibrated to match ManulEngine's scoring behavior.
-	raw := exactText*1.0 +
-		normText*0.7 +
-		labelMatch*0.85 +
-		placeholder*0.6 +
-		aria*0.7 +
-		dataQA*0.8 +
-		htmlID*0.5 +
-		tagSem*0.6 +
-		typeHintScore*0.5 +
-		depth*0.4 +
-		className*0.15 +
-		proximity*0.8 +
-		anchorAttr*0.35
+	// ── Category scores (aligned with Python ManulEngine) ─────────────────────
+	// Text category: exactText, normText, label, placeholder, aria, dataQA
+	textCat := exactText + normText + labelMatch + placeholder + aria + dataQA
 
-	// Penalty for container-style interaction (preferring leaves)
-	containerPenalty := 1.0
-	if mode != "none" && mode != "locate" {
-		tag := strings.ToLower(el.Tag)
-		role := strings.ToLower(el.Role)
-		interactiveRole := role == "button" || role == "link" || role == "menuitem" || role == "tab" ||
-			role == "checkbox" || role == "radio" || role == "switch" || role == "textbox" ||
-			role == "combobox" || role == "listbox"
-		if (tag == "div" || tag == "td" || tag == "th" || tag == "li" || tag == "section" || tag == "span") && !interactiveRole {
-			containerPenalty = 0.6
+	// Attributes category: htmlID, className, anchorAttr
+	attrCat := htmlID + className + anchorAttr
+
+	// Semantics category: tagSem, typeHint, modeSynergy, crossModePenalty
+	semCat := tagSem + typeHintScore
+
+	isPerfect := exactText == 1.0 || aria == 1.0 || dataQA == 1.0 || labelMatch >= 0.8 || placeholder >= 0.7
+	tag := strings.ToLower(el.Tag)
+	role := strings.ToLower(el.Role)
+	isRealButton := tag == "button" || (tag == "input" && (el.InputType == "submit" || el.InputType == "button" || el.InputType == "image" || el.InputType == "reset")) || role == "button"
+	isRealLink := tag == "a" || role == "link"
+	isRealInput := (tag == "input" || tag == "textarea") && el.InputType != "submit" && el.InputType != "button" && el.InputType != "image" && el.InputType != "reset" && el.InputType != "radio" && el.InputType != "checkbox" || role == "textbox" || role == "searchbox" || role == "spinbutton" || role == "slider" || el.IsEditable
+	isRealCheckbox := (tag == "input" && el.InputType == "checkbox") || role == "checkbox"
+	isRealRadio := (tag == "input" && el.InputType == "radio") || role == "radio"
+
+	if isPerfect {
+		switch mode {
+		case "clickable", "hover":
+			if isRealButton || isRealLink || role == "menuitem" || role == "tab" || role == "switch" {
+				semCat += 0.5
+			}
+		case "input":
+			if isRealInput {
+				semCat += 0.5
+			}
+		case "select":
+			if tag == "select" || tag == "option" || role == "option" || role == "menuitem" || role == "combobox" || role == "button" || tag == "li" {
+				semCat += 0.5
+			}
 		}
 	}
 
-	// Apply visibility and container penalty to raw score BEFORE normalization.
-	rawPenalized := raw * vis * interact * containerPenalty
+	switch mode {
+	case "select":
+		if isRealCheckbox {
+			semCat -= 1.0
+		}
+		if isRealRadio {
+			semCat -= 1.0
+		}
+	case "input":
+		if isRealCheckbox || isRealRadio {
+			semCat -= 1.0
+		}
+	case "clickable":
+		if isRealInput && !isRealButton && typeHint == "button" {
+			semCat -= 1.0
+		}
+	}
 
-	// Normalize to [0, 1] using the sum of max possible weights.
-	// Weights: Text(1.0), NormText(0.7), Label(0.85), Placeholder(0.6), Aria(0.7),
-	// DataQA(0.8), ID(0.5), TagSem(0.6), TypeHint(0.5), Depth(0.4), Class(0.15),
-	// Proximity(0.8), AnchorAttr(0.35)
-	const maxPossible = 1.0 + 0.7 + 0.85 + 0.6 + 0.7 + 0.8 + 0.5 + 0.6 + 0.5 + 0.4 + 0.15 + 0.8 + 0.35
-	total := clamp(rawPenalized/maxPossible, 0, 1)
+	// Proximity category
+	proxCat := proximity
+
+	// Cache category (not yet implemented in Go; placeholder for parity)
+	cacheCat := 0.0
+
+	// ── Weighted total ────────────────────────────────────────────────────────
+	penalty := vis * interact
+	weightedSum := textCat*Weights.Text +
+		attrCat*Weights.Attributes +
+		semCat*Weights.Semantic +
+		proxCat*Weights.Proximity +
+		cacheCat*Weights.Cache
+
+	rawPenalized := weightedSum * penalty
+	total := clamp(rawPenalized, 0, 1)
 
 	bd := explain.ScoreBreakdown{
 		ExactTextMatch:       exactText,
@@ -167,7 +202,7 @@ func Score(query, typeHint, mode string, el *dom.ElementSnapshot, anchor *Anchor
 		VisibilityScore:      vis,
 		InteractabilityScore: interact,
 		ProximityScore:       proximity,
-		RawScore:             rawPenalized, // penalized raw value
+		RawScore:             rawPenalized,
 		Total:                total,
 	}
 	return bd
@@ -192,10 +227,12 @@ func Rank(query, typeHint, mode string, elements []dom.ElementSnapshot, topN int
 		all = append(all, scored{elem: *el, bd: bd, idx: i})
 	}
 
-	// Sort: highest total first; DOM order as deterministic tie-breaker.
+	// Sort: highest raw score first; DOM order as deterministic tie-breaker.
+	// RawScore is unclamped so that small differences in proximity/semantics
+	// are preserved even when Total confidence hits 1.0.
 	sort.SliceStable(all, func(i, j int) bool {
-		if all[i].bd.Total != all[j].bd.Total {
-			return all[i].bd.Total > all[j].bd.Total
+		if all[i].bd.RawScore != all[j].bd.RawScore {
+			return all[i].bd.RawScore > all[j].bd.RawScore
 		}
 		return all[i].idx < all[j].idx // earlier in DOM wins on tie
 	})
@@ -360,6 +397,9 @@ func scoreID(q string, el *dom.ElementSnapshot) float64 {
 
 // scoreTagSemantics returns a score for how well the element's tag/role aligns
 // with the expected interaction mode.
+//
+// Values are calibrated so that the weighted contribution (score*Weights.Semantic)
+// matches the effective contribution under the old signal-level weighting.
 func scoreTagSemantics(mode string, el *dom.ElementSnapshot) float64 {
 	tag := el.Tag
 	role := strings.ToLower(el.Role)
@@ -368,78 +408,78 @@ func scoreTagSemantics(mode string, el *dom.ElementSnapshot) float64 {
 	case "none", "locate":
 		if tag == "td" || tag == "th" || tag == "li" || tag == "span" ||
 			tag == "p" || tag == "dd" || tag == "dt" || tag == "figcaption" || tag == "caption" {
-			return 0.2
+			return 0.025
 		}
 		if len(tag) == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6' {
-			return 0.25
+			return 0.03
 		}
 		if tag == "div" || tag == "section" || tag == "article" {
-			return 0.15
+			return 0.02
 		}
 		if tag == "option" {
-			return 0.15
+			return 0.02
 		}
 		if tag == "button" || tag == "a" || tag == "input" || tag == "select" {
-			return 0.1
+			return 0.015
 		}
-		return 0.05
+		return 0.01
 
 	case "input":
 		if tag == "input" || tag == "textarea" {
 			if el.InputType == "password" {
-				return 0.6
+				return 0.07
 			}
-			return 0.56
+			return 0.065
 		}
 		if role == "textbox" || role == "spinbutton" || role == "combobox" {
-			return 0.4
+			return 0.05
 		}
 		if el.IsEditable {
-			return 0.3
+			return 0.04
 		}
 		// Strict penalty for non-inputs in input mode
-		return -50000.0
+		return -1.0
 
 	case "checkbox":
 		if tag == "input" && (el.InputType == "checkbox" || el.InputType == "radio") {
-			return 0.5
+			return 0.06
 		}
 		if role == "checkbox" || role == "radio" || role == "switch" {
-			return 0.4
+			return 0.05
 		}
 		// Strict penalty for non-checkbox elements in checkbox mode.
-		return -50000.0
+		return -1.0
 
 	case "select":
 		if tag == "select" {
-			return 0.5
+			return 0.06
 		}
 		if role == "listbox" || role == "combobox" {
-			return 0.4
+			return 0.05
 		}
 		// Strict penalty for non-selects in select mode
-		return -50000.0
+		return -1.0
 
 	default: // clickable
 		if tag == "button" || tag == "a" || tag == "summary" {
-			return 0.45
+			return 0.055
 		}
 		if tag == "input" && (el.InputType == "checkbox" || el.InputType == "radio") {
-			return 0.33
+			return 0.04
 		}
 		if role == "button" || role == "link" || role == "menuitem" || role == "tab" {
-			return 0.35
+			return 0.045
 		}
 		if role == "checkbox" || role == "radio" || role == "switch" {
-			return 0.32
+			return 0.04
 		}
 		if tag == "input" && (el.InputType == "submit" || el.InputType == "button") {
-			return 0.35
+			return 0.045
 		}
 		if tag == "label" {
-			return 0.2
+			return 0.025
 		}
-		return 0.05
+		return 0.01
 	}
 }
 
@@ -491,17 +531,6 @@ func scoreTypeHint(hint string, el *dom.ElementSnapshot) float64 {
 		return 0.05 // generic hint — minimal signal
 	}
 	return 0.0
-}
-
-// scoreDepth returns a small bonus for deeper DOM elements (leaves).
-// Deeper elements are typically the actual interaction targets.
-func scoreDepth(el *dom.ElementSnapshot) float64 {
-	depth := strings.Count(el.XPath, "/")
-	if depth <= 0 {
-		return 0.1
-	}
-	// Favor deeper: depth 3 -> 0.1, depth 10 -> 0.4, depth 20 -> 0.8
-	return clamp(0.04*float64(depth), 0.1, 1.0)
 }
 
 // scoreNear returns a [0.0, 1.0] proximity score for a NEAR qualifier.
