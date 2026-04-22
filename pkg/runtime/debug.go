@@ -428,6 +428,11 @@ func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, id
 
 	emitExplain := func(stepText string) {
 		payload := rt.buildExplainNextResult(ctx, stepText, cmd)
+		// Clear previous explain-next highlight and highlight the new best candidate.
+		_ = rt.clearDebugHighlight(ctx)
+		if payload.TargetElement != nil {
+			_ = rt.debugHighlight(ctx, *payload.TargetElement)
+		}
 		ep, _ := json.Marshal(payload)
 		fmt.Fprintf(os.Stdout, "\x00MANUL_EXPLAIN_NEXT\x00%s\n", ep)
 		os.Stdout.Sync()

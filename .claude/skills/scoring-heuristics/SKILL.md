@@ -34,17 +34,18 @@ From [pkg/scorer/scorer.go](../../../pkg/scorer/scorer.go):
 
 ```go
 var Weights = WeightsConfig{
-    Semantic:  0.60,  // type alignment (mode=clickable → prefer button)
-    Text:      0.45,  // visible text, aria-label, placeholder
-    ID:        0.25,  // id, name, data-qa, data-testid
-    Proximity: 0.10,  // base weight (XPath depth / DOM ancestry); overridden to 1.5 for NEAR/INSIDE
+    Cache:      2.00,  // semantic cache and blind context reuse (not yet implemented in Go)
+    Semantic:   0.60,  // type alignment, mode synergy, cross-mode penalties
+    Text:       0.45,  // visible text, aria-label, placeholder, label, data-qa
+    Attributes: 0.25,  // html id, class-name, data-qa, data-testid, anchor-attr-affinity
+    Proximity:  0.10,  // base weight (Euclidean / DOM ancestry); boosted to 1.5 for NEAR/INSIDE
 }
 ```
 
-The 4 channels are independent and combined linearly. `Total` is the sum.
-Never collapse channels into a single pre-combined score — every channel
-is printed by `--explain` and the breakdown is the project's core
-differentiator.
+The 5 categories are independent and combined linearly after category
+aggregation. `Total` is the clamped confidence; `RawScore` is the
+unclamped weighted sum used for ranking. Every category is printed by
+`--explain` and the breakdown is the project's core differentiator.
 
 > **Proximity has two modes.** The `0.10` base weight applies unconditionally
 > using XPath-depth DOM ancestry closeness — a structural signal that is
@@ -53,6 +54,27 @@ differentiator.
 > distance from the resolved anchor element. These are fundamentally different
 > signals, not a "bump" of the same one. Never assume proximity is negligible
 > just because the base weight is small — in contextual mode it dominates.
+
+## Mode synergy & cross-mode penalties (v0.0.0.8+)
+
+The semantics channel includes two Python-aligned modifiers computed in
+`scorer.Score()` after the raw tag-semantics and type-hint signals:
+
+- **Mode synergy (+0.5):** When any text signal is a *perfect* match
+  (exact text, exact aria, exact data-qa, exact label, or exact placeholder),
+  the semantics score receives a +0.5 bonus IF the element type aligns with
+  the interaction mode:
+  - `clickable`/`hover` → real button or real link
+  - `input` → real input (not checkbox/radio/button)
+  - `select` → native `<select>`, `<option>`, or combobox/listbox role
+- **Cross-mode penalty (−1.0):** Elements of the wrong type for the mode
+  receive a −1.0 raw semantics penalty:
+  - `select` mode + checkbox/radio (unless explicitly wanted)
+  - `input` mode + checkbox/radio
+  - `clickable` mode + real input (when typeHint is "button")
+
+These modifiers are applied *before* the semantic weight (0.60) so their
+weighted impact is ±0.3 to ±0.6.
 
 ## Adding a new scoring signal
 
@@ -73,13 +95,13 @@ differentiator.
 
 ## Invariants the scorer must preserve
 
-- **Disabled elements score 0.** `if el.IsDisabled { return ScoreBreakdown{Total: 0.0} }`.
-- **Hidden elements are filtered before scoring**, not scored to zero — see
-  the visibility pre-filter.
+- **Disabled elements score 0.** `if el.IsDisabled { return ScoreBreakdown{Total: 0.0, InteractabilityScore: 0.0} }`.
+- **Hidden elements receive a ×0.1 penalty multiplier** applied to the final
+  weighted sum (not filtered out).
 - **Pure function.** `Score(query, typeHint, mode, el, anchor)` takes all
   inputs; no global lookups, no randomness.
-- **Deterministic ordering.** Ties are broken by a stable ordering (DOM
-  order, then XPath) — never by `map` iteration.
+- **Deterministic ordering.** `Rank()` sorts by unclamped `RawScore` descending;
+  ties are broken by stable DOM order — never by `map` iteration.
 - **Bounded to `[0.0, 1.0]` per channel** after weighting. Clip if your
   math overflows.
 

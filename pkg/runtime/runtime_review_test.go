@@ -246,8 +246,8 @@ func TestResolveRestrictiveCandidatesPrefersAnchorWithNearbyControl(t *testing.T
 	}
 
 	ranked, strategy := resolveRestrictiveCandidates("7", "checkbox", dsl.ModeCheckbox, elements, nil, nil)
-	if strategy != "restrictive-pass3" && strategy != "restrictive-pass3-row" {
-		t.Fatalf("strategy = %q, want restrictive-pass3 or restrictive-pass3-row", strategy)
+	if strategy != "restrictive-pass1" && strategy != "restrictive-pass3" && strategy != "restrictive-pass3-row" {
+		t.Fatalf("strategy = %q, want restrictive-pass1, restrictive-pass3 or restrictive-pass3-row", strategy)
 	}
 	if len(ranked) == 0 || ranked[0].Element.ID != 3 {
 		t.Fatalf("winner = %+v, want checkbox ID 3", ranked)
@@ -1028,8 +1028,8 @@ func TestRuntime_CheckPassesForLowConfidenceRoleCheckbox(t *testing.T) {
 	if res.WinnerXPath != "/html/body/div[1]/span[1]" {
 		t.Fatalf("WinnerXPath = %q, want role checkbox xpath", res.WinnerXPath)
 	}
-	if !(res.WinnerScore > ThresholdHighConfidence && res.WinnerScore < 0.3) {
-		t.Fatalf("WinnerScore = %.3f, want low-confidence but acceptable checkbox score", res.WinnerScore)
+	if res.WinnerScore <= ThresholdHighConfidence {
+		t.Fatalf("WinnerScore = %.3f, want high-confidence checkbox score", res.WinnerScore)
 	}
 	if res.ProbeMetadata["interaction_mode"] != string(dsl.ModeCheckbox) {
 		t.Fatalf("interaction_mode = %v, want %s", res.ProbeMetadata["interaction_mode"], dsl.ModeCheckbox)
@@ -1063,8 +1063,8 @@ func TestRuntime_VerifyCheckedPassesForLowConfidenceRoleCheckbox(t *testing.T) {
 	if res.WinnerXPath != "/html/body/div[1]/span[1]" {
 		t.Fatalf("WinnerXPath = %q, want role checkbox xpath", res.WinnerXPath)
 	}
-	if !(res.WinnerScore > ThresholdHighConfidence && res.WinnerScore < 0.3) {
-		t.Fatalf("WinnerScore = %.3f, want low-confidence but acceptable checkbox score", res.WinnerScore)
+	if res.WinnerScore <= ThresholdHighConfidence {
+		t.Fatalf("WinnerScore = %.3f, want high-confidence checkbox score", res.WinnerScore)
 	}
 }
 

@@ -215,24 +215,22 @@ func TestExplain_ChosenFlag(t *testing.T) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 func TestExplain_ChannelScoreConsistency(t *testing.T) {
-	// For a non-penalized element, raw ≈ text*wt + id*wi + semantic*ws + proximity*wp
+	// For a non-penalized element, raw ≈ text*wt + attributes*wa + semantic*ws + proximity*wp
 	el := makeEl(withTag("button"), withText("Login"))
 	score := scorer.Score("login", "button", "clickable", &el, nil)
 
-	recomputed := score.ExactTextMatch*1.0 +
-		score.NormalizedTextMatch*0.7 +
-		score.LabelMatch*0.85 +
-		score.PlaceholderMatch*0.6 +
-		score.AriaMatch*0.7 +
-		score.DataQAMatch*0.8 +
-		score.IDMatch*0.5 +
-		score.TagSemantics*0.6 +
-		score.TypeHintAlignment*0.5 +
-		0.05 + // base depth 1.0 * 0.05
-		score.ProximityScore*0.4
+	textCat := score.ExactTextMatch + score.NormalizedTextMatch + score.LabelMatch + score.PlaceholderMatch + score.AriaMatch + score.DataQAMatch
+	attrCat := score.IDMatch
+	// Mode synergy (+0.5) applies for perfect text match + clickable mode + real button
+	semCat := score.TagSemantics + score.TypeHintAlignment + 0.5
+	proxCat := score.ProximityScore
 
-	// RawScore may include className which isn't in breakdown, so allow some tolerance
-	if math.Abs(score.RawScore-recomputed) > 0.2 {
+	recomputed := textCat*scorer.Weights.Text +
+		attrCat*scorer.Weights.Attributes +
+		semCat*scorer.Weights.Semantic +
+		proxCat*scorer.Weights.Proximity
+
+	if math.Abs(score.RawScore-recomputed) > 0.001 {
 		t.Errorf("recomputed (%.4f) too far from RawScore (%.4f); channel sum inconsistent",
 			recomputed, score.RawScore)
 	}

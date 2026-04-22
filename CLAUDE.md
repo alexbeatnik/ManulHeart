@@ -130,7 +130,7 @@ For quick fan-out without `FailFast` or custom `ChromeOptions`, use the convenie
 wrapper: `results, err := worker.RunHuntsInParallel(ctx, cfg, hunts, n, logger)` —
 returns per-hunt results in input order.
 
-### Configuration Priority Chain (`0.0.0.7`+)
+### Configuration Priority Chain (`0.0.0.8`+)
 
 `pkg/config` resolves a 20-field `Config` struct from four sources in strict priority order:
 
@@ -141,6 +141,25 @@ CLI Flags  >  MANUL_* env vars  >  manul_engine_configuration.json  >  config.De
 - Always start from `config.Default()` and apply layers on top — never construct a `Config` literal from scratch.
 - `MANUL_HEADLESS`, `MANUL_TIMEOUT`, `MANUL_EXPLAIN`, `MANUL_SCREENSHOT` are the primary env overrides.
 - If `manul_engine_configuration.json` exists in the working directory it is merged before env vars.
+
+## Visual Parity for Element Highlighting (`0.0.0.8`+)
+
+ManulHeart now matches Python ManulEngine's visual feedback exactly:
+
+- **Normal action flash highlight:** Every resolved action (click, fill, hover, etc.) triggers a
+  2-second red border + yellow background flash via `Page.HighlightElement()`. This mirrors
+  Python's `_highlight()` method.
+- **Debug persistent highlight:** In debug/break mode, a **magenta outline + glow**
+  (`outline:4px solid #ff00ff; box-shadow:0 0 15px #ff00ff`) is applied via
+  `data-manul-debug-highlight` before the pause prompt and cleared before the action executes.
+  This mirrors Python's `_debug_highlight()` / `_clear_debug_highlight()`.
+- **Explain-next highlight:** When `explain-next` is requested (extension protocol), the best
+  heuristic candidate is highlighted with the same persistent magenta style, replacing any
+  previous highlight. This mirrors Python's `ExplainNextDebugger._highlight_match()`.
+
+The CSS payload, attribute name (`data-manul-debug-highlight`), style ID (`manul-debug-style`),
+and scroll behavior (`scrollIntoView({behavior:'smooth',block:'center'})`) are all byte-for-byte
+identical to the Python implementation.
 
 ## Testing Patterns
 

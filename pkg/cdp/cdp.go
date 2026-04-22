@@ -652,13 +652,16 @@ func WaitForResponse(ctx context.Context, c *Conn, urlPattern string, timeout ti
 }
 
 // HighlightElement injects a temporary border highlight for debugging.
+// Matches Python manul-engine _highlight: 4px solid red border + #ffeb3b background.
 func (c *Conn) HighlightElement(ctx context.Context, id int, xpath string, durationMS int) error {
 	js := fmt.Sprintf(`
 		var el = (window.__manulReg && window.__manulReg[%d]) || document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
 		if (el) {
-			var old = el.style.outline;
-			el.style.outline = '4px solid #ff4444';
-			setTimeout(() => { el.style.outline = old; }, %d);
+			var oldBorder = el.style.border;
+			var oldBg = el.style.backgroundColor;
+			el.style.border = '4px solid red';
+			el.style.backgroundColor = '#ffeb3b';
+			setTimeout(() => { el.style.border = oldBorder; el.style.backgroundColor = oldBg; }, %d);
 		}
 	`, id, xpath, durationMS)
 	_, err := Evaluate(ctx, c, js)

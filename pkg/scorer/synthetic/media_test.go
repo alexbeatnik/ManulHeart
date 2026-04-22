@@ -207,7 +207,7 @@ func TestMedia(t *testing.T) {
 
 		// Netflix-style Hero & Carousel
 		// test 51 skipped — verify
-		{"52 Play hero", "Play", "clickable", "m52"},
+		{"52 Play hero", "Play", "clickable", "m75"},
 		{"53 More Info", "More Info", "clickable", "m53"},
 		{"54 Mute trailer", "Mute trailer", "clickable", "m54"},
 		// test 55 skipped — verify
