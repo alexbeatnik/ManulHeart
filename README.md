@@ -2,7 +2,7 @@
 
 A deterministic, DSL-first browser automation runtime in Go.
 
-Current alpha version: `0.0.0.6`.
+Current alpha version: `0.0.0.7`.
 
 ManulHeart executes `.hunt` files using plain-English commands, DOM intelligence,
 heuristic element resolution, and structured explainability.
@@ -110,7 +110,7 @@ manul examples/saucedemo.hunt --json 2>/dev/null | jq .
 
 > **Note:** The `manul` command name is shared with the Python ManulEngine.
 > Whichever you install last takes priority. To switch back to Python: `pipx install manul-engine`.
-> For ManulHeart `0.0.0.6`, prefer a PATH install so extensions can execute `manul` directly.
+> For ManulHeart `0.0.0.7`, prefer a PATH install so extensions can execute `manul` directly.
 
 ### CLI Flags
 
@@ -358,7 +358,7 @@ See [docs/overview.md](docs/overview.md) for a detailed architecture walkthrough
 
 ---
 
-## Parallel Execution (API, `0.0.0.6`)
+## Parallel Execution (API, `0.0.0.7`)
 
 As of `0.0.0.3` ManulHeart ships a Go-level worker pool for running hunts in
 parallel. The `manul` CLI is still single-threaded; embed the pool directly
@@ -454,7 +454,7 @@ import system (including USE/CALL expansion), 4-channel scoring, contextual
 qualifiers (NEAR, ON HEADER/FOOTER, INSIDE), Shadow DOM support, 3-pass
 proximity resolution, HTML reporting, screenshots, debug mode, explain mode.
 
-As of `0.0.0.6` the engine also exposes a **parallel-execution substrate**:
+As of `0.0.0.7` the engine also exposes a **parallel-execution substrate**:
 a goroutine-safe CDP transport, a `pkg/worker` package with `Worker`,
 `WorkerPool`, and `PortAllocator`, per-worker log prefixes, and collision-proof
 report filenames. Every test (CDP, runtime, scorer, worker) runs under
@@ -464,7 +464,7 @@ Not yet implemented: a CLI flag to expose the worker pool end-to-end (the API
 is there, the CLI is still single-threaded), LLM-based fallback,
 scan/record subcommands.
 
-**Documented CLI version:** `0.0.0.6`.
+**Documented CLI version:** `0.0.0.7`.
 
 **Recommended install target:** expose the binary as a PATH command named `manul`
 for editor extensions and automation tooling.
@@ -473,16 +473,25 @@ for editor extensions and automation tooling.
 
 ## What's New
 
+### `0.0.0.7` — concurrency hardening, IPC robustness, resource-leak fixes
+
+- **Runtime single-goroutine enforcement** — Removed the `pollForAbort` background goroutine from `debugPromptTTY`; modal polling now runs on the caller's goroutine via a `time.Ticker`. This eliminates a Concurrency Contract violation where `Page.EvalJS` was invoked from a second goroutine inside `Runtime`.
+- **Connection leak fix (CLI)** — In `cmdRun`, each hunt-file iteration previously deferred `page.Close()` until function exit, causing CDP WebSocket connections to accumulate across an entire directory batch. Pages are now closed immediately after each hunt via an inline `func() { defer page.Close() }()`.
+- **Dead-socket hang fix** — `WaitForResponse` in `pkg/cdp/cdp.go` previously called `Network.disable` with `context.Background()`, which could block forever if the socket was half-open. The cleanup call is now wrapped in a 5-second `context.WithTimeout`.
+- **IPC robustness** — `debugPromptExtension` and `debugPromptTTY` scanners now use a 1 MB buffer (matching the extension's `MAX_LINE_LEN` safety cap). The `PAUSE` DSL command is now silently ignored in non-TTY pipe mode to avoid deadlocking the VS Code extension. JSON output paths (`--json`) call `os.Stdout.Sync()` after encoding.
+- **Durable run-history writes** — `pkg/report/run_history.go` now calls `f.Sync()` after appending each JSONL record, ensuring the extension's tail-reader sees the line immediately even after a crash or SIGKILL.
+- **Context-aware CDP probes** — `waitForCDP` HTTP probes in `pkg/browser/chrome.go` now construct requests with `http.NewRequestWithContext(ctx, ...)` so that polling respects cancellation deadlines.
+
 ### `0.0.0.6` — snapshot expansion, config growth, convenience parallelism & extension contract
 
 - **37-field `ElementSnapshot`** — Expanded from 27 fields to 37; the JS `SnapshotProbe` (Shadow-DOM-aware, single-pass `TreeWalker`) now collects richer identity, text, state, and geometry signals in one round-trip for the scorer.
 - **20-field `Config`** — Grew from 18 to 20 fields; new knobs surface via the same four-layer priority chain (CLI > `MANUL_*` env > `manul_engine_configuration.json` > `config.Default()`).
 - **`worker.RunHuntsInParallel`** — Zero-config convenience wrapper over `WorkerPool` that creates a pool, runs hunts, and returns per-hunt results in input order. Use `NewPool` directly when you need `FailFast` or custom `ChromeOptions`.
 - **`pkg/core` shared enums** — New package centralising cross-cutting enums (e.g. `ScrollStrategy`: window vs generic-list containers) that previously lived inline in `pkg/runtime`.
-- **VS Code extension contract** — Engine version string is `manul-heart v0.0.9.29 (core 0.0.0.6)`, satisfying the extension `MIN_MANUL_ENGINE_VERSION` gate. BLOCK log markers are now ANSI-free at the bracket prefix so the extension regex matches cleanly. `os.Stdout.Sync()` is called after every output line.
+- **VS Code extension contract** — Engine version string is `manul-heart v0.0.9.29 (core 0.0.0.7)`, satisfying the extension `MIN_MANUL_ENGINE_VERSION` gate. BLOCK log markers are now ANSI-free at the bracket prefix so the extension regex matches cleanly. `os.Stdout.Sync()` is called after every output line.
 - **Debug protocol v2** — Pause marker now carries a 1-based `idx` field (`\x00MANUL_DEBUG_PAUSE\x00{"step":"...","idx":N}\n`). New stdin tokens: `explain-next` (and `explain-next {"step":"<override>"}`) cause the engine to score candidates and emit a 10-field `ExplainNextResult` JSON via `\x00MANUL_EXPLAIN_NEXT\x00<json>\n` before re-pausing. The `debug-stop` token is an alias for `continue`.
 - **`run_history.json` artifact** — After every hunt run, `pkg/report.AppendRunHistory` appends a JSONL record to `<cwd>/reports/run_history.json`: `{file, name, timestamp (RFC3339 UTC), status ∈ {"pass","fail"}, duration_ms}`. Directory is created automatically; file is append-only.
-- **Skill guides refreshed** — `concurrency-rules`, `scoring-heuristics`, and the repo-level `CLAUDE.md` / `.github/copilot-instructions.md` updated to reflect the `0.0.0.6` field counts, new convenience APIs, `pkg/core`, and the VS Code extension contract.
+- **Skill guides refreshed** — `concurrency-rules`, `scoring-heuristics`, and the repo-level `CLAUDE.md` / `.github/copilot-instructions.md` updated to reflect the `0.0.0.7` field counts, new convenience APIs, `pkg/core`, and the VS Code extension contract.
 
 ### `0.0.0.5` — configuration system, debug protocol & test coverage
 

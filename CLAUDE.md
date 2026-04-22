@@ -130,7 +130,7 @@ For quick fan-out without `FailFast` or custom `ChromeOptions`, use the convenie
 wrapper: `results, err := worker.RunHuntsInParallel(ctx, cfg, hunts, n, logger)` —
 returns per-hunt results in input order.
 
-### Configuration Priority Chain (`0.0.0.6`+)
+### Configuration Priority Chain (`0.0.0.7`+)
 
 `pkg/config` resolves a 20-field `Config` struct from four sources in strict priority order:
 
