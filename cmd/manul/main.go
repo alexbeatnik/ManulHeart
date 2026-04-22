@@ -310,35 +310,38 @@ func cmdRun(args []string) error {
 		if err != nil {
 			return fmt.Errorf("connect to browser at %q: %w", cfg.CDPEndpoint, err)
 		}
-		defer page.Close() // ensures connection is released even on panic
 
-		rt := runtime.New(cfg, page, logger)
-		result, err := rt.RunHunt(ctx, hunt)
-		if err != nil {
-			logger.Error("hunt %q failed: %v", huntFile, err)
-			totalFailed++
-			continue
-		}
-
-		printResult(result, *jsonOut, logger)
-
-		if hErr := report.AppendRunHistory("reports", result); hErr != nil {
-			logger.Warn("run_history append failed: %v", hErr)
-		}
-
-		// Generate HTML report if requested
-		if cfg.HTMLReport {
-			reportPath, rErr := report.GenerateHTML(result, "reports")
-			if rErr != nil {
-				logger.Warn("HTML report generation failed: %v", rErr)
-			} else {
-				logger.Info("📊 HTML report: %s", reportPath)
+		// Scope the page lifetime to this iteration so connections do not accumulate.
+		func() {
+			defer page.Close()
+			rt := runtime.New(cfg, page, logger)
+			result, err := rt.RunHunt(ctx, hunt)
+			if err != nil {
+				logger.Error("hunt %q failed: %v", huntFile, err)
+				totalFailed++
+				return
 			}
-		}
 
-		if !result.Success {
-			totalFailed++
-		}
+			printResult(result, *jsonOut, logger)
+
+			if hErr := report.AppendRunHistory("reports", result); hErr != nil {
+				logger.Warn("run_history append failed: %v", hErr)
+			}
+
+			// Generate HTML report if requested
+			if cfg.HTMLReport {
+				reportPath, rErr := report.GenerateHTML(result, "reports")
+				if rErr != nil {
+					logger.Warn("HTML report generation failed: %v", rErr)
+				} else {
+					logger.Info("📊 HTML report: %s", reportPath)
+				}
+			}
+
+			if !result.Success {
+				totalFailed++
+			}
+		}()
 	}
 
 	if totalFailed > 0 {
@@ -433,6 +436,7 @@ func cmdRunStep(args []string) error {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		enc.Encode(result)
+		os.Stdout.Sync()
 	} else {
 		if result.Success {
 			logger.Info("✓ %s", step)
@@ -452,6 +456,7 @@ func printResult(result any, asJSON bool, logger *utils.Logger) {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		enc.Encode(result)
+		os.Stdout.Sync()
 		return
 	}
 

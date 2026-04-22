@@ -88,28 +88,6 @@ var s=document.getElementById('manul-debug-style');if(s)s.remove();
 	return err
 }
 
-func (rt *Runtime) pollForAbort(ctx context.Context, abortCh chan<- struct{}) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(200 * time.Millisecond):
-		}
-		raw, err := rt.page.EvalJS(ctx, `window.__manul_debug_action||""`)
-		if err != nil {
-			return
-		}
-		var action string
-		if json.Unmarshal(raw, &action) == nil && action == "abort" {
-			select {
-			case abortCh <- struct{}{}:
-			default:
-			}
-			return
-		}
-	}
-}
-
 func scoreToConfidence(s float64) int {
 	switch {
 	case s >= 1.0:
@@ -172,16 +150,17 @@ func (rt *Runtime) debugPrompt(ctx context.Context, cmd dsl.Command, idx int) er
 	return rt.debugPromptExtension(ctx, cmd, idx)
 }
 
+// debugPromptTTY drives the interactive readline prompt when stdin is a TTY.
+// CONCURRENCY: no background goroutines — all page access stays on the caller's goroutine.
 func (rt *Runtime) debugPromptTTY(ctx context.Context, cmd dsl.Command, idx int) error {
 	if err := rt.injectDebugModal(ctx, cmd.Raw); err != nil {
 		rt.logger.Warn("debug: modal inject failed: %v", err)
 	}
 	defer rt.removeDebugModal(ctx)
 
-	abortCh := make(chan struct{}, 1)
-	go rt.pollForAbort(ctx, abortCh)
-
 	sc := bufio.NewScanner(os.Stdin)
+	// The extension line-buffer safety cap is 1 MB; match it so long tokens don't trigger ErrTooLong.
+	sc.Buffer(make([]byte, 1024), 1024*1024)
 	inputCh := make(chan string, 1)
 
 	readNext := func() {
@@ -189,6 +168,7 @@ func (rt *Runtime) debugPromptTTY(ctx context.Context, cmd dsl.Command, idx int)
 			rt.logger.Info("\n[DEBUG] paused at: %s", cmd.Raw)
 			rt.logger.Info("  Commands: next | continue | debug-stop | highlight <xpath> | explain | abort")
 			fmt.Fprint(os.Stdout, "  > ")
+			os.Stdout.Sync()
 			if sc.Scan() {
 				inputCh <- strings.TrimSpace(sc.Text())
 			} else {
@@ -198,13 +178,24 @@ func (rt *Runtime) debugPromptTTY(ctx context.Context, cmd dsl.Command, idx int)
 	}
 	readNext()
 
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-abortCh:
-			rt.logger.Warn("debug: abort from browser")
-			return ErrDebugStop
+		case <-ticker.C:
+			// Poll the in-browser modal for an abort click — runs on the single Runtime goroutine.
+			raw, err := rt.page.EvalJS(ctx, `window.__manul_debug_action||""`)
+			if err != nil {
+				continue
+			}
+			var action string
+			if json.Unmarshal(raw, &action) == nil && action == "abort" {
+				rt.logger.Warn("debug: abort from browser")
+				return ErrDebugStop
+			}
 		case token := <-inputCh:
 			switch {
 			case token == "" || token == "next":
@@ -364,6 +355,8 @@ func (rt *Runtime) debugPromptExtension(ctx context.Context, cmd dsl.Command, id
 
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Split(bufio.ScanLines)
+	// The extension line-buffer safety cap is 1 MB; match it so long tokens don't trigger ErrTooLong.
+	sc.Buffer(make([]byte, 1024), 1024*1024)
 
 	inputCh := make(chan string, 1)
 	readNext := func() {

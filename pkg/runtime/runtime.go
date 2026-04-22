@@ -303,7 +303,12 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
  
 	case dsl.CmdPause:
 		// Force an interactive debug prompt even if --debug is not set globally.
-		// Note: this only works in TTY mode.
+		// Contract §4.1: PAUSE only produces pauses in terminal (--debug) mode;
+		// in pipe mode the extension does not respond, which would deadlock.
+		if !isTTY() {
+			rt.logger.Warn("PAUSE ignored in non-TTY mode")
+			break
+		}
 		rt.logger.Info("PAUSE command encountered")
 		err = rt.debugPrompt(ctx, cmd, -1)
  

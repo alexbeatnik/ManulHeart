@@ -615,7 +615,12 @@ func WaitForResponse(ctx context.Context, c *Conn, urlPattern string, timeout ti
 
 	sub := c.Subscribe()
 	defer sub.Close()
-	defer c.Call(context.Background(), "Network.disable", nil)
+	defer func() {
+		// Bound the cleanup call so a dead/stuck socket cannot hang the worker forever.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = c.Call(ctx, "Network.disable", nil)
+	}()
 
 	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
