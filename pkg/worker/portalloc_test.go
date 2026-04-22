@@ -5,8 +5,13 @@ import (
 	"testing"
 )
 
+// alwaysFree bypasses the OS-level TCP bind check so tests are not affected
+// by ports that happen to be in use in CI environments.
+func alwaysFree(int) bool { return true }
+
 func TestPortAllocator_AcquireRelease(t *testing.T) {
 	a := NewPortAllocator(40000, 40009) // 10 ports
+	a.checkPort = alwaysFree
 	got := make(map[int]bool)
 	for i := 0; i < 10; i++ {
 		p, err := a.Acquire()
@@ -34,6 +39,7 @@ func TestPortAllocator_AcquireRelease(t *testing.T) {
 
 func TestPortAllocator_ConcurrentAcquireUnique(t *testing.T) {
 	a := NewPortAllocator(41000, 41063) // 64 ports
+	a.checkPort = alwaysFree
 	const N = 64
 	var wg sync.WaitGroup
 	mu := sync.Mutex{}
@@ -69,6 +75,7 @@ func TestPortAllocator_ConcurrentAcquireUnique(t *testing.T) {
 
 func TestPortAllocator_ReverseRange(t *testing.T) {
 	a := NewPortAllocator(42010, 42000) // swapped
+	a.checkPort = alwaysFree
 	p, err := a.Acquire()
 	if err != nil {
 		t.Fatalf("acquire: %v", err)

@@ -64,5 +64,8 @@ func AppendRunHistory(reportsDir string, result *explain.HuntResult) error {
 	if _, err := f.Write(append(line, '\n')); err != nil {
 		return fmt.Errorf("write run_history: %w", err)
 	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync run_history: %w", err)
+	}
 	return nil
 }

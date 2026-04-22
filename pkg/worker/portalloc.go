@@ -18,11 +18,12 @@ var ErrPortsExhausted = errors.New("worker: port allocator exhausted")
 // in-use ports so two workers never collide. Released ports return to the
 // pool. Safe for concurrent use.
 type PortAllocator struct {
-	mu     sync.Mutex
-	start  int
-	end    int // inclusive
-	cursor int // round-robin starting point
-	inUse  map[int]bool
+	mu        sync.Mutex
+	start     int
+	end       int // inclusive
+	cursor    int // round-robin starting point
+	inUse     map[int]bool
+	checkPort func(int) bool // nil → portFree (OS-level bind check)
 }
 
 // NewPortAllocator creates an allocator covering [start, end] inclusive.
@@ -60,7 +61,11 @@ func (a *PortAllocator) Acquire() (int, error) {
 		// This is a best-effort check; the port could be claimed between
 		// here and Chrome's bind() call. Chrome will fail to start in that
 		// case, and the caller can simply retry Acquire.
-		if !portFree(port) {
+		check := a.checkPort
+		if check == nil {
+			check = portFree
+		}
+		if !check(port) {
 			continue
 		}
 		a.inUse[port] = true

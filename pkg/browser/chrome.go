@@ -214,7 +214,11 @@ func waitForCDP(ctx context.Context, endpoint string, timeout time.Duration) err
 		conn.Close()
 
 		// TCP is open — verify CDP responds.
-		resp, err := client.Get(url)
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return fmt.Errorf("create CDP probe request: %w", err)
+		}
+		resp, err := client.Do(req)
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
