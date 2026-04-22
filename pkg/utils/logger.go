@@ -132,18 +132,14 @@ func (l *Logger) BlockStart(name string) {
 	l.write("\n[📦 BLOCK START] %s", name)
 }
 
-// BlockPass logs the 🟩 BLOCK PASS banner in green (no indent).
-// ANSI codes are placed AFTER the bracketed marker so the VS Code extension
-// BLOCK_LOG_RE `^\s*\[...BLOCK\s+(PASS|FAIL)\]` still anchors cleanly.
+// BlockPass logs the 🟩 BLOCK PASS banner (no indent).
 func (l *Logger) BlockPass(name string) {
-	l.write("[🟩 BLOCK PASS] \033[32m%s\033[0m", name)
+	l.write("[🟩 BLOCK PASS] %s", name)
 }
 
-// BlockFail logs the 🟥 BLOCK FAIL banner in red (no indent).
-// ANSI codes are placed AFTER the bracketed marker so the VS Code extension
-// BLOCK_LOG_RE `^\s*\[...BLOCK\s+(PASS|FAIL)\]` still anchors cleanly.
+// BlockFail logs the 🟥 BLOCK FAIL banner (no indent).
 func (l *Logger) BlockFail(name string) {
-	l.write("[🟥 BLOCK FAIL] \033[31m%s\033[0m", name)
+	l.write("[🟥 BLOCK FAIL] %s", name)
 }
 
 // ActionStart logs the ▶️ ACTION START line (2-space indent).
@@ -151,20 +147,20 @@ func (l *Logger) ActionStart(step string) {
 	l.write("  [▶️ ACTION START] %s", step)
 }
 
-// ActionPass logs the ✅ ACTION PASS line in green (2-space indent).
+// ActionPass logs the ✅ ACTION PASS line (2-space indent).
 // durationSec is the wall-clock elapsed time in seconds.
 func (l *Logger) ActionPass(durationSec float64) {
-	l.write("\033[32m  [✅ ACTION PASS] duration: %.2fs\033[0m", durationSec)
+	l.write("  [✅ ACTION PASS] duration: %.2fs", durationSec)
 }
 
-// ActionFail logs the ❌ ACTION FAIL line in red (2-space indent).
+// ActionFail logs the ❌ ACTION FAIL line (2-space indent).
 func (l *Logger) ActionFail(err error) {
-	l.write("\033[31m  [❌ ACTION FAIL] %v\033[0m", err)
+	l.write("  [❌ ACTION FAIL] %v", err)
 }
 
-// ActionWarn logs the ⚠️ ACTION WARN line in yellow (2-space indent).
+// ActionWarn logs the ⚠️ ACTION WARN line (2-space indent).
 func (l *Logger) ActionWarn(msg string) {
-	l.write("\033[33m  [⚠️ ACTION WARN] %s\033[0m", msg)
+	l.write("  [⚠️ ACTION WARN] %s", msg)
 }
 
 // HeuristicDetail logs a ⚙️ DOM HEURISTICS detail line (4-space indent).

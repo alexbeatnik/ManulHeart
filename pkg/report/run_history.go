@@ -39,12 +39,15 @@ func AppendRunHistory(reportsDir string, result *explain.HuntResult) error {
 	status := "fail"
 	if result.Success {
 		status = "pass"
+		if len(result.SoftErrors) > 0 {
+			status = "warning"
+		}
 	}
 
 	entry := RunHistoryEntry{
 		File:       absFile,
 		Name:       filepath.Base(result.HuntFile),
-		Timestamp:  time.Now().UTC().Format(time.RFC3339),
+		Timestamp:  time.Now().UTC().Format("2006-01-02T15:04:05.000000+00:00"),
 		Status:     status,
 		DurationMS: float64(result.TotalDurationMS),
 	}
