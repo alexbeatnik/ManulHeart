@@ -85,6 +85,12 @@ func New(cfg config.Config, page browser.Page, logger *utils.Logger) *Runtime {
 	return rt
 }
 
+// ResolveVariable returns the value of a runtime variable, respecting scope
+// precedence (Row > Step > Mission > Global > Import).
+func (rt *Runtime) ResolveVariable(name string) (string, bool) {
+	return rt.vars.Resolve(name)
+}
+
 // RunHunt executes all commands in hunt against the bound page.
 // It returns an explain.HuntResult summarising the execution.
 // Commands are grouped by their StepBlock label; each group emits
