@@ -130,7 +130,7 @@ For quick fan-out without `FailFast` or custom `ChromeOptions`, use the convenie
 wrapper: `results, err := worker.RunHuntsInParallel(ctx, cfg, hunts, n, logger)` —
 returns per-hunt results in input order.
 
-### Configuration Priority Chain (`0.0.0.8`+)
+### Configuration Priority Chain (`0.0.1.0`+)
 
 `pkg/config` resolves a 20-field `Config` struct from four sources in strict priority order:
 
@@ -142,7 +142,7 @@ CLI Flags  >  MANUL_* env vars  >  manul_engine_configuration.json  >  config.De
 - `MANUL_HEADLESS`, `MANUL_TIMEOUT`, `MANUL_EXPLAIN`, `MANUL_SCREENSHOT` are the primary env overrides.
 - If `manul_engine_configuration.json` exists in the working directory it is merged before env vars.
 
-## Visual Parity for Element Highlighting (`0.0.0.8`+)
+## Visual Parity for Element Highlighting (`0.0.1.0`+)
 
 ManulHeart now matches Python ManulEngine's visual feedback exactly:
 

@@ -1,28 +1,62 @@
 # ManulHeart
 
-A deterministic, DSL-first browser automation runtime in Go.
+> **Deterministic Web Automation Runtime in Go**
 
-Current alpha version: `0.0.0.8`.
+[![Alpha](https://img.shields.io/badge/status-alpha-orange)]() [![Go](https://img.shields.io/badge/go-%3E%3D1.26-blue)]() [![License](https://img.shields.io/badge/license-Apache%202.0-green)]()
 
-ManulHeart executes `.hunt` files using plain-English commands, DOM intelligence,
-heuristic element resolution, and structured explainability.
-It connects to system-installed Chrome via the Chrome DevTools Protocol (CDP).
+ManulHeart executes `.hunt` files using plain-English commands, DOM intelligence, heuristic element resolution, and structured explainability. It connects to system-installed Chrome via the **Chrome DevTools Protocol (CDP)** using pure Go WebSockets.
 
-**No Playwright. No CSS/XPath selectors as a public API. No LLM in the loop.**
+**No Playwright. No Node.js. No CSS/XPath selectors as a public API. No LLM in the loop.**
 
-Single dependency: `gorilla/websocket`. Pure Go. ~476 tests.
+Single dependency: `gorilla/websocket`. Pure Go. Single static binary. ~476 tests. True goroutine-level parallelism.
 
 ---
 
-## Core Philosophy
+## 📖 Documentation
 
-| Principle | What it means |
-|-----------|--------------|
-| **DSL-first** | `.hunt` files are the primary automation artifact. You express intent in plain English, not CSS/XPath. |
-| **Deterministic by default** | Element resolution uses explicit scoring, reproducible heuristics, and ranked candidates — the same input always produces the same resolution path. |
-| **Heuristics at the first query** | The engine does not fetch a raw DOM and then apply heuristics as an afterthought. On the very first meaningful page query, JS probing, candidate extraction, visibility checks, accessible-name inference, and scoring all run together in one pipeline pass. |
-| **Explainable execution** | Every command execution returns a structured result with scored candidates, signal breakdowns, the winning element, and the action performed. |
-| **Backend independence** | Chrome/CDP is the first backend. The `browser.Page` interface is clean and can accommodate WebKit, Firefox, or desktop backends. |
+- **[Overview](docs/overview.md)** — Why ManulHeart exists and how it differs from Playwright/Node.js stacks
+- **[Getting Started](docs/getting-started.md)** — Build, install, and run your first hunt
+- **[DSL Syntax](docs/dsl-syntax.md)** — Complete `.hunt` language reference
+- **[Reports & Explainability](docs/overview.md#explainability)** — Scoring breakdowns and HTML reports
+- **[Extensions](docs/extensions.md)** — `CALL GO`, custom controls, and the Go extension API
+
+---
+
+## Syntax First
+
+A `.hunt` file is plain English. No selectors. No fragility.
+
+```hunt
+@context: E-commerce checkout smoke test
+@title: swag-labs-checkout
+@var: {username} = standard_user
+@var: {password} = secret_sauce
+@tags: smoke, checkout
+
+STEP 1: Login
+    NAVIGATE to https://www.saucedemo.com/
+    FILL 'Username' field with '{username}'
+    FILL 'Password' field with '{password}'
+    CLICK 'Login' button
+
+STEP 2: Add item to cart
+    VERIFY that 'Products' is present
+    CLICK 'Add to cart' button NEAR 'Sauce Labs Fleece Jacket'
+
+STEP 3: Complete purchase
+    CLICK the 'Shopping cart' link
+    CLICK 'Checkout' button
+    FILL 'First Name' field with 'Alice'
+    FILL 'Last Name' field with 'Smith'
+    FILL 'Zip/Postal Code' field with '49000'
+    CLICK 'Continue' button
+    CLICK 'Finish' button
+    VERIFY that 'Thank you for your order!' is present
+
+DONE.
+```
+
+The engine resolves `Sauce Labs Fleece Jacket` using a 4-channel deterministic scorer (text, id, semantic, proximity), finds the nearest `Add to cart` button via Euclidean pixel distance blended with DOM ancestry, clicks it, and reports the full candidate ranking if you pass `--explain`.
 
 ---
 
@@ -30,92 +64,105 @@ Single dependency: `gorilla/websocket`. Pure Go. ~476 tests.
 
 ### 1. Build
 
-You can build the `manul` binary using the provided `Makefile`:
-
 ```bash
 make build
 ```
 
-This creates a `manul` executable in the current directory.
+Or with Go directly:
+
+```bash
+go build -o manul ./cmd/manul
+```
 
 ### 2. Install
 
-To use `manul` as a system-wide command, install it to your `PATH`.
+User-local (`~/.local/bin`):
 
-**User-local install** (installs to `~/.local/bin`):
 ```bash
 make install
 ```
 
-**System-wide install** (installs to `/usr/local/bin`, requires `sudo`):
+System-wide (`/usr/local/bin`):
+
 ```bash
 make install-system
 ```
 
-Verify the installation:
-```bash
-manul --help
-```
+### 3. Run a hunt
 
-### 3. Other Commands
-
-- `make test` — Run all tests.
-- `make clean` — Remove the compiled binary.
-- `make uninstall` — Remove the binary from both local and system paths.
-
-### 4. Run a hunt file
+Auto-launches Chrome, executes, cleans up:
 
 ```bash
 manul examples/saucedemo.hunt
 ```
 
-Chrome is launched automatically with remote debugging, the hunt is executed,
-and Chrome is closed when done. No manual browser setup required.
-
-### 5. Run all hunt files in a directory
-
-```bash
-manul examples/
-manul .
-```
-
-### 6. Run headless
+Headless:
 
 ```bash
 manul examples/saucedemo.hunt --headless
 ```
 
-### 7. Connect to existing Chrome
-
-If you already have Chrome running with `--remote-debugging-port=9222`:
+Connect to an existing Chrome with `--remote-debugging-port=9222`:
 
 ```bash
 manul examples/saucedemo.hunt --cdp http://127.0.0.1:9222
 ```
 
-When `--cdp` is set, the driver skips auto-launch and connects to the running instance.
+Run every `.hunt` in a directory:
 
-### 8. Run a single step (requires running Chrome)
+```bash
+manul examples/
+```
+
+Run a single step against a live browser:
 
 ```bash
 manul run-step "Click the 'Login' button" --cdp http://127.0.0.1:9222
 ```
 
-### 9. Verbose / JSON output
+---
 
-```bash
-manul examples/saucedemo.hunt --verbose
-manul examples/saucedemo.hunt --json 2>/dev/null | jq .
-```
+## Philosophy
 
-> **Note:** The `manul` command name is shared with the Python ManulEngine.
-> Whichever you install last takes priority. To switch back to Python: `pipx install manul-engine`.
-> For ManulHeart `0.0.0.8`, prefer a PATH install so extensions can execute `manul` directly.
+### Zero Dependencies (Pure CDP)
 
-### CLI Flags
+ManulHeart speaks to Chrome directly over a WebSocket. There is no Playwright, no Selenium, no Node.js runtime, and no heavy dependency tree. The only external package is `gorilla/websocket` for the transport. Everything else — the CDP protocol, the heuristic probes, the scorer, the DSL parser — is pure Go standard library.
+
+### True Concurrency (Goroutines)
+
+Because there is no GIL and no single-threaded browser driver process, ManulHeart can run dozens of hunts in parallel using native goroutines. The `pkg/worker` package provides a `WorkerPool` with per-worker Chrome isolation, `PortAllocator` for debug-port management, and race-detector-safe CDP transport. Each worker owns its own `Runtime`, `Page`, and `ChromeProcess`.
+
+### Determinism
+
+The same `.hunt` file against the same page produces the same resolution path every time. Element targeting is a deterministic pipeline: one JS probe → 37-field `ElementSnapshot` → 4-channel scorer → threshold check → action. No randomness, no LLM fallback, no "ask the model to guess."
+
+---
+
+## Key Features
+
+| Feature | What it means |
+|---------|--------------|
+| **DSL-first automation** | `.hunt` files are the primary artifact. Plain English commands, not selectors. |
+| **Deterministic targeting** | 4-channel heuristic scorer ranks every candidate with explicit signal breakdowns. |
+| **Contextual qualifiers** | `NEAR`, `ON HEADER/FOOTER`, `INSIDE` restrict candidates spatially and structurally. |
+| **Control flow** | `IF`/`ELIF`/`ELSE`, `WHILE`, `REPEAT`, `FOR EACH` with full block nesting. |
+| **Hooks** | `[SETUP]` and `[TEARDOWN]` blocks run before and after the mission body. Teardown always executes. |
+| **Script aliases** | `@script: {alias} = dotted.go.path` lets you alias `CALL GO` handlers. |
+| **Parallel execution** | Native `WorkerPool` runs hunts concurrently with microscopic memory overhead. |
+| **Explainability** | `--explain` prints top-5 candidate rankings with per-channel score breakdowns. |
+| **Interactive debugger** | `--debug` pauses before every step; `PAUSE` command; breakpoint lines; browser modal UI. |
+| **Extension API** | `CALL GO` invokes registered Go functions. `RegisterCustomControl` intercepts actions by page+target. |
+| **HTML reports** | Per-hunt styled reports + aggregate `index.html` for parallel runs. |
+| **Zero external deps** | Only `gorilla/websocket`. No Playwright, no Node.js, no Python. |
+
+---
+
+## CLI & Configuration
+
+### Flags
 
 | Flag | Default | Description |
-|------|---------|------------|
+|------|---------|-------------|
 | `--cdp` | *(auto-launch)* | Connect to existing Chrome (skip auto-launch) |
 | `--user-data-dir` | `/tmp/manulheart-chrome` | Chrome profile directory |
 | `--headless` | `false` | Run Chrome without a visible window |
@@ -129,205 +176,23 @@ manul examples/saucedemo.hunt --json 2>/dev/null | jq .
 | `--tags` | *(none)* | Comma-separated tag filter (match `@tags:` in hunt files) |
 | `--retries` | `0` | Retry failed steps N times |
 | `--disable-cache` | `false` | Disable DOM snapshot caching |
+| `--workers` | `1` | Number of parallel workers for directory runs |
 
 ### Environment Variables
 
-ManulHeart respects the following `MANUL_` prefix environment variables (CLI flags always take precedence):
+ManulHeart respects `MANUL_*` prefix environment variables (CLI flags always take precedence):
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| `MANUL_HEADLESS` | `bool` | Run Chrome in headless mode if `true` |
-| `MANUL_TIMEOUT` | `dur` | Default per-command timeout (e.g. `5s` or `5000` ms) |
-| `MANUL_EXPLAIN` | `bool` | Enable explain mode scores if `true` |
-| `MANUL_SCREENSHOT` | `str` | Screenshot mode: `none`, `on-fail`, `always` |
+| `MANUL_HEADLESS` | `bool` | Run Chrome in headless mode |
+| `MANUL_TIMEOUT` | `duration` | Default per-command timeout |
+| `MANUL_EXPLAIN` | `bool` | Enable explain mode |
+| `MANUL_SCREENSHOT` | `string` | Screenshot mode: `none`, `on-fail`, `always` |
 
----
-
-## DSL Syntax
-
-ManulHeart supports 32 command types. Commands are case-insensitive.
-
-### Navigation
+### Configuration Priority
 
 ```
-NAVIGATE to 'https://example.com'
-SCROLL DOWN
-SCROLL UP
-SCROLL DOWN inside the 'Container'
-```
-
-### Interaction
-
-```
-Click the 'Login' button
-Click the 'Sign up' link
-DOUBLE CLICK the 'Cell' element
-RIGHT CLICK 'Item'
-Fill 'Email' field with 'user@example.com'
-Type 'hello' into the 'Search' field
-Select 'Option A' from the 'Category' dropdown
-Check the checkbox for 'Remember me'
-Uncheck the checkbox for 'Subscribe'
-HOVER over 'Menu Item'
-DRAG 'Card A' and drop onto 'Column B'
-UPLOAD '/path/to/file.png' to 'Avatar Upload'
-```
-
-### Keyboard
-
-```
-PRESS Enter
-PRESS Escape
-PRESS Control+A
-PRESS Tab ON 'Username'
-```
-
-### Contextual Qualifiers
-
-```
-Click 'Add to cart' button NEAR 'Sauce Labs Bolt T-Shirt'
-Click the 'Logo' link ON HEADER
-Click the 'Terms' link ON FOOTER
-Click the 'Delete' button INSIDE 'Actions' row with 'John'
-```
-
-`NEAR` resolves the anchor text first, then prefers the matching element
-using Euclidean pixel proximity blended with DOM ancestry affinity.
-
-`ON HEADER`/`ON FOOTER` restricts candidates to header/footer regions.
-
-`INSIDE` restricts candidates to a named container, optionally filtered
-by a row containing specific text.
-
-### Assertions
-
-```
-VERIFY that 'Welcome' is present
-VERIFY that 'Error' is NOT present
-VERIFY SOFTLY that 'Optional text' is present
-Verify 'Email' field has value 'user@example.com'
-Verify 'Heading' field has text 'Dashboard'
-```
-
-`VERIFY SOFTLY` is non-fatal — the step is logged as a warning but
-execution continues.
-
-### Data
-
-```
-EXTRACT the 'Price' into {total}
-SET {username} = admin
-PRINT 'Current user: {username}'
-```
-
-### Waiting
-
-```
-WAIT 2
-Wait for 'Spinner' to be hidden
-Wait for 'Results' to be visible
-WAIT FOR RESPONSE "api/users"
-```
-
-### Control Flow
-
-```
-IF 'Dashboard' is present:
-    Click the 'Logout' button
-ELIF {role} == 'admin':
-    Click the 'Admin Panel' link
-ELSE:
-    Click the 'Login' button
-
-WHILE 'Next' is present:
-    Click the 'Next' button
-
-REPEAT 3 TIMES as {i}:
-    Click the 'Add Item' button
-
-FOR EACH {item} IN {items}:
-    Fill 'Search' field with '{item}'
-```
-
-Conditions support: element present/not present, `{var} == 'value'`,
-`{var} != 'value'`, `{var} contains 'text'`, truthy variable checks.
-
-### Interactive Debugger
-
-ManulHeart includes a powerful TTY-based interactive debugger. It can be triggered in three ways:
-1. **Global Debug Mode**: Run `manul` with the `--debug` flag to pause before every step.
-2. **Breakpoints**: Use `--break-lines 12,45` to pause only at specific line numbers.
-3. **DSL Pause**: Insert the `PAUSE` command anywhere in your `.hunt` file.
-
-When paused, you have access to the following commands in your terminal:
-
-- `next` (or Enter): Execute the current step and pause at the next one.
-- `continue`: Free-run to the next `--break-lines` breakpoint.
-- `debug-stop`: Suppress all future pauses (clears all breakpoints, free-runs to end).
-- `explain-next`: Score candidates for the current step and print a full `ExplainNextResult` breakdown, then re-pause.
-- `explain-next {"step":"<text>"}`: Same as above but scores the overridden step text.
-- `highlight <xpath>`: Outline a specific element in the browser with a magenta highlight.
-- `debug-vars` (or `DEBUG VARS` in DSL): Dump all currently set variables and their scopes.
-- `abort`: Stop the hunt execution immediately.
-
-While paused, a **debug control panel** is also injected into the browser page, allowing you to `Continue` or `Abort` directly from the UI.
-
-#### Debugging Commands in DSL
-
-```
-PAUSE
-DEBUG VARS
-```
-
-`PAUSE` enters the interactive debugger. `DEBUG VARS` prints a formatted table of all variables in the `ROW`, `STEP`, `MISSION`, and `GLOBAL` scopes to the console.
-
-### File structure
-
-```
-@context: suite description
-@title: short suite name
-@var: {username} = standard_user
-@var: {password} = secret_sauce
-@tags: smoke, login
-@import: Checkout from 'shared/checkout.hunt'
-
-STEP 1: Login
-    NAVIGATE to https://www.saucedemo.com/
-    USE LoginBlock
-    VERIFY that 'Products' is present
-
-* `VERIFY [Target] has [text|placeholder|value] "[Expected]"`
-* `USE [BlockName]` (Inlines imported step block)
-* `CALL [BlockName]` (Functional alias for USE)
-* `DONE.`
-```
-
-**Structural Commands:**
-
-| Command | Purpose |
-|---------|---------|
-| `USE [Block]` | Inlines a `STEP` block from an imported `.hunt` file at parse time. |
-| `CALL [Block]` | Alias for `USE` (functional/modular call). |
-
-**File-level directives:**
-
-| Directive | Purpose |
-|-----------|---------|
-| `@context:` | Suite description for reporting |
-| `@title:` | Short suite name |
-| `@var: {key} = value` | Variable, substituted at parse time |
-| `@tags:` | Comma-separated tags (filterable with `--tags`) |
-| `@import:` | Import steps from another hunt file |
-| `@data:` | External data reference |
-| `@schedule:` | Scheduling metadata |
-| `@export:` | Export metadata |
-
-**Import variants:**
-
-```
-@import: Login from 'shared/auth.hunt'
-@import: Login as QuickLogin from 'shared/auth.hunt'
-@import: * from 'shared/setup.hunt'
+CLI Flags  >  MANUL_* env vars  >  manul_engine_configuration.json  >  config.Default()
 ```
 
 ---
@@ -335,7 +200,7 @@ STEP 1: Login
 ## Architecture
 
 ```
-cmd/manul           CLI entry point (produces `manul` binary)
+cmd/manul           CLI entry point → produces `manul` binary
 pkg/cdp             Low-level CDP WebSocket transport and domain wrappers
 pkg/browser         Abstract browser/page interfaces + CDP backend + Chrome lifecycle
 pkg/runtime         Targeting pipeline: probe → filter → score → resolve;
@@ -348,231 +213,81 @@ pkg/dsl             .hunt file parser, import resolver, command AST with block n
 pkg/explain         Structured execution results and explainability types
 pkg/report          Styled HTML report generation + aggregate index.html
 pkg/config          Runtime configuration (20 fields)
-pkg/core            Shared enums (e.g. ScrollStrategy: window vs generic-list containers)
+pkg/core            Shared enums (e.g. ScrollStrategy)
 pkg/utils           Semantic logging (Block/Action/Detail), ANSI stripping, error types
-examples/           7 sample .hunt files
+examples/           Sample .hunt files
 docs/               Documentation
 ```
 
-See [docs/overview.md](docs/overview.md) for a detailed architecture walkthrough.
+See [docs/overview.md](docs/overview.md) for the deep-dive architecture walkthrough.
 
 ---
 
-## Parallel Execution (API, `0.0.0.8`)
+## Parallel Execution (Go API)
 
-As of `0.0.0.3` ManulHeart ships a Go-level worker pool for running hunts in
-parallel. The `manul` CLI is still single-threaded; embed the pool directly
-to fan out. Each `Worker` owns its own isolated `Runtime`, `Page`, and
-`ChromeProcess` — sharing any of these across workers is a data race caught
-by `go test -race`.
+The `manul` CLI runs single-threaded by default. For true parallelism, embed the worker pool directly:
 
 ```go
 import (
     "context"
-    "github.com/manulengineer/manulheart/pkg/browser"
     "github.com/manulengineer/manulheart/pkg/config"
     "github.com/manulengineer/manulheart/pkg/dsl"
     "github.com/manulengineer/manulheart/pkg/report"
     "github.com/manulengineer/manulheart/pkg/worker"
 )
 
-func runInParallel(ctx context.Context, hunts []*dsl.Hunt) error {
-    // 1. Setup a shared logger (optional: pass a file writer for dual logging)
-    logger := utils.NewLogger(nil).WithLevel(utils.LogLevelDebug)
-
-    // 2. Use the convenience wrapper for zero-config parallel execution
+func runSuite(ctx context.Context, hunts []*dsl.Hunt) error {
     cfg := config.Default()
     results, err := worker.RunHuntsInParallel(ctx, cfg, hunts, 4, logger)
     if err != nil {
-        // err is the first hunt failure encountered
+        return err
     }
 
-    // 3. Generate an aggregate report
     summaries := make([]report.RunSummary, len(results))
     for i, r := range results {
         summaries[i] = report.RunSummary{Result: r.Result, WorkerID: r.WorkerID}
     }
     _, _ = report.GenerateIndex(summaries, "reports")
-    return err
+    return nil
 }
 ```
 
-**Rules of engagement:**
-
-- One `Runtime`, `Page`, and `ChromeProcess` per worker. Sharing them across
-  goroutines is a data race — verified by `go test -race` in CI.
-- Register custom controls and `CALL GO` handlers **before** the pool spawns.
-  The handler maps themselves are mutex-guarded, but handlers must be safe
-  for concurrent invocation (every worker may invoke the same handler
-  simultaneously).
-- Each worker logs with a `[wN]` prefix via `utils.WithPrefix`.
-- Per-hunt reports include a monotonic sequence suffix so two workers
-  finishing the same hunt title in the same second do not collide.
-
----
-
-## Configuration
-
-ManulHeart resolves runtime configuration from four sources in strict priority order:
-
-```
-CLI Flags  >  MANUL_* environment variables  >  manul_engine_configuration.json  >  Defaults
-```
-
-If a `manul_engine_configuration.json` file exists in the current working directory, its values
-are merged with defaults before environment variables and flags are applied. The `config.Default()`
-function always returns a safe, zero-configuration baseline — no file on disk is required.
-
-```go
-cfg, _ := config.Load()  // applies all layers: defaults → JSON → env vars
-// CLI flag parsing then overrides cfg fields directly
-```
-
-The `pkg/config` package exposes 20 fields covering headless mode, timeouts, screenshot
-policy, debug breakpoints, scoring thresholds, and more.
+**Concurrency contract:** One `Runtime`, `Page`, and `ChromeProcess` per worker. Sharing them across goroutines is a data race — verified by `go test -race` in CI. Register all `CALL GO` handlers and custom controls **before** spawning the pool.
 
 ---
 
 ## Development Guides
 
-For developers working on the ManulHeart engine, we provide detailed "Skill Guides" covering core systems:
-
-- [**Scoring & Heuristics**](.claude/skills/scoring-heuristics/SKILL.md) — How element targeting works.
-- [**Concurrency Rules**](.claude/skills/concurrency-rules/SKILL.md) — Thread-safety and the worker pool.
-- [**Adding DSL Commands**](.claude/skills/adding-dsl-commands/SKILL.md) — How to extend the natural language syntax.
-- [**Go Calls & Extensions**](.claude/skills/extensions-and-go-calls/SKILL.md) — Implementing custom logic in Go.
-- [**Testing ManulHeart**](.claude/skills/testing-manulheart/SKILL.md) — Best practices for unit and integration tests.
-- [**Hunt Authoring**](.claude/skills/hunt-authoring/SKILL.md) — Writing effective `.hunt` files.
+- [**Scoring & Heuristics**](.claude/skills/scoring-heuristics/SKILL.md)
+- [**Concurrency Rules**](.claude/skills/concurrency-rules/SKILL.md)
+- [**Adding DSL Commands**](.claude/skills/adding-dsl-commands/SKILL.md)
+- [**Go Calls & Extensions**](.claude/skills/extensions-and-go-calls/SKILL.md)
+- [**Testing ManulHeart**](.claude/skills/testing-manulheart/SKILL.md)
+- [**Hunt Authoring**](.claude/skills/hunt-authoring/SKILL.md)
 
 ---
 
 ## Project Status
 
-Alpha. The core engine covers:
-32 DSL commands, full control flow (IF/ELIF/ELSE, WHILE, REPEAT, FOR EACH),
-import system (including USE/CALL expansion), 4-channel scoring, contextual
-qualifiers (NEAR, ON HEADER/FOOTER, INSIDE), Shadow DOM support, 3-pass
-proximity resolution, HTML reporting, screenshots, debug mode, explain mode.
+**Alpha.** The core engine covers:
 
-As of `0.0.0.8` the engine also exposes a **parallel-execution substrate**:
-a goroutine-safe CDP transport, a `pkg/worker` package with `Worker`,
-`WorkerPool`, and `PortAllocator`, per-worker log prefixes, and collision-proof
-report filenames. Every test (CDP, runtime, scorer, worker) runs under
-`go test -race` in CI.
+- 32+ DSL commands, full control flow (IF/ELIF/ELSE, WHILE, REPEAT, FOR EACH)
+- `[SETUP]` / `[TEARDOWN]` hook blocks with fail-fast setup and guaranteed teardown
+- `@script:` aliases for `CALL GO` handler paths
+- Import system (`@import:`, `USE`/`CALL` expansion)
+- 4-channel deterministic scoring with contextual qualifiers (NEAR, ON HEADER/FOOTER, INSIDE)
+- Shadow DOM support, 3-pass proximity resolution, anti-phantom guards
+- HTML reporting, screenshots, debug mode, explain mode
+- Native `WorkerPool` for parallel execution with per-worker Chrome isolation
+- Strongly-typed extension API (`CALL GO`, `RegisterCustomControl`)
+- Race-detector-safe CDP transport and concurrent handler registries
 
-Not yet implemented: a CLI flag to expose the worker pool end-to-end (the API
-is there, the CLI is still single-threaded), LLM-based fallback,
-scan/record subcommands.
+**Documented CLI version:** `0.0.1.0+`
 
-**Documented CLI version:** `0.0.0.8`.
-
-**Recommended install target:** expose the binary as a PATH command named `manul`
-for editor extensions and automation tooling.
+**Recommended install target:** expose the binary as a PATH command named `manul` for editor extensions and automation tooling.
 
 ---
 
-## What's New
+## License
 
-### `0.0.0.8` — concurrency hardening, IPC robustness, resource-leak fixes
-
-- **Runtime single-goroutine enforcement** — Removed the `pollForAbort` background goroutine from `debugPromptTTY`; modal polling now runs on the caller's goroutine via a `time.Ticker`. This eliminates a Concurrency Contract violation where `Page.EvalJS` was invoked from a second goroutine inside `Runtime`.
-- **Connection leak fix (CLI)** — In `cmdRun`, each hunt-file iteration previously deferred `page.Close()` until function exit, causing CDP WebSocket connections to accumulate across an entire directory batch. Pages are now closed immediately after each hunt via an inline `func() { defer page.Close() }()`.
-- **Dead-socket hang fix** — `WaitForResponse` in `pkg/cdp/cdp.go` previously called `Network.disable` with `context.Background()`, which could block forever if the socket was half-open. The cleanup call is now wrapped in a 5-second `context.WithTimeout`.
-- **IPC robustness** — `debugPromptExtension` and `debugPromptTTY` scanners now use a 1 MB buffer (matching the extension's `MAX_LINE_LEN` safety cap). The `PAUSE` DSL command is now silently ignored in non-TTY pipe mode to avoid deadlocking the VS Code extension. JSON output paths (`--json`) call `os.Stdout.Sync()` after encoding.
-- **Durable run-history writes** — `pkg/report/run_history.go` now calls `f.Sync()` after appending each JSONL record, ensuring the extension's tail-reader sees the line immediately even after a crash or SIGKILL.
-- **Context-aware CDP probes** — `waitForCDP` HTTP probes in `pkg/browser/chrome.go` now construct requests with `http.NewRequestWithContext(ctx, ...)` so that polling respects cancellation deadlines.
-
-### `0.0.0.6` — snapshot expansion, config growth, convenience parallelism & extension contract
-
-- **37-field `ElementSnapshot`** — Expanded from 27 fields to 37; the JS `SnapshotProbe` (Shadow-DOM-aware, single-pass `TreeWalker`) now collects richer identity, text, state, and geometry signals in one round-trip for the scorer.
-- **20-field `Config`** — Grew from 18 to 20 fields; new knobs surface via the same four-layer priority chain (CLI > `MANUL_*` env > `manul_engine_configuration.json` > `config.Default()`).
-- **`worker.RunHuntsInParallel`** — Zero-config convenience wrapper over `WorkerPool` that creates a pool, runs hunts, and returns per-hunt results in input order. Use `NewPool` directly when you need `FailFast` or custom `ChromeOptions`.
-- **`pkg/core` shared enums** — New package centralising cross-cutting enums (e.g. `ScrollStrategy`: window vs generic-list containers) that previously lived inline in `pkg/runtime`.
-- **VS Code extension contract** — Engine version string is `manul-heart v0.0.9.29 (core 0.0.0.8)`, satisfying the extension `MIN_MANUL_ENGINE_VERSION` gate. BLOCK log markers are now ANSI-free at the bracket prefix so the extension regex matches cleanly. `os.Stdout.Sync()` is called after every output line.
-- **Debug protocol v2** — Pause marker now carries a 1-based `idx` field (`\x00MANUL_DEBUG_PAUSE\x00{"step":"...","idx":N}\n`). New stdin tokens: `explain-next` (and `explain-next {"step":"<override>"}`) cause the engine to score candidates and emit a 10-field `ExplainNextResult` JSON via `\x00MANUL_EXPLAIN_NEXT\x00<json>\n` before re-pausing. The `debug-stop` token is an alias for `continue`.
-- **`run_history.json` artifact** — After every hunt run, `pkg/report.AppendRunHistory` appends a JSONL record to `<cwd>/reports/run_history.json`: `{file, name, timestamp (RFC3339 UTC), status ∈ {"pass","fail"}, duration_ms}`. Directory is created automatically; file is append-only.
-- **Skill guides refreshed** — `concurrency-rules`, `scoring-heuristics`, and the repo-level `CLAUDE.md` / `.github/copilot-instructions.md` updated to reflect the `0.0.0.8` field counts, new convenience APIs, `pkg/core`, and the VS Code extension contract.
-
-### `0.0.0.5` — configuration system, debug protocol & test coverage
-
-- **Configuration System** — `pkg/config` resolves settings from four layers in priority order: CLI Flags > `MANUL_*` env vars > `manul_engine_configuration.json` > `config.Default()`. An 18-field `Config` struct covers headless, timeouts, screenshot policy, debug breakpoints, scoring thresholds, and more. No config file is required for zero-configuration use.
-- **VS Code Debug Protocol** — `pkg/runtime/debug.go` formalised with `\x00MANUL_DEBUG_PAUSE\x00` JSON markers on stdout and stdin polling so VS Code extensions can drive the interactive debugger over a simple pipe. `scoreToConfidence()` maps a `[0.0–1.0]` heuristic score to a 0–10 confidence integer for display.
-- **Expanded test coverage** — Added white-box test suites for `pkg/report` (`sanitizeFilename`, `GenerateHTML`, `GenerateIndex`), `pkg/runtime/debug` (`scoreToConfidence`, `shouldPause`), `pkg/core` (scroll strategy constants), `pkg/explain` (JSON serialisation round-trips for `ScoreBreakdown`, `ExecutionResult`, `HuntResult`, `Candidate`), and `pkg/utils` (ANSI writer, logger levels, `WithPrefix`, race safety).
-- **Worker isolation clarified** — Each `Worker` owns its own isolated `Runtime`, `Page`, and `ChromeProcess`; sharing them is a data race caught by `go test -race`.
-
-### `0.0.0.4` — interactive debugger & skill guides
-
-- **Interactive Runtime Debugger** — Added a TTY-based interactive debugger that can be triggered via `--debug` or the `PAUSE` command. Features include step-by-step execution, browser modal controls, element highlighting (`highlight <xpath>`), and scoring explanations (`explain`).
-- **Execution Breakpoints** — Added the `--break-lines` flag to pause execution only at specific lines in the `.hunt` file.
-- **Expanded scoring-heuristics skill** — Documented the dual-mode proximity signal: base weight `0.10` (XPath-depth DOM ancestry, always active) vs. contextual override `1.50` (Euclidean pixel distance from anchor, active under `NEAR`/`INSIDE`). Added inline comments and a 3-pass targeting pipeline explanation for the `ThresholdPass3*` constants.
-- **Expanded testing skill** — Added an explicit callout for the two `MockPage` fields most commonly left at zero: `IsVisible` (silently drops elements from the visibility pre-filter) and `Rect` (required by the proximity scorer for `NEAR`/`INSIDE` path; zero value flattens the proximity channel).
-- **Expanded hunt-authoring skill** — Added an `## Advanced / less common commands` section covering keyboard input (`PRESS`), `WAIT FOR RESPONSE`, `DRAG`/`UPLOAD`, `EXTRACT`/`PRINT`, and `DEBUG VARS`/`PAUSE`.
-- **Expanded concurrency-rules skill** — Added `## Per-worker logging` section documenting `utils.WithPrefix` for `[wN]`-prefixed child loggers; extended `## Key files` to include `pkg/utils/logger.go`.
-
-### `0.0.0.3` — logging & pool refactor
-
-- **Simplified Semantic Logger** — Refactored `pkg/utils` to use a leaner, hierarchy-first logging model (Block > Action > Detail). Removed legacy timestamping in favor of cleaner terminal output.
-- **Improved Dual-Logging** — `NewLogger` now supports optional ANSI-stripped file logging via `StripANSIWriter` without requiring separate cleanup functions.
-- **Parallel Substrate Convenience** — Added `RunHuntsInParallel` convenience wrapper in `pkg/worker` for zero-config fan-out.
-- **CLI Renaming** — Formally standardized the CLI binary name as `manul` across all documentation and build scripts.
-
-### `0.0.0.2` — concurrency substrate
-
-- **Hardened CDP transport** — `readLoop` now honors parent-context cancellation
-  via a watchdog that tears down the WebSocket on cancel. Request IDs use
-  `atomic.Int64` instead of a mutex. `Conn.Close()` is idempotent via
-  `sync.Once`.
-- **Subscription handles** — `Conn.Subscribe()` returns a `*Subscription` with
-  `C()` / `Close()` instead of a raw channel. Channels are closed on connection
-  teardown, so subscribers unblock cleanly. Prevents the old "orphaned
-  channel in a slice" leak path.
-- **`pkg/worker`** — new package with:
-  - `PortAllocator` — round-robin CDP debug-port allocation with an OS-level
-    free-check, safe for concurrent `Acquire` / `Release`.
-  - `Worker` — owns exactly one Chrome + Page + Runtime; launches its own
-    Chrome in `NewWorker`, or wraps an existing page via `AdoptWorker` (for
-    tests/embedding).
-  - `WorkerPool` — bounded jobs channel with first-error tracking and optional
-    `FailFast`. Implemented without adding a dependency (no `x/sync/errgroup`).
-- **Runtime concurrency contract** — `pkg/runtime.Runtime` is now explicitly
-  documented as single-goroutine. Use `pkg/worker` for parallel execution.
-- **Extension-registry policy** — `RegisterCustomControl` / `RegisterGoCall`
-  are intended to be called at process init, before the worker pool spawns.
-  Documented inline in [pkg/runtime/extensions.go](pkg/runtime/extensions.go).
-- **Per-worker log prefixes** — `utils.WithPrefix(parent, "[w3] ")` derives
-  child loggers that share the parent's writer/level but prepend the prefix.
-- **Collision-proof report filenames** — `report_{title}_{ts}_{seq}.html`
-  with a process-wide atomic counter; two workers finishing in the same
-  second no longer overwrite each other.
-- **Aggregate reporter** — `report.GenerateIndex(summaries, outDir)` writes
-  an `index.html` linking to every per-hunt report for a parallel run.
-- **`-race` in CI** — every test invocation in the `synthetic-tests` workflow
-  now runs with the race detector, with dedicated CDP and worker steps.
-
-### Earlier (`0.0.0.1`)
-
-- **32 DSL commands** — full interaction set including double-click, right-click,
-  hover, drag-and-drop, file upload, keyboard shortcuts, scroll with containers.
-- **Control flow** — IF/ELIF/ELSE conditionals, WHILE loops (capped at 100),
-  REPEAT N TIMES with loop variable, FOR EACH over collections.
-- **Import system** — `@import: Name from 'file.hunt'`, wildcard `*`, aliases.
-- **INSIDE qualifier** — `INSIDE 'Container' row with 'Text'` restricts candidates
-  to a named container filtered by row content.
-- **ON HEADER/ON FOOTER** — region-based candidate filtering.
-- **Soft verification** — `VERIFY SOFTLY` continues on failure, reports warnings.
-- **Field verification** — `Verify 'Field' has value/text/placeholder 'Expected'`.
-- **EXTRACT** — table-aware data extraction with column-header resolution.
-- **WAIT FOR** — poll for element visibility/hidden state; network response matching.
-- **HTML reports** — styled dark-themed pass/fail report with embedded screenshots.
-- **Screenshot modes** — `--screenshot none|on-fail|always`.
-- **Debug mode** — `--debug` for interactive step-by-step; `PAUSE` command; breakpoints.
-- **Explain mode** — `--explain` prints top-5 candidates with full score breakdowns.
-- **Tags** — `@tags:` directive + `--tags` CLI filter.
-- **NEAR qualifier** — spatial proximity + DOM ancestry + anchor entity affinity.
-- **Variables** — `@var:` at parse time, `SET`/`EXTRACT` at runtime.
-- **JS-based click** — `element.click()` for React/SPA compat; coordinate fallback.
-- **Drag-and-drop** — CDP mouse events + HTML5 DragEvent fallback.
-- **`manul` CLI** — `manul test.hunt`, `manul examples/`, `manul .`, `manul run-step`.
-- **Browser cleanup** — Chrome is always killed on exit, including SIGINT/SIGTERM.
-- **476 synthetic tests** — 35 test files covering 15 domain-specific DOMs
-  (e-commerce, social media, fintech, cybersecurity, healthcare, etc.).
+Apache 2.0
