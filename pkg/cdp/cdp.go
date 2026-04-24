@@ -657,13 +657,48 @@ func (c *Conn) HighlightElement(ctx context.Context, id int, xpath string, durat
 	js := fmt.Sprintf(`
 		var el = (window.__manulReg && window.__manulReg[%d]) || document.evaluate(%q, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
 		if (el) {
-			var oldBorder = el.style.border;
-			var oldBg = el.style.backgroundColor;
+			el.setAttribute('data-manul-flash-old-border', el.style.border || '');
+			el.setAttribute('data-manul-flash-old-bg', el.style.backgroundColor || '');
 			el.style.border = '4px solid red';
 			el.style.backgroundColor = '#ffeb3b';
-			setTimeout(() => { el.style.border = oldBorder; el.style.backgroundColor = oldBg; }, %d);
+			setTimeout(() => {
+				var oldBorder = el.getAttribute('data-manul-flash-old-border');
+				if (oldBorder !== null) {
+					el.style.border = oldBorder;
+					el.removeAttribute('data-manul-flash-old-border');
+				}
+				var oldBg = el.getAttribute('data-manul-flash-old-bg');
+				if (oldBg !== null) {
+					el.style.backgroundColor = oldBg;
+					el.removeAttribute('data-manul-flash-old-bg');
+				}
+			}, %d);
 		}
 	`, id, xpath, durationMS)
+	_, err := Evaluate(ctx, c, js)
+	return err
+}
+
+// ClearHighlight immediately removes any active highlight from the page.
+// It restores original inline styles for flash highlights and removes debug
+// highlight attributes. Errors are swallowed because the page may have
+// navigated and destroyed the execution context.
+func (c *Conn) ClearHighlight(ctx context.Context) error {
+	js := `(() => {
+		document.querySelectorAll('[data-manul-debug-highlight]').forEach(
+			el => el.removeAttribute('data-manul-debug-highlight')
+		);
+		const s = document.getElementById('manul-debug-style');
+		if (s) s.remove();
+		document.querySelectorAll('[data-manul-flash-old-border]').forEach(el => {
+			el.style.border = el.getAttribute('data-manul-flash-old-border') || '';
+			el.removeAttribute('data-manul-flash-old-border');
+		});
+		document.querySelectorAll('[data-manul-flash-old-bg]').forEach(el => {
+			el.style.backgroundColor = el.getAttribute('data-manul-flash-old-bg') || '';
+			el.removeAttribute('data-manul-flash-old-bg');
+		});
+	})();`
 	_, err := Evaluate(ctx, c, js)
 	return err
 }

@@ -127,6 +127,10 @@ func (m *MockPage) HighlightElement(ctx context.Context, id int, xpath string, d
 	return nil
 }
 
+func (m *MockPage) ClearHighlight(ctx context.Context) error {
+	return nil
+}
+
 func (m *MockPage) GetElementCenter(ctx context.Context, id int, xpath string) (float64, float64, error) {
 	for _, el := range m.Elements {
 		if el.XPath == xpath || el.ID == id {

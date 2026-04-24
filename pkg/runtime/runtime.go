@@ -568,6 +568,11 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 
 		// Visual feedback: flash highlight for every action (matches Python _highlight).
 		_ = rt.page.HighlightElement(ctx, winner.ID, winner.XPath, 2000)
+		// Ensure the highlight is removed as soon as the interaction finishes,
+		// even if the action triggers navigation that destroys the element.
+		defer func() {
+			_ = rt.page.ClearHighlight(ctx)
+		}()
 
 		// Debug mode: persistent magenta highlight + pause before action execution.
 		if rt.pendingDebugPause {

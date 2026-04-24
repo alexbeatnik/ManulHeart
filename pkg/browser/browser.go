@@ -79,6 +79,11 @@ type Page interface {
 	// HighlightElement injects a temporary border highlight for debugging.
 	HighlightElement(ctx context.Context, id int, xpath string, durationMS int) error
 
+	// ClearHighlight immediately removes any active highlight (flash or debug)
+	// from the page. It must not panic if the page has navigated or the element
+	// has been destroyed.
+	ClearHighlight(ctx context.Context) error
+
 	// GetElementCenter returns the center viewport coordinates of an element.
 	GetElementCenter(ctx context.Context, id int, xpath string) (float64, float64, error)
 
