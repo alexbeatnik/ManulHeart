@@ -625,6 +625,115 @@ NAVIGATE to {url}
 	}
 }
 
+// ── SETUP / TEARDOWN ──────────────────────────────────────────────────────────
+
+func TestParseSetupTeardownBlocks(t *testing.T) {
+	src := `
+[SETUP]
+    PRINT "setup runs"
+    SET {setup_var} = hello
+[END SETUP]
+
+STEP 1: Mission
+    NAVIGATE to https://example.com
+    CLICK the 'Login' button
+
+[TEARDOWN]
+    PRINT "teardown runs"
+[END TEARDOWN]
+`
+	hunt := mustParse(t, src)
+
+	if len(hunt.SetupCommands) != 2 {
+		t.Fatalf("expected 2 setup commands, got %d", len(hunt.SetupCommands))
+	}
+	if hunt.SetupCommands[0].Type != CmdPrint {
+		t.Errorf("setup[0] type = %s, want PRINT", hunt.SetupCommands[0].Type)
+	}
+	if hunt.SetupCommands[1].Type != CmdSet {
+		t.Errorf("setup[1] type = %s, want SET", hunt.SetupCommands[1].Type)
+	}
+
+	if len(hunt.Commands) != 2 {
+		t.Fatalf("expected 2 mission commands, got %d", len(hunt.Commands))
+	}
+	if hunt.Commands[0].Type != CmdNavigate {
+		t.Errorf("mission[0] type = %s, want NAVIGATE", hunt.Commands[0].Type)
+	}
+	if hunt.Commands[1].Type != CmdClick {
+		t.Errorf("mission[1] type = %s, want CLICK", hunt.Commands[1].Type)
+	}
+
+	if len(hunt.TeardownCommands) != 1 {
+		t.Fatalf("expected 1 teardown command, got %d", len(hunt.TeardownCommands))
+	}
+	if hunt.TeardownCommands[0].Type != CmdPrint {
+		t.Errorf("teardown[0] type = %s, want PRINT", hunt.TeardownCommands[0].Type)
+	}
+}
+
+func TestParseSetupTeardownWithNestedBlocks(t *testing.T) {
+	src := `
+[SETUP]
+    IF {x} == '1':
+        PRINT "conditional setup"
+[END SETUP]
+
+STEP 1:
+    NAVIGATE to https://example.com
+`
+	hunt := mustParse(t, src)
+	if len(hunt.SetupCommands) != 1 {
+		t.Fatalf("expected 1 setup command, got %d", len(hunt.SetupCommands))
+	}
+	ifCmd := hunt.SetupCommands[0]
+	if ifCmd.Type != CmdIf {
+		t.Fatalf("setup[0] type = %s, want IF", ifCmd.Type)
+	}
+	if len(ifCmd.Branches) != 1 {
+		t.Fatalf("expected 1 branch, got %d", len(ifCmd.Branches))
+	}
+	if len(ifCmd.Branches[0].Body) != 1 {
+		t.Fatalf("expected 1 body command, got %d", len(ifCmd.Branches[0].Body))
+	}
+	if ifCmd.Branches[0].Body[0].Type != CmdPrint {
+		t.Errorf("body[0] type = %s, want PRINT", ifCmd.Branches[0].Body[0].Type)
+	}
+}
+
+// ── @script: aliases ──────────────────────────────────────────────────────────
+
+func TestParseScriptAliasRewrite(t *testing.T) {
+	src := `@script: {helpers} = mypackage.helpers
+CALL GO {helpers}.echo "hello" into {result}
+`
+	hunt := mustParse(t, src)
+	if len(hunt.Commands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(hunt.Commands))
+	}
+	cmd := hunt.Commands[0]
+	if cmd.Type != CmdCallGo {
+		t.Fatalf("type = %s, want CALL_GO", cmd.Type)
+	}
+	if cmd.GoCallName != "mypackage.helpers.echo" {
+		t.Errorf("GoCallName = %q, want mypackage.helpers.echo", cmd.GoCallName)
+	}
+}
+
+func TestParseScriptAliasNoBraces(t *testing.T) {
+	src := `@script: {helpers} = mypackage.helpers
+CALL GO helpers.echo "hello"
+`
+	hunt := mustParse(t, src)
+	if len(hunt.Commands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(hunt.Commands))
+	}
+	cmd := hunt.Commands[0]
+	if cmd.GoCallName != "helpers.echo" {
+		t.Errorf("GoCallName = %q, want helpers.echo (no rewrite expected)", cmd.GoCallName)
+	}
+}
+
 // ── Full .hunt parse ──────────────────────────────────────────────────────────
 
 func TestParseMegaHuntStructure(t *testing.T) {

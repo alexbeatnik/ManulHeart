@@ -102,13 +102,54 @@ func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRe
 	}
 
 	for k, v := range hunt.Vars {
-		rt.vars.Set(k, v, LevelGlobal)
+		rt.vars.Set(k, v, LevelMission)
 	}
 
 	result := &explain.HuntResult{
 		HuntFile: hunt.SourcePath,
 		Title:    hunt.Title,
 		Context:  hunt.Context,
+	}
+
+	start := time.Now()
+	passed, failed := 0, 0
+	var firstErr error
+
+	// Execute SETUP block before the mission body.
+	if len(hunt.SetupCommands) > 0 {
+		rt.logger.BlockStart("SETUP")
+		p, f, err := rt.runCommands(ctx, hunt.SetupCommands, result, 0)
+		passed += p
+		failed += f
+		if err != nil {
+			rt.logger.BlockFail("SETUP")
+			firstErr = err
+		} else {
+			rt.logger.BlockPass("SETUP")
+		}
+	}
+
+	// Defer TEARDOWN so it always executes, even if setup or mission fails.
+	defer func() {
+		if len(hunt.TeardownCommands) > 0 {
+			rt.logger.BlockStart("TEARDOWN")
+			_, _, tdErr := rt.runCommands(ctx, hunt.TeardownCommands, result, 0)
+			if tdErr != nil {
+				rt.logger.BlockFail("TEARDOWN")
+			} else {
+				rt.logger.BlockPass("TEARDOWN")
+			}
+		}
+		result.TotalDuration = time.Since(start)
+		result.TotalDurationMS = result.TotalDuration.Milliseconds()
+		result.TotalSteps = passed + failed
+		result.Passed = passed
+		result.Failed = failed
+		result.Success = failed == 0
+	}()
+
+	if firstErr != nil {
+		return result, firstErr
 	}
 
 	// Group consecutive commands by StepBlock, preserving order.
@@ -132,10 +173,6 @@ func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRe
 		groups[len(groups)-1].commands = append(groups[len(groups)-1].commands, cmd)
 	}
 
-	start := time.Now()
-	passed, failed := 0, 0
-	var firstErr error
-
 	var cmdOffset int
 	for _, g := range groups {
 		rt.logger.BlockStart(g.name)
@@ -154,12 +191,6 @@ func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRe
 		rt.logger.BlockPass(g.name)
 	}
 
-	result.TotalDuration = time.Since(start)
-	result.TotalDurationMS = result.TotalDuration.Milliseconds()
-	result.TotalSteps = passed + failed
-	result.Passed = passed
-	result.Failed = failed
-	result.Success = failed == 0
 	return result, firstErr
 }
 

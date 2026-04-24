@@ -232,12 +232,18 @@ type Hunt struct {
 	Exports []string
 	// Vars holds @var declarations and runtime SET values.
 	Vars map[string]string
+	// ScriptAliases maps @script: aliases to their full dotted paths.
+	ScriptAliases map[string]string
 	// Imports contains parsed @import directives.
 	Imports []ImportSpec
 	// Blueprints holds imported STEP blocks keyed by name.
 	Blueprints map[string][]Command
 	// Commands is the ordered list of top-level parsed commands.
 	Commands []Command
+	// SetupCommands holds commands inside [SETUP] ... [END SETUP].
+	SetupCommands []Command
+	// TeardownCommands holds commands inside [TEARDOWN] ... [END TEARDOWN].
+	TeardownCommands []Command
 }
 
 // Expand replaces all CmdUse and CmdCallStep placeholders in the Hunt's
@@ -249,6 +255,23 @@ func (h *Hunt) Expand() error {
 		return err
 	}
 	h.Commands = expanded
+
+	if len(h.SetupCommands) > 0 {
+		expanded, err = expandCommands(h.SetupCommands, h.Blueprints, make(map[string]bool))
+		if err != nil {
+			return err
+		}
+		h.SetupCommands = expanded
+	}
+
+	if len(h.TeardownCommands) > 0 {
+		expanded, err = expandCommands(h.TeardownCommands, h.Blueprints, make(map[string]bool))
+		if err != nil {
+			return err
+		}
+		h.TeardownCommands = expanded
+	}
+
 	return nil
 }
 
@@ -333,6 +356,7 @@ func ParseFile(path string) (*Hunt, error) {
 func parseLines(hunt *Hunt, lines []string) error {
 	var currentStep string
 	var currentTags []string
+	var inSetup, inTeardown bool
 
 	type stackFrame struct {
 		cmd    *Command
@@ -343,6 +367,14 @@ func parseLines(hunt *Hunt, lines []string) error {
 
 	appendCmd := func(cmd Command) *Command {
 		if len(stack) == 0 {
+			if inSetup {
+				hunt.SetupCommands = append(hunt.SetupCommands, cmd)
+				return &hunt.SetupCommands[len(hunt.SetupCommands)-1]
+			}
+			if inTeardown {
+				hunt.TeardownCommands = append(hunt.TeardownCommands, cmd)
+				return &hunt.TeardownCommands[len(hunt.TeardownCommands)-1]
+			}
 			hunt.Commands = append(hunt.Commands, cmd)
 			return &hunt.Commands[len(hunt.Commands)-1]
 		}
@@ -375,6 +407,26 @@ func parseLines(hunt *Hunt, lines []string) error {
 		}
 
 		upper := strings.ToUpper(trimmed)
+
+		// SETUP / TEARDOWN block markers
+		if upper == "[SETUP]" {
+			inSetup = true
+			inTeardown = false
+			continue
+		}
+		if upper == "[END SETUP]" || upper == "[END_SETUP]" {
+			inSetup = false
+			continue
+		}
+		if upper == "[TEARDOWN]" {
+			inTeardown = true
+			inSetup = false
+			continue
+		}
+		if upper == "[END TEARDOWN]" || upper == "[END_TEARDOWN]" {
+			inTeardown = false
+			continue
+		}
 
 		// In-line tags (apply to the NEXT command) - Case sensitive (@TAG vs @tags)
 		if strings.HasPrefix(trimmed, "@TAG:") || strings.HasPrefix(trimmed, "@TAGS:") {
@@ -461,6 +513,8 @@ func parseLines(hunt *Hunt, lines []string) error {
 		cmd.Tags = append([]string{}, currentTags...)
 		currentTags = nil
 
+		rewriteScriptAlias(&cmd, hunt.ScriptAliases)
+
 		ptr := appendCmd(cmd)
 
 		if ptr.Type == CmdIf {
@@ -522,6 +576,18 @@ func parseDirective(hunt *Hunt, line string) error {
 		varName := strings.Trim(strings.TrimSpace(value[:eqIdx]), "{}")
 		varValue := strings.TrimSpace(value[eqIdx+1:])
 		hunt.Vars[varName] = varValue
+	case "script":
+		// @script: {alias} = path
+		eqIdx := strings.Index(value, "=")
+		if eqIdx < 0 {
+			return nil
+		}
+		alias := strings.Trim(strings.TrimSpace(value[:eqIdx]), "{}")
+		path := strings.TrimSpace(value[eqIdx+1:])
+		if hunt.ScriptAliases == nil {
+			hunt.ScriptAliases = make(map[string]string)
+		}
+		hunt.ScriptAliases[alias] = path
 	case "import":
 		imp, err := parseImportLine(value)
 		if err != nil {
@@ -1101,6 +1167,27 @@ func extractVerifyText(rest string, negated *bool, state *string) string {
 		}
 	}
 	return q
+}
+
+// rewriteScriptAlias rewrites CALL GO commands that use a @script: alias
+// to their full dotted path. It handles both {alias} and {alias}.func forms.
+func rewriteScriptAlias(cmd *Command, aliases map[string]string) {
+	if cmd.Type != CmdCallGo || len(aliases) == 0 {
+		return
+	}
+	name := cmd.GoCallName
+	if !strings.HasPrefix(name, "{") {
+		return
+	}
+	closeIdx := strings.Index(name, "}")
+	if closeIdx < 0 {
+		return
+	}
+	alias := name[1:closeIdx]
+	rest := name[closeIdx+1:]
+	if path, ok := aliases[alias]; ok {
+		cmd.GoCallName = path + rest
+	}
 }
 
 // ── String utilities ───────────────────────────────────────────────────────────
