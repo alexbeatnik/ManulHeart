@@ -1126,3 +1126,55 @@ func TestRuntime_CheckFailsWhenCheckboxStateDoesNotChange(t *testing.T) {
 		t.Fatal("expected CHECK to fail when checkbox state does not actually change")
 	}
 }
+
+// VERIFY SOFTLY must never fail the step: missing text produces a warning
+// + Success=true so the hunt continues. Regression for the sampler.hunt bug
+// where VERIFY SOFTLY was unimplemented and raised "command VERIFY_SOFT not
+// yet implemented".
+func TestRuntime_VerifySoftly(t *testing.T) {
+	cases := []struct {
+		name    string
+		text    string
+		negated bool
+		// pageText is what the visible-text probe returns; a VERIFY SOFTLY
+		// failure must still leave Success=true.
+		pageText string
+	}{
+		{"missing text, expected present", "ghost-text", false, "welcome to the site"},
+		{"present text, expected present", "welcome", false, "welcome to the site"},
+		{"present text, expected NOT present", "welcome", true, "welcome to the site"},
+		{"missing text, expected NOT present", "ghost-text", true, "welcome to the site"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &MockPage{URL: "https://example.com", Title: tc.pageText, Elements: []dom.ElementSnapshot{
+				{ID: 1, XPath: "/body", Tag: "body", VisibleText: tc.pageText, IsVisible: true},
+			}}
+			mock.Elements[0].Normalize()
+			rt := New(config.Config{}, mock, utils.NewLogger(nil))
+			result, err := rt.RunHunt(context.Background(), &dsl.Hunt{
+				Commands: []dsl.Command{{
+					Type:          dsl.CmdVerifySoft,
+					Raw:           "VERIFY SOFTLY that '" + tc.text + "' is present",
+					VerifyText:    tc.text,
+					VerifyNegated: tc.negated,
+				}},
+			})
+			if err != nil {
+				t.Fatalf("RunHunt returned error for soft verify: %v", err)
+			}
+			if len(result.Results) != 1 {
+				t.Fatalf("expected 1 result, got %d", len(result.Results))
+			}
+			if !result.Results[0].Success {
+				t.Fatalf("VERIFY SOFTLY must always mark the step Success=true (got %+v)", result.Results[0])
+			}
+			if result.Results[0].Error != "" {
+				t.Fatalf("VERIFY SOFTLY must not set Error (got %q)", result.Results[0].Error)
+			}
+			if result.Results[0].TargetQuery != tc.text {
+				t.Fatalf("TargetQuery = %q, want %q", result.Results[0].TargetQuery, tc.text)
+			}
+		})
+	}
+}
