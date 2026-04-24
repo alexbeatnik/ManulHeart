@@ -1006,31 +1006,43 @@ func parseTarget(s string) (target, typeHint string, mode InteractionMode) {
 	hintsCheckbox := []string{"checkbox", "radio", "toggle", "switch"}
 
 	sLower := strings.ToLower(s)
+	// matchHint returns true when h appears as a whole word in sLower —
+	// at the start, after a space, or at the very end.
+	matchHint := func(h string) bool {
+		return strings.HasPrefix(sLower, h+" ") ||
+			strings.Contains(sLower, " "+h+" ") ||
+			strings.HasSuffix(sLower, " "+h) ||
+			sLower == h
+	}
+	// Checkbox/radio hints are checked first: phrases like "radio button" or
+	// "toggle switch" must resolve to the stateful control, not the generic
+	// "button"/"switch" clickable. CLICK commands still override mode to
+	// ModeClickable at dispatch time — only the typeHint differs.
+	for _, h := range hintsCheckbox {
+		if matchHint(h) {
+			typeHint = h
+			mode = ModeCheckbox
+			return
+		}
+	}
 	for _, h := range hintsClickable {
-		if strings.Contains(sLower, " "+h) || strings.HasSuffix(sLower, " "+h) {
+		if matchHint(h) {
 			typeHint = h
 			mode = ModeClickable
 			return
 		}
 	}
 	for _, h := range hintsInput {
-		if strings.Contains(sLower, " "+h) || strings.HasSuffix(sLower, " "+h) {
+		if matchHint(h) {
 			typeHint = h
 			mode = ModeInput
 			return
 		}
 	}
 	for _, h := range hintsSelect {
-		if strings.Contains(sLower, " "+h) || strings.HasSuffix(sLower, " "+h) {
+		if matchHint(h) {
 			typeHint = h
 			mode = ModeSelect
-			return
-		}
-	}
-	for _, h := range hintsCheckbox {
-		if strings.Contains(sLower, " "+h) || strings.HasSuffix(sLower, " "+h) {
-			typeHint = h
-			mode = ModeCheckbox
 			return
 		}
 	}

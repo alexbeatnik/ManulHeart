@@ -115,6 +115,37 @@ func TestParseClickElement(t *testing.T) {
 	}
 }
 
+// Compound hints like "radio button", "toggle switch" must resolve to the
+// more-specific stateful control, not the generic "button"/"switch" clickable.
+// Regression for the rahulshettyacademy radio-label bug where the parser
+// incorrectly returned typeHint="button" for "radio button", stripping the
+// radio-specific semantic boost and letting the wrapping <label> win.
+func TestParseClickRadioButtonCompoundHint(t *testing.T) {
+	cases := []struct {
+		line     string
+		hint     string
+		mode     InteractionMode
+		target   string
+	}{
+		{"CLICK the radio button for 'Radio1'", "radio", ModeCheckbox, "Radio1"},
+		{"CLICK the 'Radio1' radio button", "radio", ModeCheckbox, "Radio1"},
+		{"CLICK the checkbox for 'Agree'", "checkbox", ModeCheckbox, "Agree"},
+		{"CLICK the toggle switch for 'Dark mode'", "toggle", ModeCheckbox, "Dark mode"},
+	}
+	for _, tc := range cases {
+		cmd := mustParseLine(t, tc.line)
+		if cmd.Target != tc.target {
+			t.Errorf("%q: target = %q, want %q", tc.line, cmd.Target, tc.target)
+		}
+		if cmd.TypeHint != tc.hint {
+			t.Errorf("%q: hint = %q, want %q", tc.line, cmd.TypeHint, tc.hint)
+		}
+		if cmd.InteractionMode != tc.mode {
+			t.Errorf("%q: mode = %s, want %s", tc.line, cmd.InteractionMode, tc.mode)
+		}
+	}
+}
+
 // ── DOUBLE CLICK ──────────────────────────────────────────────────────────────
 
 func TestParseDoubleClick(t *testing.T) {
