@@ -244,7 +244,8 @@
             is_select:      tag === 'select',
             is_contenteditable: el.contentEditable === 'true' || el.getAttribute('contenteditable') === 'true',
             is_editable:    !el.disabled && !el.readOnly &&
-                            (tag === 'input' || tag === 'textarea' ||
+                            ((tag === 'input' && !['radio','checkbox','submit','button','image','reset','file','hidden'].includes((el.type || '').toLowerCase())) ||
+                             tag === 'textarea' ||
                              el.getAttribute('contenteditable') === 'true' ||
                              (el.getAttribute('role') || '') === 'textbox'),
             is_checked:     el.checked || el.getAttribute('aria-checked') === 'true',

@@ -47,7 +47,7 @@ type GoCallHandler func(context.Context, GoCallInvocation) (any, error)
 // Registering or unregistering handlers WHILE workers are executing is
 // permitted by the type system (the mutex makes it data-race-free) but is
 // strongly discouraged: the visibility of a handler to a particular
-// in-flight hunt becomes timing-dependent. resetRuntimeRegistries() exists
+// in-flight hunt becomes timing-dependent. ResetRuntimeRegistries() exists
 // for test fixtures and MUST NOT be called while any Worker is running.
 //
 // Handlers themselves MUST be safe for concurrent invocation across goroutines:
@@ -107,7 +107,7 @@ func GetGoCall(name string) (GoCallHandler, bool) {
 	return handler, ok
 }
 
-func resetRuntimeRegistries() {
+func ResetRuntimeRegistries() {
 	customControlsMu.Lock()
 	customControls = map[string]CustomControlHandler{}
 	customControlsMu.Unlock()
@@ -176,6 +176,24 @@ func (rt *Runtime) executeCallGo(ctx context.Context, cmd dsl.Command) (string, 
 	if result != nil {
 		value = fmt.Sprint(result)
 	}
+
+	// Flatten map return values into runtime variables, mirroring Python's
+	// bind_hook_result behaviour for dict returns.
+	switch m := result.(type) {
+	case map[string]string:
+		for k, v := range m {
+			if strings.TrimSpace(k) != "" {
+				rt.vars.Set(k, v, LevelRow)
+			}
+		}
+	case map[string]any:
+		for k, v := range m {
+			if strings.TrimSpace(k) != "" {
+				rt.vars.Set(k, fmt.Sprint(v), LevelRow)
+			}
+		}
+	}
+
 	if cmd.GoCallResultVar != "" {
 		rt.vars.Set(cmd.GoCallResultVar, value, LevelRow)
 	}

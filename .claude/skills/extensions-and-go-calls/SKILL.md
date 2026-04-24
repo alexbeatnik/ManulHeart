@@ -145,7 +145,7 @@ hunt failure — same as any other runtime error.
 
 ## Testing with the extension registry
 
-Use `resetRuntimeRegistries()` to clear both maps between test cases:
+Use `ResetRuntimeRegistries()` to clear both maps between test cases:
 
 ```go
 func TestMyHandler(t *testing.T) {
@@ -157,7 +157,7 @@ func TestMyHandler(t *testing.T) {
 }
 ```
 
-> **Warning:** `resetRuntimeRegistries()` must NOT be called while any worker is active.
+> **Warning:** `ResetRuntimeRegistries()` must NOT be called while any worker is active.
 > All adopted workers must be closed (via `w.Close()`) before resetting.
 
 ### Full test pattern
@@ -208,7 +208,7 @@ DONE.
 
 ## Key files
 
-- [`pkg/runtime/extensions.go`](../../../pkg/runtime/extensions.go) — registry maps, types, `RegisterCustomControl`, `RegisterGoCall`, `GetCustomControl`, `GetGoCall`, `resetRuntimeRegistries`, `normalizeRegistryLabel`, `customControlActionType`.
+- [`pkg/runtime/extensions.go`](../../../pkg/runtime/extensions.go) — registry maps, types, `RegisterCustomControl`, `RegisterGoCall`, `GetCustomControl`, `GetGoCall`, `ResetRuntimeRegistries`, `normalizeRegistryLabel`, `customControlActionType`.
 - [`pkg/runtime/runtime.go`](../../../pkg/runtime/runtime.go) — `tryExecuteCustomControl` (interception), `executeCallGo` (CALL GO dispatch).
 - [`pkg/runtime/mock.go`](../../../pkg/runtime/mock.go) — `MockPage` for tests.
 
@@ -220,4 +220,4 @@ DONE.
 | Non-goroutine-safe handler state | Data race under `go test -race` |
 | Assuming page label matches URL hostname exactly | Handler never fires; check `document.title` first |
 | Returning a non-string from `GoCallHandler` | Value stored as `fmt.Sprint(result)` — floats and structs stringify in unexpected formats |
-| Calling `resetRuntimeRegistries()` with active workers | Panics or data race — always close all workers first |
+| Calling `ResetRuntimeRegistries()` with active workers | Panics or data race — always close all workers first |

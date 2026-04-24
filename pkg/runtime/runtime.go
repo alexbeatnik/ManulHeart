@@ -85,6 +85,12 @@ func New(cfg config.Config, page browser.Page, logger *utils.Logger) *Runtime {
 	return rt
 }
 
+// ResolveVariable returns the value of a runtime variable, respecting scope
+// precedence (Row > Step > Mission > Global > Import).
+func (rt *Runtime) ResolveVariable(name string) (string, bool) {
+	return rt.vars.Resolve(name)
+}
+
 // RunHunt executes all commands in hunt against the bound page.
 // It returns an explain.HuntResult summarising the execution.
 // Commands are grouped by their StepBlock label; each group emits
@@ -823,6 +829,34 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 		}
 		if err == nil {
 			rt.invalidateSnapshot()
+		}
+
+	case dsl.CmdVerifySoft:
+		// Non-fatal text presence check. Unlike CmdVerify, failure is downgraded
+		// to a warning and the hunt continues. Single-shot (no retry loop):
+		// a soft assert is informational, and waiting the full DefaultTimeout
+		// on something the caller already expects might not be there would
+		// unnecessarily slow hunts. Use WAIT FOR ... or hard VERIFY when you
+		// need to actually wait for an element.
+		target := rt.resolveVariables(cmd.VerifyText)
+		res.TargetQuery = target
+		raw, errProbe := rt.page.CallProbe(ctx, heuristics.BuildVisibleTextProbe(), nil)
+		if errProbe != nil {
+			rt.logger.ActionWarn(fmt.Sprintf("VERIFY SOFTLY skipped: probe error: %v", errProbe))
+			break
+		}
+		pageText := strings.ToLower(string(raw))
+		present := strings.Contains(pageText, strings.ToLower(target))
+		satisfied := present
+		if cmd.VerifyNegated {
+			satisfied = !present
+		}
+		if !satisfied {
+			expect := "present"
+			if cmd.VerifyNegated {
+				expect = "NOT present"
+			}
+			rt.logger.ActionWarn(fmt.Sprintf("VERIFY SOFTLY failed (non-fatal): '%s' expected %s", target, expect))
 		}
 
 	case dsl.CmdVerify:

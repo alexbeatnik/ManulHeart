@@ -12,8 +12,8 @@ import (
 )
 
 func TestCustomControlRegistryLookupIsCaseInsensitive(t *testing.T) {
-	resetRuntimeRegistries()
-	t.Cleanup(resetRuntimeRegistries)
+	ResetRuntimeRegistries()
+	t.Cleanup(ResetRuntimeRegistries)
 
 	err := RegisterCustomControl("Login Page", "Username", func(context.Context, browser.Page, CustomControlInvocation) error {
 		return nil
@@ -44,8 +44,8 @@ func TestCustomControlRegistryLookupIsCaseInsensitive(t *testing.T) {
 }
 
 func TestRuntime_CustomControlInterceptsFillWithoutDOMResolution(t *testing.T) {
-	resetRuntimeRegistries()
-	t.Cleanup(resetRuntimeRegistries)
+	ResetRuntimeRegistries()
+	t.Cleanup(ResetRuntimeRegistries)
 
 	var gotAction string
 	var gotValue string
@@ -93,8 +93,8 @@ func TestRuntime_CustomControlInterceptsFillWithoutDOMResolution(t *testing.T) {
 }
 
 func TestRuntime_CustomControlFallsBackToURLDerivedPageLabel(t *testing.T) {
-	resetRuntimeRegistries()
-	t.Cleanup(resetRuntimeRegistries)
+	ResetRuntimeRegistries()
+	t.Cleanup(ResetRuntimeRegistries)
 
 	called := false
 	err := RegisterCustomControl("checkout page", "React Datepicker", func(ctx context.Context, page browser.Page, invocation CustomControlInvocation) error {
@@ -125,8 +125,8 @@ func TestRuntime_CustomControlFallsBackToURLDerivedPageLabel(t *testing.T) {
 }
 
 func TestRuntime_CallGoResolvesArgsAndStoresResult(t *testing.T) {
-	resetRuntimeRegistries()
-	t.Cleanup(resetRuntimeRegistries)
+	ResetRuntimeRegistries()
+	t.Cleanup(ResetRuntimeRegistries)
 
 	var gotArgs []string
 	err := RegisterGoCall("Math.Concat", func(ctx context.Context, invocation GoCallInvocation) (any, error) {
@@ -173,5 +173,41 @@ func TestRuntime_CallGoResolvesArgsAndStoresResult(t *testing.T) {
 	}
 	if !res.Success {
 		t.Fatal("expected CALL GO execution to mark step successful")
+	}
+}
+
+func TestRuntime_CallGoFlattensMapReturnIntoVariables(t *testing.T) {
+	ResetRuntimeRegistries()
+	t.Cleanup(ResetRuntimeRegistries)
+
+	err := RegisterGoCall("config.load", func(ctx context.Context, invocation GoCallInvocation) (any, error) {
+		return map[string]string{
+			"api_key":  "secret123",
+			"endpoint": "https://api.example.com",
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("RegisterGoCall failed: %v", err)
+	}
+
+	rt := New(config.Config{}, &MockPage{}, utils.NewLogger(nil))
+
+	res, execErr := rt.executeCommand(context.Background(), dsl.Command{
+		Type:       dsl.CmdCallGo,
+		Raw:        `CALL GO config.load`,
+		GoCallName: "config.load",
+	})
+	if execErr != nil {
+		t.Fatalf("executeCommand failed: %v", execErr)
+	}
+	if !res.Success {
+		t.Fatal("expected CALL GO execution to mark step successful")
+	}
+
+	if val, ok := rt.vars.Resolve("api_key"); !ok || val != "secret123" {
+		t.Fatalf("api_key = %q, ok=%v, want secret123", val, ok)
+	}
+	if val, ok := rt.vars.Resolve("endpoint"); !ok || val != "https://api.example.com" {
+		t.Fatalf("endpoint = %q, ok=%v, want https://api.example.com", val, ok)
 	}
 }
