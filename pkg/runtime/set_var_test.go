@@ -83,3 +83,37 @@ func TestRuntime_Indentation(t *testing.T) {
 		t.Errorf("expected SET, got %v", hunt.Commands[2].Type)
 	}
 }
+
+func TestRuntime_VarScoping_MissionLevel(t *testing.T) {
+	mock := &MockPage{}
+	cfg := config.Config{}
+	logger := utils.NewLogger(nil)
+	rt := New(cfg, mock, logger)
+	ctx := context.Background()
+
+	hunt := &dsl.Hunt{
+		Vars: map[string]string{
+			"base_url": "https://example.com",
+		},
+		Commands: []dsl.Command{
+			{Type: dsl.CmdNavigate, URL: "https://example.com"},
+		},
+	}
+
+	_, err := rt.RunHunt(ctx, hunt)
+	if err != nil {
+		t.Fatalf("RunHunt failed: %v", err)
+	}
+
+	// Verify the variable is stored at LevelMission (3), not LevelGlobal (4).
+	val, level, ok := rt.vars.ResolveLevel("base_url")
+	if !ok {
+		t.Fatal("expected base_url to be resolved")
+	}
+	if val != "https://example.com" {
+		t.Errorf("base_url = %q, want https://example.com", val)
+	}
+	if level != LevelMission {
+		t.Errorf("base_url scope level = %d, want LevelMission (%d)", level, LevelMission)
+	}
+}

@@ -55,7 +55,7 @@ unclamped weighted sum used for ranking. Every category is printed by
 > signals, not a "bump" of the same one. Never assume proximity is negligible
 > just because the base weight is small — in contextual mode it dominates.
 
-## Mode synergy & cross-mode penalties (v0.0.0.8+)
+## Mode synergy & cross-mode penalties (v0.0.1.0+)
 
 The semantics channel includes two Python-aligned modifiers computed in
 `scorer.Score()` after the raw tag-semantics and type-hint signals:

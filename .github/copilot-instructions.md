@@ -20,7 +20,7 @@
 ## CLI INSTALL + VERSION
 
 > **CRITICAL — Read this first.**
-> Current documented ManulHeart CLI version is **0.0.0.8**.
+> Current documented ManulHeart CLI version is **0.0.1.0**.
 > When documenting install or usage, prefer the Go binary as a PATH-visible system command named `manul`
 > (for example `~/.local/bin/manul` or `/usr/local/bin/manul`) so editor extensions can invoke it directly.
 > Do not document the repo-local binary as the only intended integration path when the request is about running from tools or extensions.
@@ -149,7 +149,7 @@ STEP 2: Enter credentials
 ## Heuristic Scoring (Normalised 0.0–1.0)
 
 The `Scorer` ranks candidates using weighted categories (unified with Python
-ManulEngine as of v0.0.0.8):
+ManulEngine as of v0.0.1.0):
 
 1. **Cache (2.00):** Semantic cache and blind context reuse (placeholder in Go).
 2. **Text (0.45):** Direct innerText, aria-label, placeholder, label, and data-qa matches.
@@ -195,7 +195,7 @@ results, firstErr := pool.Run(ctx, hunts)
 - Logger API: `utils.NewLogger(logFile)` (stdout + optional ANSI-stripped file); `l.WithLevel(level)` for verbose mode; semantic methods `BlockStart/Pass/Fail`, `ActionStart/Pass/Fail/Warn`, `HeuristicDetail`, `ActionDetail`.
 - Per-hunt report filenames carry an atomic sequence counter — never collide.
 
-## Configuration priority chain (`0.0.0.8`+)
+## Configuration priority chain (`0.0.1.0`+)
 
 `pkg/config` resolves a 20-field `Config` struct from four sources in strict priority order:
 
@@ -210,7 +210,7 @@ CLI Flags  >  MANUL_* env vars  >  manul_engine_configuration.json  >  config.De
 
 When generating code that reads configuration, always start from `config.Default()` and apply layers on top — never construct a `Config` literal from scratch.
 
-## VS Code Debug Protocol (`0.0.0.8`+)
+## VS Code Debug Protocol (`0.0.1.0`+)
 
 `pkg/runtime/debug.go` exposes an interactive step debugger driven over stdin/stdout pipes.
 
@@ -280,7 +280,7 @@ The JSON is a 10-field `ExplainNextResult` (matches `explainNextPayload` in `pkg
 
 `shouldPause(cmd, idx)` returns true when `breakLines` is empty (pause-every-step mode) or the command's line number appears in `breakLines`, UNLESS `debugContinue` is set — in which case all pauses are suppressed. The `idx` parameter enables future index-based breakpoint matching without changing the line-number logic.
 
-## Filesystem artifacts (`0.0.0.8`+)
+## Filesystem artifacts (`0.0.1.0`+)
 
 After every hunt run the engine appends one JSONL record to `<cwd>/reports/run_history.json` (directory created automatically):
 
