@@ -9,6 +9,7 @@ STEP 1: Login
     FILL 'Username' field with '{username}'
     FILL 'Password' field with '{password}'
     CLICK 'Login' button
+    WAIT 2
 
 STEP 2: Add item to cart
     # 📍 Auto-Nav: Products Catalog
