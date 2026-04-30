@@ -345,3 +345,41 @@ func (m stringMapMap) setdefault(key string, value map[string]string) map[string
 	m[key] = value
 	return value
 }
+
+// MigrateLegacyJSON reads a legacy pages.json (wrapped or lean) and writes
+// per-site fragments into <outDir>/<safe_netloc>.json.
+func MigrateLegacyJSON(legacyPath, outDir string) error {
+	data, err := os.ReadFile(legacyPath)
+	if err != nil {
+		return fmt.Errorf("read legacy pages.json: %w", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parse legacy pages.json: %w", err)
+	}
+
+	fragments := normalizeFragment(raw)
+	if len(fragments) == 0 {
+		return fmt.Errorf("no site blocks found in %s", legacyPath)
+	}
+
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return fmt.Errorf("create pages dir: %w", err)
+	}
+
+	for siteRoot, fields := range fragments {
+		payload := map[string]any{"site": siteRoot}
+		for k, v := range fields {
+			payload[k] = v
+		}
+		data, err := json.MarshalIndent(payload, "", "    ")
+		if err != nil {
+			continue
+		}
+		path := filepath.Join(outDir, safeSiteFilename(siteRoot))
+		if err := os.WriteFile(path, append(data, '\n'), 0644); err != nil {
+			return fmt.Errorf("write fragment %s: %w", path, err)
+		}
+	}
+	return nil
+}

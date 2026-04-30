@@ -35,6 +35,8 @@ type ChromeOptions struct {
 	DisableGPU bool
 	// Headless runs Chrome without a visible window.
 	Headless bool
+	// ExecutablePath overrides the Chrome binary location.
+	ExecutablePath string
 }
 
 // DefaultChromeOptions returns sensible defaults for automation.
@@ -52,9 +54,13 @@ func DefaultChromeOptions() ChromeOptions {
 // If opts.UserDataDir is empty, a unique temp directory is created and owned
 // by the returned ChromeProcess (removed when Close is called).
 func LaunchChrome(ctx context.Context, opts ChromeOptions) (*ChromeProcess, error) {
-	chromePath, err := findChrome()
-	if err != nil {
-		return nil, err
+	chromePath := opts.ExecutablePath
+	if chromePath == "" {
+		var err error
+		chromePath, err = findChrome()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	ownsDir := false

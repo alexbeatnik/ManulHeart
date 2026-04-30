@@ -19,6 +19,7 @@ Single dependency: `gorilla/websocket`. Pure Go. Single static binary. ~476 test
 - **[DSL Syntax](docs/dsl-syntax.md)** — Complete `.hunt` language reference
 - **[Reports & Explainability](docs/overview.md#explainability)** — Scoring breakdowns and HTML reports
 - **[Extensions](docs/extensions.md)** — `CALL GO`, custom controls, and the Go extension API
+- **[Loops & Page Objects](docs/loops-and-pages.md)** — `REPEAT`, `FOR EACH`, `WHILE`, and the `pages/` registry
 
 ---
 
@@ -145,7 +146,8 @@ The same `.hunt` file against the same page produces the same resolution path ev
 | **DSL-first automation** | `.hunt` files are the primary artifact. Plain English commands, not selectors. |
 | **Deterministic targeting** | 4-channel heuristic scorer ranks every candidate with explicit signal breakdowns. |
 | **Contextual qualifiers** | `NEAR`, `ON HEADER/FOOTER`, `INSIDE` restrict candidates spatially and structurally. |
-| **Control flow** | `IF`/`ELIF`/`ELSE`, `WHILE`, `REPEAT`, `FOR EACH` with full block nesting. |
+| **Control flow** | `IF`/`ELIF`/`ELSE`, `WHILE`, `REPEAT N TIMES`, `FOR EACH` with full block nesting. `WHILE` is capped at 100 iterations; `REPEAT` exposes a `{i}` 0-based counter. |
+| **Page-name registry** | `pages/<site>.json` maps URLs to human-readable labels for reports and `RegisterCustomControl`. Unknown URLs are auto-populated as `Auto: domain/path` placeholders. See [docs/loops-and-pages.md](docs/loops-and-pages.md). |
 | **Hooks** | `[SETUP]` and `[TEARDOWN]` blocks run before and after the mission body. Teardown always executes. |
 | **Script aliases** | `@script: {alias} = dotted.go.path` lets you alias `CALL GO` handlers. |
 | **Parallel execution** | Native `WorkerPool` runs hunts concurrently with microscopic memory overhead. |
@@ -214,6 +216,8 @@ pkg/explain         Structured execution results and explainability types
 pkg/report          Styled HTML report generation + aggregate index.html
 pkg/config          Runtime configuration (20 fields)
 pkg/core            Shared enums (e.g. ScrollStrategy)
+pkg/pages           Page-name registry: URL → human-readable label, lean/wrapped JSON,
+                    auto-populate, longest-prefix site matching
 pkg/utils           Semantic logging (Block/Action/Detail), ANSI stripping, error types
 examples/           Sample .hunt files
 docs/               Documentation
@@ -271,7 +275,8 @@ func runSuite(ctx context.Context, hunts []*dsl.Hunt) error {
 
 **Alpha.** The core engine covers:
 
-- 32+ DSL commands, full control flow (IF/ELIF/ELSE, WHILE, REPEAT, FOR EACH)
+- 32+ DSL commands, full control flow (IF/ELIF/ELSE, WHILE, REPEAT N TIMES, FOR EACH)
+- Page-name registry (`pages/<site>.json`) with auto-populate and longest-prefix matching
 - `[SETUP]` / `[TEARDOWN]` hook blocks with fail-fast setup and guaranteed teardown
 - `@script:` aliases for `CALL GO` handler paths
 - Import system (`@import:`, `USE`/`CALL` expansion)
@@ -282,7 +287,7 @@ func runSuite(ctx context.Context, hunts []*dsl.Hunt) error {
 - Strongly-typed extension API (`CALL GO`, `RegisterCustomControl`)
 - Race-detector-safe CDP transport and concurrent handler registries
 
-**Documented CLI version:** `0.0.1.0+`
+**Documented CLI version:** `0.0.1.1+`
 
 **Recommended install target:** expose the binary as a PATH command named `manul` for editor extensions and automation tooling.
 

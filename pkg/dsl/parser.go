@@ -63,6 +63,7 @@ const (
 	CmdUpload          CommandType = "UPLOAD_FILE" // alias for backward compatibility
 	CmdPause           CommandType = "PAUSE"
 	CmdDebugVars       CommandType = "DEBUG_VARS"
+	CmdMock            CommandType = "MOCK"
 	CmdUnknown         CommandType = "UNKNOWN"
 )
 
@@ -200,6 +201,13 @@ type Command struct {
 
 	// UploadFilePath is the file path for UPLOAD_FILE commands.
 	UploadFilePath string
+
+	// MockMethod is the HTTP method for MOCK commands (GET, POST, PUT, PATCH, DELETE).
+	MockMethod string
+	// MockPattern is the URL pattern for MOCK commands.
+	MockPattern string
+	// MockFile is the response file path for MOCK commands.
+	MockFile string
 
 	// Body is the block body for control-flow commands (REPEAT, FOR EACH, WHILE).
 	Body []Command
@@ -1009,6 +1017,12 @@ func parseCommandLine(line string) Command {
 	case upper == "DEBUG VARS":
 		cmd.Type = CmdDebugVars
 
+	// ── MOCK GET/POST/PUT/PATCH/DELETE ────────────────────────────────────────
+	case strings.HasPrefix(upper, "MOCK "):
+		cmd.Type = CmdMock
+		rest := strings.TrimSpace(stripPrefix(line, "MOCK "))
+		cmd.MockMethod, cmd.MockPattern, cmd.MockFile = parseMock(rest)
+
 	default:
 		cmd.Type = CmdUnknown
 	}
@@ -1041,6 +1055,34 @@ func parseCallGo(rest string) (name string, args []string, resultVar string) {
 	}
 
 	return name, args, resultVar
+}
+
+// parseMock extracts method, URL pattern, and response file from a MOCK command.
+// Syntax: MOCK GET "/api/users" with 'mocks/users.json'
+func parseMock(s string) (method, pattern, file string) {
+	fields := strings.Fields(s)
+	if len(fields) < 1 {
+		return "", "", ""
+	}
+	method = strings.ToUpper(fields[0])
+	switch method {
+	case "GET", "POST", "PUT", "PATCH", "DELETE":
+		// ok
+	default:
+		return "", "", ""
+	}
+	// Remainder after method: "/api/users" with 'mocks/users.json'
+	rest := strings.TrimSpace(s[len(fields[0]):])
+	pattern = extractFirstQuoted(rest)
+	if pattern == "" {
+		return method, "", ""
+	}
+	// Find "with" keyword
+	withIdx := strings.Index(strings.ToUpper(rest), " WITH ")
+	if withIdx >= 0 {
+		file = extractFirstQuoted(rest[withIdx+6:])
+	}
+	return method, pattern, file
 }
 
 // ── Target parsing helpers ─────────────────────────────────────────────────────
@@ -1218,18 +1260,30 @@ func unquote(s string) string {
 // extractFirstQuoted returns the content of the first single- or double-quoted
 // substring in s, or empty string if none.
 func extractFirstQuoted(s string) string {
-	for _, q := range []byte{'\'', '"'} {
-		start := strings.IndexByte(s, q)
-		if start < 0 {
-			continue
-		}
-		end := strings.IndexByte(s[start+1:], q)
-		if end < 0 {
-			continue
-		}
-		return s[start+1 : start+1+end]
+	startSingle := strings.IndexByte(s, '\'')
+	startDouble := strings.IndexByte(s, '"')
+	var start int
+	var q byte
+	if startSingle < 0 && startDouble < 0 {
+		return ""
+	} else if startSingle < 0 {
+		start = startDouble
+		q = '"'
+	} else if startDouble < 0 {
+		start = startSingle
+		q = '\''
+	} else if startSingle < startDouble {
+		start = startSingle
+		q = '\''
+	} else {
+		start = startDouble
+		q = '"'
 	}
-	return ""
+	end := strings.IndexByte(s[start+1:], q)
+	if end < 0 {
+		return ""
+	}
+	return s[start+1 : start+1+end]
 }
 
 func splitShellTokens(s string) []string {

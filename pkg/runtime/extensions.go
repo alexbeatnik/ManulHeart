@@ -308,3 +308,27 @@ func customControlKey(page, target string) string {
 func normalizeRegistryLabel(value string) string {
 	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
 }
+
+// ListCustomControls returns all registered custom controls as a sorted slice
+// of "page → target" pairs.
+func ListCustomControls() []struct{ Page, Target string } {
+	customControlsMu.RLock()
+	defer customControlsMu.RUnlock()
+
+	out := make([]struct{ Page, Target string }, 0, len(customControls))
+	for key := range customControls {
+		parts := strings.SplitN(key, "\x00", 2)
+		if len(parts) == 2 {
+			out = append(out, struct{ Page, Target string }{Page: parts[0], Target: parts[1]})
+		}
+	}
+	// Simple bubble sort for determinism (registry is small).
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[i].Page+out[i].Target > out[j].Page+out[j].Target {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
+}

@@ -55,6 +55,8 @@ pkg/explain/        Pure data types: ExecutionResult, HuntResult, ScoreBreakdown
 pkg/report/         Per-hunt HTML report + aggregate index.html
 pkg/config/         Runtime configuration (20 fields); config.Default() + JSON + env-var loading
 pkg/core/           Shared enums (e.g. ScrollStrategy: window vs generic-list containers)
+pkg/pages/          URL → human-readable page label registry (lean/wrapped JSON,
+                    auto-populate, longest-prefix site match)
 pkg/utils/          Dual-output semantic logger + ANSI stripping + error types
 examples/           Reference .hunt files
 docs/overview.md    Detailed architecture walkthrough
@@ -123,6 +125,17 @@ CLI Flags  >  MANUL_* env vars  >  manul_engine_configuration.json  >  config.De
 - Always start from `config.Default()` and apply layers on top — never construct a `Config` literal from scratch.
 - `MANUL_HEADLESS`, `MANUL_TIMEOUT`, `MANUL_EXPLAIN`, `MANUL_SCREENSHOT` are the primary env overrides.
 - If `manul_engine_configuration.json` exists in the working directory it is merged before env vars.
+
+## Loops & Page Registry (`0.0.1.1`+)
+
+ManulHeart matches Python ManulEngine's loop and page-naming semantics:
+
+- **`REPEAT N TIMES:`** — body executes N times; `{i}` is auto-bound as a 0-based counter.
+- **`FOR EACH {var} IN {collection}:`** — iterates a comma-separated list stored in a variable.
+- **`WHILE <condition>:`** — hard-capped at 100 iterations to prevent infinite loops; predicate uses the same grammar as `IF`.
+- Loops nest in any combination with `IF`/`ELIF`/`ELSE`. See `examples/loops_demo.hunt` and `docs/loops-and-pages.md`.
+
+Page labels are resolved through `pkg/pages` (`pages/<safe-netloc>.json` next to the hunt files): `document.title` → longest-prefix site match → exact/regex/substring → `"Domain"` fallback → URL-derived fallback. Unknown URLs are auto-populated as `Auto: domain/path` placeholders. Both lean and wrapped JSON forms are accepted; registry is reloaded per lookup so edits are picked up live.
 
 ## Visual Parity for Element Highlighting (`0.0.1.0`+)
 

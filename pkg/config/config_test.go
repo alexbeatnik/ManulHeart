@@ -261,6 +261,36 @@ func TestApplyJSONFile_ExplicitFalseAndZero(t *testing.T) {
 	}
 }
 
+func TestApplyJSONFile_BrokenJSON(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	_ = os.WriteFile(filepath.Join(dir, "manul_engine_configuration.json"), []byte("not json"), 0644)
+
+	cfg := Default()
+	err := applyJSONFile(&cfg)
+	if err == nil {
+		t.Fatal("expected error for broken JSON")
+	}
+}
+
+func TestApplyJSONFile_ExecutablePath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	writeJSON(t, dir, map[string]any{"executable_path": "/usr/bin/chromium"})
+
+	cfg := Default()
+	if err := applyJSONFile(&cfg); err != nil {
+		t.Fatalf("applyJSONFile: %v", err)
+	}
+	if cfg.ExecutablePath == nil || *cfg.ExecutablePath != "/usr/bin/chromium" {
+		t.Fatal("ExecutablePath should be set from JSON")
+	}
+}
+
 // ---- overrideFromEnv --------------------------------------------------------
 
 func TestOverrideFromEnv(t *testing.T) {
@@ -479,5 +509,35 @@ func TestLoad_NoFileNoEnv(t *testing.T) {
 	}
 	if cfg.Workers != def.Workers {
 		t.Errorf("Workers=%d want default %d", cfg.Workers, def.Workers)
+	}
+}
+
+func TestLoad_BrokenJSON(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	_ = os.WriteFile(filepath.Join(dir, "manul_engine_configuration.json"), []byte("not json"), 0644)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for broken JSON")
+	}
+}
+
+func TestLoad_EnvEmptyStringDoesNotOverride(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	writeJSON(t, dir, map[string]any{"browser": "firefox"})
+	t.Setenv("MANUL_BROWSER", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Browser != "firefox" {
+		t.Errorf("Browser=%q want firefox (empty env should not override JSON)", cfg.Browser)
 	}
 }

@@ -140,3 +140,94 @@ func TestPool_Run_EmptyInput(t *testing.T) {
 		t.Fatalf("expected 0 results, got %d", len(results))
 	}
 }
+
+// TestPool_Run_FailFast verifies that FailFast cancels in-flight hunts on the
+// first failure.
+func TestPool_Run_FailFast(t *testing.T) {
+	// Create a hunt that will fail (bad command type)
+	badHunt := &dsl.Hunt{
+		Commands: []dsl.Command{
+			{Type: dsl.CommandType("INVALID_COMMAND"), Raw: "INVALID"},
+		},
+	}
+	goodHunt := navigateHunt(t, "https://example.test/good")
+
+	hunts := []*dsl.Hunt{badHunt, goodHunt, goodHunt}
+
+	pool, err := NewPool(PoolOptions{
+		Concurrency: 3,
+		Allocator:   NewPortAllocator(1, 10),
+		Factory:     perWorkerFactory(),
+		FailFast:    true,
+	})
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	results, runErr := pool.Run(ctx, hunts)
+	if runErr == nil {
+		t.Fatal("expected non-nil error with FailFast")
+	}
+	if len(results) != len(hunts) {
+		t.Fatalf("expected %d results, got %d", len(hunts), len(results))
+	}
+	// At least the bad hunt should have an error
+	if results[0].Err == nil {
+		t.Fatal("expected bad hunt to fail")
+	}
+}
+
+// TestPool_Run_PartialSpawnFail verifies that when some workers fail to spawn
+// but others succeed, the successful workers still process their hunts.
+func TestPool_Run_PartialSpawnFail(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	factory := func(_ context.Context, _ Options) (*Worker, error) {
+		mu.Lock()
+		calls++
+		c := calls
+		mu.Unlock()
+		if c == 1 {
+			return nil, errors.New("first worker fails")
+		}
+		page := &runtime.MockPage{URL: "https://example.test", Title: "ok"}
+		return AdoptWorker(c, config.Default(), page, nil), nil
+	}
+
+	hunts := []*dsl.Hunt{
+		navigateHunt(t, "https://a.test"),
+		navigateHunt(t, "https://b.test"),
+	}
+	pool, err := NewPool(PoolOptions{
+		Concurrency: 2,
+		Allocator:   NewPortAllocator(1, 10),
+		Factory:     factory,
+	})
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	results, runErr := pool.Run(ctx, hunts)
+	// Should have at least one success and one error (either spawn error or context cancelled)
+	if runErr == nil {
+		t.Fatal("expected non-nil error with partial spawn failure")
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	// At least one result should have succeeded
+	foundSuccess := false
+	for _, r := range results {
+		if r.Err == nil {
+			foundSuccess = true
+			break
+		}
+	}
+	if !foundSuccess {
+		t.Fatal("expected at least one successful result with partial spawn failure")
+	}
+}
