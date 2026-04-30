@@ -1,8 +1,4 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-# Manul Ecosystem Agent Instructions
+# ManulHeart Agent Instructions
 
 You are a Principal Go Systems Engineer and QA Architect working on **ManulHeart**, a deterministic, zero-dependency browser automation engine.
 
@@ -38,24 +34,10 @@ make install
 ./manul examples/saucedemo.hunt
 ./manul examples/saucedemo.hunt --headless --verbose
 ./manul examples/saucedemo.hunt --explain   # show scorer candidate rankings
-./manul examples/ --html-report             # all hunts in dir + aggregate index.html
 
 # Run a single step against a running Chrome
 ./manul run-step "Click the 'Login' button" --cdp http://127.0.0.1:9222
 ```
-
-## Skill Navigation (Crucial)
-
-Read the relevant skill file **before** making changes to related systems.
-
-| Area | Skill file |
-|------|-----------|
-| Concurrency, `pkg/worker`, `pkg/runtime`, `pkg/cdp`, any `go` routine | `.claude/skills/concurrency-rules/SKILL.md` |
-| `pkg/scorer`, `pkg/dom`, JS probes (`pkg/heuristics`) | `.claude/skills/scoring-heuristics/SKILL.md` |
-| Writing or reviewing `.hunt` files | `.claude/skills/hunt-authoring/SKILL.md` |
-| Writing or debugging tests | `.claude/skills/testing-manulheart/SKILL.md` |
-| Adding/modifying DSL commands in `pkg/dsl` + `pkg/runtime` | `.claude/skills/adding-dsl-commands/SKILL.md` |
-| `RegisterCustomControl` / `RegisterGoCall` extension registries | `.claude/skills/extensions-and-go-calls/SKILL.md` |
 
 ## Architecture
 
@@ -189,6 +171,23 @@ identical to the Python implementation.
 - Always follow `FILL`/`TYPE` with a `VERIFY ... has value "..."` assertion.
 - Action lines are never numbered (numbers only on `STEP` headers).
 - Use quoted strings for target labels: `Click the 'Login' button`.
+
+## Skill Navigation (Crucial)
+
+Read the relevant skill file **before** making changes to related systems.
+
+| Area | Skill file |
+|------|-----------|
+| Concurrency, `pkg/worker`, `pkg/runtime`, `pkg/cdp`, any `go` routine | `.claude/skills/concurrency-rules/SKILL.md` |
+| `pkg/scorer`, `pkg/dom`, JS probes (`pkg/heuristics`) | `.claude/skills/scoring-heuristics/SKILL.md` |
+| Writing or reviewing `.hunt` files | `.claude/skills/hunt-authoring/SKILL.md` |
+| Writing or debugging tests | `.claude/skills/testing-manulheart/SKILL.md` |
+| Adding/modifying DSL commands in `pkg/dsl` + `pkg/runtime` | `.claude/skills/adding-dsl-commands/SKILL.md` |
+| `RegisterCustomControl` / `RegisterGoCall` extension registries | `.claude/skills/extensions-and-go-calls/SKILL.md` |
+| `pkg/browser/`, `pkg/cdp/` — Page interface, Chrome lifecycle, CDP commands | `.claude/skills/cdp-browser-backend/SKILL.md` |
+| `pkg/config/` — configuration fields, env vars, CLI flags | `.claude/skills/configuration-system/SKILL.md` |
+| `pkg/explain/`, `pkg/report/` — execution results, HTML reports | `.claude/skills/reports-and-explainability/SKILL.md` |
+| `pkg/dsl/imports.go`, `pkg/runtime/variables.go` — imports, expansion, variable scoping | `.claude/skills/dsl-imports-variables/SKILL.md` |
 
 ## Doc Sync Rule
 

@@ -8,18 +8,21 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/manulengineer/manulheart/pkg/browser"
 	"github.com/manulengineer/manulheart/pkg/config"
+	"github.com/manulengineer/manulheart/pkg/core"
 	"github.com/manulengineer/manulheart/pkg/dom"
 	"github.com/manulengineer/manulheart/pkg/dsl"
 	"github.com/manulengineer/manulheart/pkg/explain"
 	"github.com/manulengineer/manulheart/pkg/heuristics"
+	"github.com/manulengineer/manulheart/pkg/pages"
 	"github.com/manulengineer/manulheart/pkg/scorer"
 	"github.com/manulengineer/manulheart/pkg/utils"
-	"github.com/manulengineer/manulheart/pkg/core"
 )
 
 func min(a, b int) int {
@@ -53,9 +56,16 @@ type Runtime struct {
 	page   browser.Page
 	logger *utils.Logger
 	vars   *ScopedVariables
+	pages  *pages.Registry
+
+	// sourcePath is the .hunt file path, used for resolving relative mock/data files.
+	sourcePath string
 
 	cachedElements       []dom.ElementSnapshot
 	stickyCheckboxStates map[string]bool
+
+	// mockRules stores MOCK command rules keyed by "METHOD URL_PATTERN".
+	mockRules map[string]mockRule
 
 	// debug state — only populated when cfg.DebugMode is true
 	breakLines       map[int]bool             // source line numbers that are breakpoints; empty = pause every step
@@ -66,19 +76,28 @@ type Runtime struct {
 	pendingDebugIdx  int                      // command index for the pending debug pause
 }
 
+type mockRule struct {
+	Method      string
+	Pattern     string
+	Body        string
+	ContentType string
+}
+
 // New creates a new Runtime bound to the given Config, Page, and Logger.
 //
 // The returned Runtime is single-goroutine; see the type doc for the
 // concurrency contract. For parallel execution, use pkg/worker.
 func New(cfg config.Config, page browser.Page, logger *utils.Logger) *Runtime {
-	rt := &Runtime{
-		cfg:                  cfg,
-		page:                 page,
-		logger:               logger,
-		vars:                 NewScopedVariables(),
-		stickyCheckboxStates: make(map[string]bool),
-		breakLines:           make(map[int]bool),
-	}
+		rt := &Runtime{
+			cfg:                  cfg,
+			page:                 page,
+			logger:               logger,
+			vars:                 NewScopedVariables(),
+			pages:                pages.NewRegistry(""),
+			stickyCheckboxStates: make(map[string]bool),
+			mockRules:            make(map[string]mockRule),
+			breakLines:           make(map[int]bool),
+		}
 	for _, ln := range cfg.BreakLines {
 		rt.breakLines[ln] = true
 	}
@@ -96,7 +115,9 @@ func (rt *Runtime) ResolveVariable(name string) (string, bool) {
 // Commands are grouped by their StepBlock label; each group emits
 // BlockStart / BlockPass / BlockFail so the output mirrors the
 // per-STEP structure of the .hunt file.
-func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntResult, error) {
+// Optional rowVars (data-driven testing) are applied at LevelRow scope
+// so they override mission-level @var: declarations.
+func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt, rowVars ...map[string]string) (*explain.HuntResult, error) {
 	if hunt == nil {
 		return nil, fmt.Errorf("runtime: nil hunt")
 	}
@@ -104,6 +125,14 @@ func (rt *Runtime) RunHunt(ctx context.Context, hunt *dsl.Hunt) (*explain.HuntRe
 	for k, v := range hunt.Vars {
 		rt.vars.Set(k, v, LevelMission)
 	}
+
+	if len(rowVars) > 0 && rowVars[0] != nil {
+		for k, v := range rowVars[0] {
+			rt.vars.Set(k, v, LevelRow)
+		}
+	}
+
+	rt.sourcePath = hunt.SourcePath
 
 	result := &explain.HuntResult{
 		HuntFile: hunt.SourcePath,
@@ -337,7 +366,13 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 				break
 			}
 			rt.invalidateSnapshot()
-			rt.autoAnnotateNavigate(ctx, url)
+			if rt.cfg.AutoAnnotate {
+				rt.autoAnnotateNavigate(ctx, url)
+			}
+			// Re-apply mocks after navigation so they are available on the new page.
+			if len(rt.mockRules) > 0 {
+				_ = rt.applyMockJS(ctx)
+			}
 		}
 
 	case dsl.CmdWait:
@@ -355,7 +390,13 @@ func (rt *Runtime) executeCommand(ctx context.Context, cmd dsl.Command) (res exp
 
 	case dsl.CmdCallGo:
 		res.ActionValue, res.ProbeMetadata, err = rt.executeCallGo(ctx, cmd)
- 
+
+	case dsl.CmdMock:
+		err = rt.handleMock(ctx, cmd)
+		if err == nil {
+			res.ActionValue = fmt.Sprintf("%s %s → %s", cmd.MockMethod, cmd.MockPattern, cmd.MockFile)
+		}
+
 	case dsl.CmdPause:
 		// Force an interactive debug prompt even if --debug is not set globally.
 		// Contract §4.1: PAUSE only produces pauses in terminal (--debug) mode;
@@ -1180,6 +1221,99 @@ func (rt *Runtime) evaluateCondition(ctx context.Context, cond string) (bool, er
 	return false, fmt.Errorf("unknown condition format: %q", cond)
 }
 
+func (rt *Runtime) handleMock(ctx context.Context, cmd dsl.Command) error {
+	method := rt.resolveVariables(cmd.MockMethod)
+	pattern := rt.resolveVariables(cmd.MockPattern)
+	mockFile := rt.resolveVariables(cmd.MockFile)
+	if method == "" || pattern == "" || mockFile == "" {
+		return fmt.Errorf("MOCK: invalid syntax — expected MOCK <METHOD> \"<pattern>\" with '<file>'")
+	}
+
+	// Resolve mock file path: hunt dir → CWD
+	huntDir := ""
+	if rt.sourcePath != "" {
+		huntDir = filepath.Dir(rt.sourcePath)
+	}
+	candidates := []string{}
+	if huntDir != "" {
+		candidates = append(candidates, filepath.Join(huntDir, mockFile))
+	}
+	candidates = append(candidates, filepath.Join(huntDir, "..", mockFile))
+	candidates = append(candidates, mockFile)
+
+	var resolved string
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			resolved = c
+			break
+		}
+	}
+	if resolved == "" {
+		return fmt.Errorf("MOCK: file not found: %s", mockFile)
+	}
+
+	body, err := os.ReadFile(resolved)
+	if err != nil {
+		return fmt.Errorf("MOCK: failed to read mock file %s: %w", mockFile, err)
+	}
+
+	contentType := "text/plain"
+	if strings.HasSuffix(resolved, ".json") {
+		contentType = "application/json"
+	}
+
+	key := method + " " + pattern
+	rt.mockRules[key] = mockRule{
+		Method:      method,
+		Pattern:     pattern,
+		Body:        string(body),
+		ContentType: contentType,
+	}
+
+	rt.logger.ActionDetail("🔀", "MOCK %s *%s → %s", method, pattern, mockFile)
+
+	// Inject the mock override JS into the page.
+	if err := rt.applyMockJS(ctx); err != nil {
+		return fmt.Errorf("MOCK: failed to inject mock JS: %w", err)
+	}
+	return nil
+}
+
+func (rt *Runtime) applyMockJS(ctx context.Context) error {
+	js := `(function(){
+  if (window.__manulMockApplied) return;
+  window.__manulMockApplied = true;
+  window.__manulMocks = window.__manulMocks || {};
+  const origFetch = window.fetch;
+  window.fetch = function(url, opts) {
+    var method = (opts && opts.method || 'GET').toUpperCase();
+    var mock = window.__manulMocks[method + ' ' + url];
+    if (mock) {
+      return Promise.resolve(new Response(mock.body, {
+        status: 200,
+        headers: {'Content-Type': mock.contentType}
+      }));
+    }
+    return origFetch(url, opts);
+  };
+})();`
+	_, err := rt.page.EvalJS(ctx, js)
+	if err != nil {
+		return err
+	}
+
+	// Register each mock rule.
+	for key, rule := range rt.mockRules {
+		regJS := fmt.Sprintf(`window.__manulMocks[%q] = {body: %q, contentType: %q};`,
+			key, rule.Body, rule.ContentType)
+		_, err := rt.page.EvalJS(ctx, regJS)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (rt *Runtime) resolveVariables(s string) string {
 	return rt.vars.Interpolate(s)
 }
@@ -1212,9 +1346,11 @@ func (rt *Runtime) passesAntiPhantomGuard(mode string, query string, el dom.Elem
 }
 
 func (rt *Runtime) autoAnnotateNavigate(ctx context.Context, url string) {
-	// In a real implementation, this would write to the hunt file.
-	// For now, we log it.
-	rt.logger.ActionDetail("📍", "Auto-Nav: %s", url)
+	pageName := rt.pages.LookupPageName(url)
+	if pageName == "" {
+		pageName = url
+	}
+	rt.logger.ActionDetail("📍", "Auto-Nav: %s", pageName)
 }
 
 func resolveRestrictiveCandidates(targetPath, typeHint string, mode dsl.InteractionMode, elements []dom.ElementSnapshot, anchor *scorer.AnchorContext, logger *utils.Logger) ([]scorer.RankedCandidate, string) {

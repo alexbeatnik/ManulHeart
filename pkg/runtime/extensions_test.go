@@ -211,3 +211,96 @@ func TestRuntime_CallGoFlattensMapReturnIntoVariables(t *testing.T) {
 		t.Fatalf("endpoint = %q, ok=%v, want https://api.example.com", val, ok)
 	}
 }
+
+func TestRuntime_CallGoFlattensMapAnyReturnIntoVariables(t *testing.T) {
+	ResetRuntimeRegistries()
+	t.Cleanup(ResetRuntimeRegistries)
+
+	err := RegisterGoCall("config.load.any", func(ctx context.Context, invocation GoCallInvocation) (any, error) {
+		return map[string]any{
+			"port":     8080,
+			"enabled":  true,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("RegisterGoCall failed: %v", err)
+	}
+
+	rt := New(config.Config{}, &MockPage{}, utils.NewLogger(nil))
+
+	_, execErr := rt.executeCommand(context.Background(), dsl.Command{
+		Type:       dsl.CmdCallGo,
+		Raw:        `CALL GO config.load.any`,
+		GoCallName: "config.load.any",
+	})
+	if execErr != nil {
+		t.Fatalf("executeCommand failed: %v", execErr)
+	}
+
+	if val, ok := rt.vars.Resolve("port"); !ok || val != "8080" {
+		t.Fatalf("port = %q, ok=%v, want 8080", val, ok)
+	}
+	if val, ok := rt.vars.Resolve("enabled"); !ok || val != "true" {
+		t.Fatalf("enabled = %q, ok=%v, want true", val, ok)
+	}
+}
+
+func TestRuntime_CallGoReturnsError(t *testing.T) {
+	ResetRuntimeRegistries()
+	t.Cleanup(ResetRuntimeRegistries)
+
+	err := RegisterGoCall("fail.always", func(ctx context.Context, invocation GoCallInvocation) (any, error) {
+		return nil, context.Canceled
+	})
+	if err != nil {
+		t.Fatalf("RegisterGoCall failed: %v", err)
+	}
+
+	rt := New(config.Config{}, &MockPage{}, utils.NewLogger(nil))
+
+	_, execErr := rt.executeCommand(context.Background(), dsl.Command{
+		Type:       dsl.CmdCallGo,
+		Raw:        `CALL GO fail.always`,
+		GoCallName: "fail.always",
+	})
+	if execErr == nil {
+		t.Fatal("expected CALL GO to return error")
+	}
+}
+
+func TestRuntime_CallGoUnregistered(t *testing.T) {
+	ResetRuntimeRegistries()
+	t.Cleanup(ResetRuntimeRegistries)
+
+	rt := New(config.Config{}, &MockPage{}, utils.NewLogger(nil))
+
+	_, execErr := rt.executeCommand(context.Background(), dsl.Command{
+		Type:       dsl.CmdCallGo,
+		Raw:        `CALL GO unregistered.handler`,
+		GoCallName: "unregistered.handler",
+	})
+	if execErr == nil {
+		t.Fatal("expected CALL GO to fail for unregistered handler")
+	}
+	if !strings.Contains(execErr.Error(), "not registered") {
+		t.Fatalf("error = %q, want 'not registered'", execErr.Error())
+	}
+}
+
+func TestListCustomControls(t *testing.T) {
+	ResetRuntimeRegistries()
+	t.Cleanup(ResetRuntimeRegistries)
+
+	_ = RegisterCustomControl("Page A", "Target 1", func(context.Context, browser.Page, CustomControlInvocation) error { return nil })
+	_ = RegisterCustomControl("Page B", "Target 2", func(context.Context, browser.Page, CustomControlInvocation) error { return nil })
+	_ = RegisterCustomControl("Page A", "Target 3", func(context.Context, browser.Page, CustomControlInvocation) error { return nil })
+
+	list := ListCustomControls()
+	if len(list) != 3 {
+		t.Fatalf("expected 3 controls, got %d", len(list))
+	}
+	// Verify sorted order
+	if list[0].Page > list[1].Page {
+		t.Fatal("expected sorted order")
+	}
+}

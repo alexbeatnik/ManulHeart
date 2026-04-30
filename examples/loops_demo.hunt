@@ -1,0 +1,31 @@
+@context: Demonstration of loops and page objects in ManulHeart
+@title: loops-and-pages-demo
+@var: {products} = Laptop, Headphones, Mouse
+
+STEP 1: Navigate to the shop
+    NAVIGATE to https://example-shop.com/
+    VERIFY that 'Products' is present
+
+STEP 2: Add each product to cart
+    FOR EACH {product} IN {products}:
+        FILL 'Search' field with '{product}'
+        PRESS Enter
+        CLICK the 'Add to Cart' button NEAR '{product}'
+        VERIFY that 'Added to cart' is present
+
+STEP 3: Retry checkout if needed
+    REPEAT 3 TIMES:
+        CLICK 'Checkout' button
+        IF text 'Payment Error' is present:
+            CLICK 'Retry Payment' button
+            WAIT 2
+
+STEP 4: Load all reviews
+    WHILE button 'Load More' exists:
+        CLICK the 'Load More' button
+        WAIT 1
+
+STEP 5: Verify order completion
+    VERIFY that 'Thank you for your order!' is present
+
+DONE.

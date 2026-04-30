@@ -20,7 +20,7 @@
 ## CLI INSTALL + VERSION
 
 > **CRITICAL — Read this first.**
-> Current documented ManulHeart CLI version is **0.0.1.0**.
+> Current documented ManulHeart CLI version is **0.0.1.1**.
 > When documenting install or usage, prefer the Go binary as a PATH-visible system command named `manul`
 > (for example `~/.local/bin/manul` or `/usr/local/bin/manul`) so editor extensions can invoke it directly.
 > Do not document the repo-local binary as the only intended integration path when the request is about running from tools or extensions.
@@ -68,7 +68,9 @@ pkg/
   report/                  Per-hunt HTML report + aggregate index.html
   config/                  Runtime configuration (20 fields); config.Default() + JSON + env-var loading
   utils/                   Logger (dual-output: stdout+ANSI, file+stripped) + error types
-examples/                  Reference .hunt files (mega.hunt, sampler.hunt)
+  pages/                   URL → human-readable page label registry; lean/wrapped JSON
+                           forms, longest-prefix site match, auto-populate on first hit
+examples/                  Reference .hunt files (mega.hunt, sampler.hunt, loops_demo.hunt)
 ```
 
 ## Concurrency contract (`0.0.0.5`+)
@@ -289,6 +291,30 @@ After every hunt run the engine appends one JSONL record to `<cwd>/reports/run_h
 ```
 
 Fields: `file` (absolute path), `name` (`filepath.Base`), `timestamp` (RFC3339 UTC), `status` (`"pass"` or `"fail"`), `duration_ms` (float64). The file is append-only; each record ends with `\n`. Implemented in `pkg/report/run_history.go` via `AppendRunHistory(reportsDir, *explain.HuntResult)`.
+
+## Loop constructs (`0.0.1.1`+)
+
+ManulHeart's parser/runtime supports the same loop forms as Python ManulEngine. All bodies follow the standard 4-space indentation rule.
+
+| Form | Syntax | Notes |
+|------|--------|-------|
+| Counted | `REPEAT N TIMES:` | `{i}` is auto-set inside the body as a 0-based counter. |
+| Iterating | `FOR EACH {var} IN {collection}:` | Iterates a comma-separated list stored in a variable (typically `@var`). |
+| Conditional | `WHILE <condition>:` | Hard cap of **100 iterations** to prevent infinite loops. Condition mirrors the `IF` predicate grammar. |
+
+Loops nest inside each other and inside `IF`/`ELIF`/`ELSE`. See `examples/loops_demo.hunt` and [docs/loops-and-pages.md](../docs/loops-and-pages.md) for runnable examples.
+
+## Page-name registry (`0.0.1.1`+)
+
+`pkg/pages` resolves URL → human-readable page label for reports, debug output, and `RegisterCustomControl(pageLabel, target, handler)` lookups. The registry lives in a `pages/` directory next to the hunt files (or the current working directory).
+
+Resolution order on `NAVIGATE`:
+
+1. `document.title` (when available).
+2. Longest-prefix site match in `pages/<safe-netloc>.json`, then exact URL → regex → substring → `"Domain"` fallback.
+3. URL-derived fallback (`scheme://host/path`).
+
+If no match is found the engine **auto-populates** the file with `Auto: domain/path` placeholders so the registry grows naturally during development. Both lean and wrapped JSON forms are accepted — see [docs/loops-and-pages.md](../docs/loops-and-pages.md). Implemented in `pkg/pages/pages.go`; reload-per-lookup mirrors the Python `_auto_populate_registry()` semantics.
 
 ## Testing expectations
 

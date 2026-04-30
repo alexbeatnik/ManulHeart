@@ -98,4 +98,53 @@ func TestRuntime_Loops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WHILE hunt failed: %v", err)
 	}
+
+	// 3. FOR EACH loop
+	rt.vars.Set("products", "Laptop, Headphones, Mouse", LevelGlobal)
+	huntForEach := &dsl.Hunt{
+		Commands: []dsl.Command{
+			{
+				Type:              dsl.CmdForEach,
+				ForEachVar:        "product",
+				ForEachCollection: "products",
+				Body: []dsl.Command{
+					{Type: dsl.CmdPrint, PrintText: "Product: {product}"},
+				},
+			},
+		},
+	}
+	_, err = rt.RunHunt(ctx, huntForEach)
+	if err != nil {
+		t.Fatalf("FOR EACH hunt failed: %v", err)
+	}
+	// Verify last product was Mouse
+	val, _ = rt.vars.Resolve("product")
+	if val != "Mouse" {
+		t.Errorf("expected product=Mouse, got %q", val)
+	}
+
+	// 4. Nested loops
+	huntNested := &dsl.Hunt{
+		Commands: []dsl.Command{
+			{
+				Type:        dsl.CmdRepeat,
+				RepeatCount: 2,
+				RepeatVar:   "i",
+				Body: []dsl.Command{
+					{
+						Type:              dsl.CmdForEach,
+						ForEachVar:        "item",
+						ForEachCollection: "products",
+						Body: []dsl.Command{
+							{Type: dsl.CmdPrint, PrintText: "i={i} item={item}"},
+						},
+					},
+				},
+			},
+		},
+	}
+	_, err = rt.RunHunt(ctx, huntNested)
+	if err != nil {
+		t.Fatalf("Nested loop hunt failed: %v", err)
+	}
 }
