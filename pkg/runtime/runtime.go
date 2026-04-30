@@ -13,13 +13,14 @@ import (
 
 	"github.com/manulengineer/manulheart/pkg/browser"
 	"github.com/manulengineer/manulheart/pkg/config"
+	"github.com/manulengineer/manulheart/pkg/core"
 	"github.com/manulengineer/manulheart/pkg/dom"
 	"github.com/manulengineer/manulheart/pkg/dsl"
 	"github.com/manulengineer/manulheart/pkg/explain"
 	"github.com/manulengineer/manulheart/pkg/heuristics"
+	"github.com/manulengineer/manulheart/pkg/pages"
 	"github.com/manulengineer/manulheart/pkg/scorer"
 	"github.com/manulengineer/manulheart/pkg/utils"
-	"github.com/manulengineer/manulheart/pkg/core"
 )
 
 func min(a, b int) int {
@@ -53,6 +54,7 @@ type Runtime struct {
 	page   browser.Page
 	logger *utils.Logger
 	vars   *ScopedVariables
+	pages  *pages.Registry
 
 	cachedElements       []dom.ElementSnapshot
 	stickyCheckboxStates map[string]bool
@@ -76,6 +78,7 @@ func New(cfg config.Config, page browser.Page, logger *utils.Logger) *Runtime {
 		page:                 page,
 		logger:               logger,
 		vars:                 NewScopedVariables(),
+		pages:                pages.NewRegistry(""),
 		stickyCheckboxStates: make(map[string]bool),
 		breakLines:           make(map[int]bool),
 	}
@@ -1212,9 +1215,11 @@ func (rt *Runtime) passesAntiPhantomGuard(mode string, query string, el dom.Elem
 }
 
 func (rt *Runtime) autoAnnotateNavigate(ctx context.Context, url string) {
-	// In a real implementation, this would write to the hunt file.
-	// For now, we log it.
-	rt.logger.ActionDetail("📍", "Auto-Nav: %s", url)
+	pageName := rt.pages.LookupPageName(url)
+	if pageName == "" {
+		pageName = url
+	}
+	rt.logger.ActionDetail("📍", "Auto-Nav: %s", pageName)
 }
 
 func resolveRestrictiveCandidates(targetPath, typeHint string, mode dsl.InteractionMode, elements []dom.ElementSnapshot, anchor *scorer.AnchorContext, logger *utils.Logger) ([]scorer.RankedCandidate, string) {
